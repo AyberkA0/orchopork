@@ -245,18 +245,13 @@ impl Engine {
             let root = run.spec.root().map(|a| a.id.clone()).unwrap_or_default();
             let target = agent.filter(|a| run.spec.agent(a).is_some()).map(str::to_string).unwrap_or(root);
             meta["agent"] = json!(target);
-            // Re-open the target and its chain of command so the message is
-            // acted on; only when no loop is running (it owns the state).
-            if !self.is_active(run_id) {
-                let mut cur = Some(target);
-                while let Some(id) = cur {
-                    state.done.retain(|d| *d != id);
-                    cur = run.spec.agent(&id).and_then(|a| a.parent.clone());
-                }
-                state.stack.clear();
-                if state.phase == Phase::Done {
-                    state.phase = Phase::Act;
-                }
+            // Reopening the target (and its chain of command, if it already
+            // reported) is `orchestra_turn`'s job: it re-checks every turn,
+            // so this works whether the run is active or idle. Here we only
+            // need to get a finished run out of `Done` so the loop runs at
+            // all.
+            if state.phase == Phase::Done {
+                state.phase = Phase::Act;
             }
         } else if state.phase == Phase::Done {
             state.phase = Phase::Act;

@@ -426,7 +426,12 @@ impl Inner {
         system: String,
         messages: Vec<Message>,
     ) -> Result<CallOutcome> {
-        let req = CompletionRequest { system, messages, max_tokens: cfg.limits.max_output_tokens, effort: None };
+        self.call_req(cfg, run, model, CompletionRequest { system, messages, ..Default::default() }).await
+    }
+
+    /// `call` with a volatile tail and cache options (see `CompletionRequest`).
+    async fn call_req(&self, cfg: &Config, run: &Run, model: &ModelRef, req: CompletionRequest) -> Result<CallOutcome> {
+        let req = CompletionRequest { max_tokens: cfg.limits.max_output_tokens, ..req };
         match self.ws.gateway.complete(model, &req, &run.id).await {
             Err(Error::Budget(msg)) => {
                 match cfg.routing.actor.as_ref().filter(|a| a.provider.is_local() && *a != model) {
@@ -509,7 +514,11 @@ impl Inner {
         let toolbox = ToolBox::new(Path::new(&run.worktree), &cfg.limits, skills.tools.clone())?;
         let system =
             format!("{}\n\n{}", prompts::actor_system(&toolbox.describe()), skills.system).trim_end().to_string();
-        let files = GitRepo::new(&run.worktree).ls_files().await?;
+        // Files as of the run's start (stable, cacheable) plus what changed
+        // since then (volatile, sent after the cache breakpoint).
+        let wt = GitRepo::new(&run.worktree);
+        let files = wt.ls_files_at(&run.base_commit).await?;
+        let tail = prompts::changes_note(&wt.changed_names(&run.base_commit).await?);
         let plan = steps.iter().rev().find(|s| s.kind == StepKind::Plan).map(|s| s.output.as_str()).unwrap_or("");
         let messages = prompts::actor_messages(
             &run.goal,
@@ -522,7 +531,8 @@ impl Inner {
         if escalated {
             self.log(&run.id, format!("escalating this turn to {model} after {} failed turns", state.failures));
         }
-        let out = self.call(cfg, run, &model, system, messages).await?;
+        let req = CompletionRequest { system, messages, tail: Some(tail), ..Default::default() };
+        let out = self.call_req(cfg, run, &model, req).await?;
 
         let mut meta = call_meta(&out);
         meta["escalated"] = json!(escalated);
@@ -717,6 +727,8 @@ fn call_meta(out: &CallOutcome) -> serde_json::Value {
         "model": out.model.to_string(),
         "prompt_tokens": out.prompt_tokens,
         "completion_tokens": out.completion_tokens,
+        "cache_read_tokens": out.cache_read_tokens,
+        "cache_write_tokens": out.cache_write_tokens,
         "truncated": out.truncated,
     })
 }

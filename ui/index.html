@@ -1221,7 +1221,7 @@ async function viewChat(main, id) {
         h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "working" : run.status),
         run.spec.model && h("span", { class: "pill", title: mref(run.spec.model), text: (run.spec.model.provider === "acp" ? "⚡ " : "") + fmtRef(run.spec.model) }),
         run.verify_command && h("span", { class: "pill mono", title: "Must pass before the agent may finish: " + run.verify_command, text: "✓ " + firstLine(run.verify_command, 24) }),
-        h("span", { class: "small faint", text: money(run.cost_usd) }),
+        h("span", { class: "small faint", title: statLine(tokenStats(steps)), text: money(run.cost_usd) + (tokenStats(steps).cached ? ` · ${tokenStats(steps).pct}% cached` : "") }),
         runMenu(run, active)));
       banner.replaceChildren(errorBanner(run, active));
     }
@@ -1313,6 +1313,27 @@ async function showDiff(run) {
       h("button", { class: "ghost small", text: "Copy", onclick: () => copy(`git merge ${run.branch}`, "merge command") }))), { wide: true });
 }
 
+// ---------- token accounting ----------
+// Input tokens (all), how many of them came from the provider's prompt
+// cache, output tokens, over the given steps.
+function tokenStats(steps) {
+  const t = { inTok: 0, cached: 0, outTok: 0 };
+  for (const s of steps) { const m = s.meta || {}; t.inTok += m.prompt_tokens || 0; t.cached += m.cache_read_tokens || 0; t.outTok += m.completion_tokens || 0; }
+  t.pct = t.inTok ? Math.round((t.cached / t.inTok) * 100) : 0;
+  return t;
+}
+const kTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
+const statLine = (t) => `${kTok(t.inTok)} in${t.cached ? ` (${t.pct}% cached)` : ""} · ${kTok(t.outTok)} out`;
+
+// With a top-tier Claude lead, subordinates default to Sonnet: they do the
+// reading and editing, the lead reviews their reports and diffs.
+function suggestWorker(lead) {
+  if (!lead || lead.provider !== "claude" || !/opus|fable|mythos/.test(lead.model)) return null;
+  const ms = ((S.models && S.models.models) || []).filter((m) => m.provider === "claude");
+  const pick = ms.find((m) => m.model.startsWith("claude-sonnet-5")) || ms.find((m) => m.model.startsWith("claude-sonnet"));
+  return pick ? { provider: pick.provider, model: pick.model, options: {} } : null;
+}
+
 // ---------- orchestra: tree editor ----------
 const RANKS = [[0, "Private", ""], [10, "Corporal", "›"], [100, "Captain", "››"], [1000, "Major", "›››"], [Infinity, "General", "★"]];
 const TEMPLATES = [
@@ -1362,14 +1383,17 @@ function treeCanvas(ed) {
   function nodeKids(a) {
     const [, rname, chev] = rankOf(ed.agents, a.id);
     const st = ed.status && ed.status[a.id];
-    const ext = (a.model && a.model.provider === "acp") || (!a.model && ed.leadExternal);
+    // The model this agent will actually use: its own, else the team's
+    // worker model (below the lead), else the lead's.
+    const eff = a.model || (a.parent && ed.worker) || null;
+    const ext = (eff && eff.provider === "acp") || (!eff && ed.leadExternal);
     return [
       h("div", { class: "rank" }, h("span", { class: "chev", text: chev || "·" }), h("span", { text: !a.parent ? `Lead · ${rname}` : rname })),
       h("div", { class: "nm", text: a.name }), h("div", { class: "rl", text: a.role || "—" }), h("div", { class: "tk", text: a.task }),
       st ? h("span", { class: "st " + (st.active ? "" : st.done ? "ok" : "faint"), text: st.active ? "● working" : st.done ? "✓ reported" : st.turns ? "◌ waiting" : "○ queued" })
-         : a.model && h("span", { class: "st pill", title: fmtRef(a.model), text: ((a.model.provider === "acp" ? "⚡ " : "") + fmtRef(a.model)).slice(0, 26) }),
+         : eff && h("span", { class: "st pill" + (a.model ? "" : " faint"), title: (a.model ? "" : "Team model: ") + fmtRef(eff), text: ((eff.provider === "acp" ? "⚡ " : "") + fmtRef(eff)).slice(0, 26) }),
       st && ext && h("span", { class: "ext-badge", style: { position: "absolute", bottom: "9px", right: "10px" }, text: "ACP" }),
-      st && (st.turns || st.cost) ? h("div", { class: "small faint", style: { marginTop: "4px" }, text: `${st.turns} turns · ${money(st.cost)}` }) : null,
+      st && (st.turns || st.cost) ? h("div", { class: "small faint", style: { marginTop: "4px" }, title: statLine(st.tok), text: `${st.turns} turns · ${money(st.cost)}${st.tok.cached ? ` · ${st.tok.pct}% cached` : ""}` }) : null,
       !ed.readOnly && h("button", { class: "add", title: "Add a subordinate", text: "+", onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); addAgent(a.id); } }),
     ];
   }
@@ -1486,7 +1510,8 @@ async function editAgent(ed, id, models) {
   const name = h("input", { value: a.name }), role = h("input", { value: a.role, placeholder: "e.g. writes the parser" });
   const task = h("textarea", { rows: 6, value: a.task });
   const agents = ((S.models && S.models.agents) || []).filter((x) => x.available);
-  const model = h("select", {}, h("option", { value: "", text: "Inherit the lead model" }),
+  const inherit = a.parent && ed.worker ? `Team model (${fmtRef(ed.worker)})` : "Inherit the lead model";
+  const model = h("select", {}, h("option", { value: "", text: inherit }),
     agents.length > 0 && h("optgroup", { label: "Agents on this computer (ACP)" }, agents.map((x) => h("option", { value: mref(x), text: `⚡ ${x.name}`, selected: a.model && mref(a.model) === mref(x) }))),
     h("optgroup", { label: "Models" }, models.map((m) => h("option", { value: mref(m), text: `${mref(m)}${m.local ? "  (local)" : ""}`, selected: a.model && mref(a.model) === mref(m) }))));
   models = [...models, ...agents];
@@ -1562,25 +1587,33 @@ async function viewOrchestraDraft(main) {
   if (!document.body.contains(main)) return; // navigated away while the lead was drafting
   body.remove();
   clear && clear(); S.pending = null; // the goal now lives in the team draft
-  orchestraEditor(main, { goal, verify, lead, agents, models });
+  orchestraEditor(main, { goal, verify, lead, worker: suggestWorker(lead), agents, models, suggested: true });
 }
 
-function orchestraEditor(main, { goal, verify, lead, agents, models, restored }) {
+function orchestraEditor(main, { goal, verify, lead, worker = null, agents, models, restored, suggested }) {
   const history = [];
   // Every edit is saved, so a reload, a detour or a project switch never
   // throws away a team the lead was paid to design.
-  const persist = () => pset("orchDraft", { goal, verify, lead, agents: ed.agents, at: Math.floor(Date.now() / 1000) });
-  const ed = { agents, selected: agents[0] && agents[0].id,
+  const persist = () => pset("orchDraft", { goal, verify, lead, worker: ed.worker, agents: ed.agents, at: Math.floor(Date.now() / 1000) });
+  const ed = { agents, worker, selected: agents[0] && agents[0].id,
     push() { history.push(JSON.stringify(ed.agents)); if (history.length > 100) history.shift(); },
     onChange() { canvas.paint(); count.textContent = `${ed.agents.length} agent${ed.agents.length > 1 ? "s" : ""}`; persist(); },
     onEdit: (id) => editAgent(ed, id, models) };
   const canvas = treeCanvas(ed);
   const count = h("span", { class: "small muted" });
+  const workerLabel = () => "Workers: " + (ed.worker ? fmtRef(ed.worker) : "same as lead");
+  const setWorker = (m) => { ed.worker = m; workerBtn.textContent = workerLabel(); ed.onChange(); };
+  const workerBtn = h("button", { class: "ghost", title: "The model every agent below the lead uses unless it picks its own. A cheaper model here with a strong lead saves most of the tokens.", text: workerLabel(),
+    onclick: (e) => popMenu(e.currentTarget, [
+      { label: "Pick a model for the workers…", run: guard(async () => { const m = await pickModel({ title: "Workers' model", subtitle: "Used by every agent below the lead that has no model of its own." }); if (m) setWorker(m); }) },
+      { label: "Same as the lead", run: () => setWorker(null) },
+    ]) });
   const undo = () => { if (!history.length) return toast("Nothing to undo"); ed.agents = JSON.parse(history.pop()); ed.onChange(); };
   const hud = h("div", { class: "hud" },
     h("button", { text: "＋ Agent", title: "Add a subordinate to the selected agent", onclick: () => canvas.addAgent(ed.selected || ed.agents[0].id) }),
     h("button", { text: "↶ Undo", onclick: undo }), h("button", { text: "⤢ Fit", onclick: () => canvas.fit() }),
-    h("button", { class: "ghost", text: "Lead: " + fmtRef(lead), onclick: guard(async () => { const m = await pickModel({ title: "Lead model" }); if (m) { lead = m; hud.lastChild.textContent = "Lead: " + fmtRef(m); persist(); } }) }));
+    h("button", { class: "ghost", text: "Lead: " + fmtRef(lead), onclick: guard(async (e) => { const m = await pickModel({ title: "Lead model" }); if (m) { lead = m; e.target.textContent = "Lead: " + fmtRef(m); persist(); } }) }),
+    workerBtn);
   const reserve = h("div", { class: "reserve" }, h("h6", { text: "Reserve · drag onto an agent" }),
     TEMPLATES.map((t) => h("div", { class: "tpl", title: t[2], onpointerdown: (e) => canvas.dragTemplate(e, t) }, h("b", { text: t[0] }), h("div", { class: "small faint", text: t[1] }))));
   const deploy = h("div", { class: "deploy" }, count,
@@ -1593,7 +1626,7 @@ function orchestraEditor(main, { goal, verify, lead, agents, models, restored })
     h("button", { class: "accent", text: "Approve & deploy", onclick: guard(async (e) => {
       e.target.disabled = true;
       try {
-        const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "orchestra", model: lead, agents: ed.agents } });
+        const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "orchestra", model: lead, worker_model: ed.worker || null, agents: ed.agents } });
         S.pending = null; pset("orchDraft", null); markSeen(run); go(`#/o/${run.id}`);
       } finally { e.target.disabled = false; }
     }) }));
@@ -1610,7 +1643,9 @@ function orchestraEditor(main, { goal, verify, lead, agents, models, restored })
     else if (e.key === "a" && ed.selected) canvas.addAgent(ed.selected);
   };
   document.addEventListener("keydown", keys);
-  setTimeout(() => toast(restored ? "Your team draft, as you left it." : "Review the team. Drag agents to reassign them, double-click to edit, or drag from the reserve."), 300);
+  setTimeout(() => toast(restored ? "Your team draft, as you left it."
+    : suggested && worker ? `Workers use ${fmtRef(worker)} to save tokens; the lead reviews their diffs. Change it in the toolbar.`
+    : "Review the team. Drag agents to reassign them, double-click to edit, or drag from the reserve."), 300);
 }
 
 // ---------- orchestra: live run ----------
@@ -1633,8 +1668,10 @@ async function viewOrchestraRun(main, id) {
   function statusOf(steps, active) {
     const last = steps.length ? steps[steps.length - 1].state : { stack: [], done: [] };
     const st = {};
-    for (const a of data.run.spec.agents) st[a.id] = { turns: 0, cost: 0, done: (last.done || []).includes(a.id), active: false };
-    for (const s of steps) { const a = s.meta && s.meta.agent; if (a && st[a] && s.kind === "act") { st[a].turns++; st[a].cost += s.cost_usd; } }
+    for (const a of data.run.spec.agents) st[a.id] = { turns: 0, cost: 0, done: (last.done || []).includes(a.id), active: false, tok: tokenStats([]) };
+    const mineBy = {};
+    for (const s of steps) { const a = s.meta && s.meta.agent; if (a && st[a] && s.kind === "act") { st[a].turns++; st[a].cost += s.cost_usd; (mineBy[a] ||= []).push(s); } }
+    for (const [a, list] of Object.entries(mineBy)) st[a].tok = tokenStats(list);
     if (active) {
       // The agent acting next: descend from the stack top to the first unfinished subordinate.
       let top = (last.stack || []).slice(-1)[0] || (data.run.spec.agents.find((a) => !a.parent) || {}).id;
@@ -1677,8 +1714,9 @@ async function viewOrchestraRun(main, id) {
         h("div", { class: "row" }, h("b", { class: "grow", text: a.name }), h("span", { class: "pill", text: rankOf(run.spec.agents, a.id)[1] })),
         h("div", { class: "small muted", text: a.role }),
         h("details", { class: "out" }, h("summary", { text: "task ▾" }), h("pre", { text: a.task })),
-        h("div", { class: "small faint", style: { marginTop: "6px" } }, `${st.turns || 0} turns · ${money(st.cost)} · `, h("span", { text: fmtRef(a.model || run.spec.model) }),
-          subs.length ? ` · commands ${subs.length}` : "")),
+        h("div", { class: "small faint", style: { marginTop: "6px" } }, `${st.turns || 0} turns · ${money(st.cost)} · `, h("span", { text: fmtRef(a.model || (a.parent && run.spec.worker_model) || run.spec.model) }),
+          subs.length ? ` · commands ${subs.length}` : ""),
+        st.tok && st.tok.inTok > 0 && h("div", { class: "small faint", title: "Input tokens read from the prompt cache are billed at a fraction of the normal price", text: statLine(st.tok) })),
       feed, h("div", { class: "pc" }, c));
     if (atBottom) feed.scrollTop = feed.scrollHeight;
   }
@@ -1691,12 +1729,13 @@ async function viewOrchestraRun(main, id) {
     agentNames = Object.fromEntries(run.spec.agents.map((a) => [a.id, a.name]));
     ed.agents = run.spec.agents; ed.status = statusOf(steps, active);
     ed.leadExternal = !!(run.spec.model && run.spec.model.provider === "acp");
+    ed.worker = run.spec.worker_model || null;
     if (!ed.selected) ed.selected = (Object.entries(ed.status).find(([, s]) => s.active) || [run.spec.agents[0].id])[0];
     const done = Object.values(ed.status).filter((s) => s.done).length;
     head.replaceChildren(topbar(
       h("span", { class: "title grow", text: run.goal }),
       h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "running" : run.status),
-      h("span", { class: "small muted", text: `${done}/${run.spec.agents.length} reported · ${money(run.cost_usd)}` }),
+      h("span", { class: "small muted", title: statLine(tokenStats(steps)), text: `${done}/${run.spec.agents.length} reported · ${money(run.cost_usd)}${tokenStats(steps).cached ? ` · ${tokenStats(steps).pct}% cached` : ""}` }),
       active && h("button", { class: "ghost", text: "⏸ Pause", onclick: guard(async () => { await api(`/api/runs/${id}/pause`, { body: {} }); toast("Pausing after the current step"); }) }),
       runMenu(run, active)));
     if (active) head.append(h("div", { class: "row small muted", style: { padding: "0 16px 8px", gap: "8px" } }, h("span", { class: "dots" }, h("i"), h("i"), h("i")), h("span", { class: "live-line", text: S.lastLive || "working…" })));

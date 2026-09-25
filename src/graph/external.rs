@@ -116,7 +116,9 @@ impl Inner {
         state: RunState,
         model: &ModelRef,
     ) -> Result<Option<Stop>> {
-        let files = GitRepo::new(&run.worktree).ls_files().await?;
+        let wt = GitRepo::new(&run.worktree);
+        let files = wt.ls_files_at(&run.base_commit).await?;
+        let tail = prompts::changes_note(&wt.changed_names(&run.base_commit).await?);
         let plan = steps.iter().rev().find(|s| s.kind == StepKind::Plan).map(|s| s.output.as_str()).unwrap_or("");
         let messages = prompts::actor_messages(
             &run.goal,
@@ -126,7 +128,7 @@ impl Inner {
             cfg.limits.cloud_context_chars,
             cfg.limits.tool_output_chars,
         );
-        let prompt = format!("{}{SUFFIX}", as_prompt(&messages));
+        let prompt = format!("{}\n\n{tail}{SUFFIX}", as_prompt(&messages));
         let name = self.agent_display(cfg, model);
         let out = self.external_turn(cfg, run, model, &name, prompt).await?;
         let mut next = RunState { failures: 0, escalate: false, ..state };

@@ -313,7 +313,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn serve(root: PathBuf, port: u16) -> anyhow::Result<()> {
-    let root = std::path::absolute(&root)?;
+    let root = orchopork::fsutil::strip_verbatim(std::path::absolute(&root)?);
     let state = server::AppState::new(root).await?;
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     println!("orchopork is running at http://localhost:{port}");

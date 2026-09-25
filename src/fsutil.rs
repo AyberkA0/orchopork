@@ -1,7 +1,7 @@
 //! Small filesystem helpers shared by every module that persists state.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 
@@ -35,6 +35,28 @@ pub fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
     Ok(())
 }
 
+/// `canonicalize` without Windows' verbatim prefix. On Windows the std
+/// call returns `\\?\C:\...` (or `\\?\UNC\server\share\...`), which git
+/// and many tools reject ("could not create leading directories"). This
+/// strips it back to `C:\...` / `\\server\share\...`; elsewhere it is a
+/// plain `canonicalize`.
+pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    Ok(strip_verbatim(std::fs::canonicalize(path)?))
+}
+
+pub fn strip_verbatim(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\")
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        return PathBuf::from(rest);
+    }
+    p
+}
+
 /// Keep at most `max` chars of `s`, cutting from the middle so both the
 /// start (headers, first error) and the end (summary, last error) of long
 /// command output survive.
@@ -59,6 +81,13 @@ mod tests {
         assert_eq!(clip("short", 10), "short");
         let c = clip(&"a".repeat(50).chars().chain("Z".chars()).collect::<String>(), 12);
         assert!(c.starts_with("aaaaaaaa") && c.ends_with('Z') && c.contains("omitted"));
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_stripped() {
+        assert_eq!(strip_verbatim(PathBuf::from(r"\\?\C:\Users\a\x")), PathBuf::from(r"C:\Users\a\x"));
+        assert_eq!(strip_verbatim(PathBuf::from(r"\\?\UNC\srv\share\x")), PathBuf::from(r"\\srv\share\x"));
+        assert_eq!(strip_verbatim(PathBuf::from("/home/a")), PathBuf::from("/home/a"));
     }
 
     #[test]

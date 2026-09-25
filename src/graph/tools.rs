@@ -47,7 +47,7 @@ pub struct ToolBox {
 impl ToolBox {
     pub fn new(worktree: &Path, limits: &Limits, custom: Vec<ToolSpec>) -> Result<Self> {
         Ok(Self {
-            root: worktree.canonicalize()?,
+            root: crate::fsutil::canonical(worktree)?,
             allow_commands: limits.allow_commands,
             timeout: Duration::from_secs(limits.command_timeout_secs.max(1)),
             custom,
@@ -126,7 +126,7 @@ impl ToolBox {
         while !probe.exists() {
             probe = probe.parent().ok_or("invalid path")?;
         }
-        let real = probe.canonicalize().map_err(|e| e.to_string())?;
+        let real = crate::fsutil::canonical(probe).map_err(|e| e.to_string())?;
         if !real.starts_with(&self.root) {
             return Err(format!("{raw:?} resolves outside the repository"));
         }

@@ -36,8 +36,7 @@ impl Workspace {
 
     /// Opens (creating on first use) `<root>/.orchopork/`.
     pub async fn open(root: &Path) -> Result<Arc<Self>> {
-        let root = tokio::fs::canonicalize(root)
-            .await
+        let root = crate::fsutil::canonical(root)
             .map_err(|e| Error::InvalidRequest(format!("workspace {}: {e}", root.display())))?;
         if !root.is_dir() {
             return Err(Error::InvalidRequest(format!("workspace {} is not a directory", root.display())));

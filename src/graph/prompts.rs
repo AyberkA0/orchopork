@@ -93,10 +93,33 @@ pub fn file_overview(files: &[String], max: usize) -> String {
     s
 }
 
+/// What changed in the tree since the run started, for the volatile tail of
+/// a turn (see `CompletionRequest::tail`). `name_status` is
+/// `git diff --name-status` output.
+pub fn changes_note(name_status: &str) -> String {
+    let body = name_status.trim();
+    if body.is_empty() {
+        return "# Files changed since the start\n(none yet)\n".into();
+    }
+    format!("# Files changed since the start (A added, M modified, D deleted)\n{}\n", clip(body, 3_000))
+}
+
+/// The first message of every turn: `shared` is identical for every agent
+/// of the run (mission, repository overview), `own` is this agent's part.
+/// Both must stay byte-identical across turns so they can be cached;
+/// anything that changes per turn belongs in the request's `tail`.
+pub struct Pinned {
+    pub shared: String,
+    pub own: String,
+}
+
 /// The actor's conversation: a pinned first message (goal, plan, file
 /// overview), then as many of the most recent turns as fit in
 /// `budget_chars`. Older turns are dropped whole — a tool call is never
 /// separated from its result — and the pinned message says how many.
+///
+/// `files` should be the file list at the run's base commit (stable); pass
+/// what changed since then in the request tail via `changes_note`.
 ///
 /// The result always starts and ends with a user message and never has two
 /// consecutive messages with the same role.
@@ -136,36 +159,56 @@ pub fn actor_messages(
     }
 
     let pinned = format!("# Goal\n{}\n\n# Plan\n{}\n{}", goal.trim(), clip(plan, 8_000), file_overview(files, 150));
-    windowed(pinned, groups, budget_chars)
+    windowed(Pinned { shared: pinned, own: String::new() }, groups, budget_chars)
 }
 
-/// Pinned first message + as many of the newest `groups` as fit in
-/// `budget_chars` (groups are never split). Starts and ends with a user
-/// message; no two consecutive messages share a role.
-pub fn windowed(pinned: String, groups: Vec<Vec<Message>>, budget_chars: usize) -> Vec<Message> {
-    let mut remaining = budget_chars.saturating_sub(pinned.len());
-    let mut kept: Vec<&Vec<Message>> = Vec::new();
-    for g in groups.iter().rev() {
-        let len: usize = g.iter().map(|m| m.content.len()).sum();
-        if len > remaining && !kept.is_empty() {
-            break;
-        }
-        remaining = remaining.saturating_sub(len);
-        kept.push(g);
+/// How many of the oldest groups to drop so the rest fit in `room` chars.
+///
+/// The cut moves in coarse steps (a third of the room at a time) instead of
+/// one group per turn: dropping a single old turn every turn would change
+/// the start of the conversation on every call and defeat prompt caching.
+/// With steps, the prefix stays identical for many turns in a row, and what
+/// is kept is always between two thirds of the room and all of it.
+fn stable_cut(sizes: &[usize], room: usize) -> usize {
+    let total: usize = sizes.iter().sum();
+    if total <= room || sizes.len() <= 1 {
+        return 0;
     }
-    let omitted = groups.len() - kept.len();
+    let step = (room / 3).max(1);
+    let target = (total - room).div_ceil(step) * step;
+    let mut cum = 0;
+    for (i, s) in sizes.iter().enumerate() {
+        cum += s;
+        if cum >= target {
+            return (i + 1).min(sizes.len() - 1);
+        }
+    }
+    sizes.len() - 1
+}
 
-    let mut first = pinned;
+/// Pinned first message + the newest `groups` that fit in `budget_chars`
+/// (groups are never split; see `stable_cut` for which are dropped). The
+/// shared part of the pinned message is marked as its own cache prefix.
+/// Starts and ends with a user message; no two consecutive messages share a
+/// role.
+pub fn windowed(pinned: Pinned, groups: Vec<Vec<Message>>, budget_chars: usize) -> Vec<Message> {
+    let sizes: Vec<usize> = groups.iter().map(|g| g.iter().map(|m| m.content.len()).sum()).collect();
+    let room = budget_chars.saturating_sub(pinned.shared.len() + pinned.own.len());
+    let omitted = stable_cut(&sizes, room);
+    let kept = &groups[omitted..];
+
+    let split = pinned.shared.len();
+    let mut first = pinned.shared;
+    first.push_str(&pinned.own);
     if omitted > 0 {
         first.push_str(&format!(
             "\n[{omitted} earlier turns are omitted to save context. Re-read files rather than relying on memory.]\n"
         ));
     }
-    if groups.is_empty() {
-        first.push_str("\nStart now.\n");
-    }
-    let mut msgs = vec![Message::user(first)];
-    for g in kept.into_iter().rev() {
+    // No "start now" line on the first turn: the pinned message must read the
+    // same on every turn to stay cacheable (the turn's tail follows it).
+    let mut msgs = vec![Message { cache_split: Some(split), ..Message::user(first) }];
+    for g in kept {
         msgs.extend(g.iter().cloned());
     }
     let mut merged = merge_same_role(msgs);
@@ -223,6 +266,37 @@ mod tests {
         assert_eq!(roles, [Role::User, Role::Assistant, Role::User, Role::Assistant, Role::User]);
         assert!(m[0].content.contains("# Goal\ngoal") && m[0].content.contains("a.rs"));
         assert!(m[2].content.contains("Result of read_file (ok)") && m[2].content.contains("use tabs"));
+    }
+
+    #[test]
+    fn the_cut_moves_in_steps_so_the_prefix_stays_cacheable() {
+        let turn = |i: i64| {
+            step(
+                i,
+                StepKind::Act,
+                &format!("turn {i}"),
+                Some(&"y".repeat(1_000)),
+                json!({"tool": "read_file", "ok": true}),
+            )
+        };
+        let firsts: Vec<String> = (20..40)
+            .map(|n| {
+                let steps: Vec<Step> = (0..n).map(turn).collect();
+                let m = actor_messages("goal", "plan", &[], &steps, 12_000, 10_000);
+                m[1].content.clone() // the oldest kept turn
+            })
+            .collect();
+        // Twenty growing transcripts, but the oldest kept turn changes only
+        // a few times: most consecutive turns share their whole prefix.
+        let changes = firsts.windows(2).filter(|w| w[0] != w[1]).count();
+        assert!(changes <= 6, "the window start moved {changes} times in 20 turns");
+    }
+
+    #[test]
+    fn shared_part_of_the_pinned_message_is_a_cache_prefix() {
+        let m = windowed(Pinned { shared: "MISSION\n".into(), own: "YOU\n".into() }, vec![], 1_000);
+        assert_eq!(m[0].cache_split, Some("MISSION\n".len()));
+        assert!(m[0].content.starts_with("MISSION\nYOU\n"));
     }
 
     #[test]

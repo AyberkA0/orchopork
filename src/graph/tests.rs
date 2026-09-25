@@ -50,7 +50,7 @@ impl Provider for Handle {
             tokio::time::sleep(d).await;
         }
         let text = self.0.replies.lock().unwrap().pop_front().unwrap_or_else(|| FINISH.to_string());
-        Ok(Completion { text, prompt_tokens: 100, completion_tokens: 50, truncated: false })
+        Ok(Completion { text, prompt_tokens: 100, completion_tokens: 50, ..Default::default() })
     }
     async fn list_models(&self) -> Result<Vec<String>> {
         Ok(vec![])
@@ -246,7 +246,7 @@ async fn solo_runs_use_their_own_model_and_skip_planning() {
     let (_d, engine) = setup(|_| {}).await;
     let chosen = Scripted::new(ProviderId::Claude, &[WRITE, FINISH]);
     register(&engine, &chosen);
-    let spec = RunSpec { mode: RunMode::Solo, model: Some(cloud()), agents: vec![] };
+    let spec = RunSpec { worker_model: None, mode: RunMode::Solo, model: Some(cloud()), agents: vec![] };
     let run = engine.create_run("create hello.txt", None, spec).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     let (_, steps) = engine.run_detail(&run.id).await.unwrap();
@@ -282,6 +282,7 @@ async fn orchestra_works_bottom_up_with_delegation_and_reports() {
     let model = Scripted::new(ProviderId::Ollama, &replies);
     register(&engine, &model);
     let spec = RunSpec {
+        worker_model: None,
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("lead", None, "coordinate"), agent("coder", Some("lead"), "write files")],
@@ -310,6 +311,68 @@ async fn orchestra_works_bottom_up_with_delegation_and_reports() {
             .any(|m| m.content.contains("Order from LEAD") && m.content.contains("also add bye.txt"))
     );
     assert!(Path::new(&run.worktree).join("bye.txt").exists());
+}
+
+#[tokio::test]
+async fn orchestra_workers_share_reports_and_diffs_and_keep_a_cacheable_prefix() {
+    let (_d, engine) = setup(|_| {}).await;
+    // The lead runs on one model, both workers on the team's worker model.
+    let lead = Scripted::new(ProviderId::Ollama, &[r#"{"tool": "finish", "args": {"summary": "mission complete"}}"#]);
+    let workers = Scripted::new(
+        ProviderId::LlamaCpp,
+        &[
+            r#"{"tool": "write_file", "args": {"path": "a.txt", "content": "alpha\n"}}"#,
+            r#"{"tool": "finish", "args": {"summary": "a.txt written"}}"#,
+            r#"{"tool": "write_file", "args": {"path": "b.txt", "content": "beta\n"}}"#,
+            r#"{"tool": "finish", "args": {"summary": "b.txt written"}}"#,
+        ],
+    );
+    register(&engine, &lead);
+    register(&engine, &workers);
+    let spec = RunSpec {
+        worker_model: Some(ModelRef::new(ProviderId::LlamaCpp, "worker")),
+        mode: RunMode::Orchestra,
+        model: Some(local("lead")),
+        agents: vec![
+            agent("lead", None, "coordinate"),
+            agent("a", Some("lead"), "write a.txt"),
+            agent("b", Some("lead"), "write b.txt"),
+        ],
+    };
+    let run = engine.create_run("make files", None, spec).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    let lead_seen = lead.seen.lock().unwrap();
+    let seen = workers.seen.lock().unwrap();
+    assert_eq!((lead_seen.len(), seen.len()), (1, 4), "the lead's model only for the lead");
+
+    // Consecutive turns of one agent: same system prompt, and the earlier
+    // request's messages are an exact prefix of the later one's (so a cache
+    // entry written by turn 1 is read by turn 2). Volatile status is only in
+    // the tail.
+    assert_eq!(seen[0].system, seen[1].system);
+    assert_eq!(seen[0].messages[..], seen[1].messages[..seen[0].messages.len()]);
+    assert!(seen[0].tail.as_deref().unwrap().contains("Teammates: b working"));
+    assert!(seen[1].tail.as_deref().unwrap().contains("A\ta.txt"));
+    // Every agent's first message starts with the same shared prefix.
+    let shared = |r: &CompletionRequest| {
+        let m = &r.messages[0];
+        m.content[..m.cache_split.unwrap()].to_string()
+    };
+    assert_eq!(shared(&seen[0]), shared(&seen[2]));
+    assert_eq!(shared(&seen[0]), shared(&lead_seen[0]));
+
+    // b sees a's report and which files it touched, but not the full diff.
+    let b_ctx: String = seen[2].messages.iter().map(|m| m.content.as_str()).collect();
+    assert!(b_ctx.contains("Teammate A (a) reported") && b_ctx.contains("a.txt written"), "{b_ctx}");
+    assert!(b_ctx.contains("a.txt |") && !b_ctx.contains("```diff"));
+    // The lead gets both reports with their diffs, so it need not re-read files.
+    let lead_ctx: String = lead_seen[0].messages.iter().map(|m| m.content.as_str()).collect();
+    assert!(lead_ctx.contains("Report from A (a)") && lead_ctx.contains("+alpha"), "{lead_ctx}");
+    assert!(lead_ctx.contains("Report from B (b)") && lead_ctx.contains("+beta"));
+    assert!(!lead_ctx.contains("+alpha\n+beta"), "each report carries only its own agent's changes");
+    assert!(lead_seen[0].cache_long, "commanders cache for longer: they wait on their subordinates");
+    assert!(!seen[0].cache_long);
 }
 
 /// Polls until `pred` holds for the run's steps, or panics.
@@ -342,6 +405,7 @@ async fn inject_to_a_reported_agent_reopens_it_while_the_run_is_active() {
     model.stall_call(3, Duration::from_millis(300));
     register(&engine, &model);
     let spec = RunSpec {
+        worker_model: None,
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("lead", None, "coordinate"), agent("coder", Some("lead"), "write files")],
@@ -368,6 +432,7 @@ async fn inject_to_a_reported_agent_reopens_it_while_the_run_is_active() {
 async fn orchestra_trees_are_validated_on_create() {
     let (_d, engine) = setup(|_| {}).await;
     let spec = RunSpec {
+        worker_model: None,
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("a", None, "t"), agent("b", None, "t")],
@@ -416,7 +481,7 @@ async fn solo_chat_with_an_external_acp_agent() {
     let agent = fake_acp(scripts.path(), "ext");
     let (_d, engine) = setup(|c| c.external_agents = vec![agent]).await;
     let model = ModelRef::new(ProviderId::Acp, "ext");
-    let spec = RunSpec { mode: RunMode::Solo, model: Some(model), agents: vec![] };
+    let spec = RunSpec { worker_model: None, mode: RunMode::Solo, model: Some(model), agents: vec![] };
     let run = engine.create_run("write a file", Some("test -f ext.txt"), spec).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     let (_, steps) = engine.run_detail(&run.id).await.unwrap();
@@ -439,6 +504,7 @@ async fn orchestra_mixes_internal_commanders_and_external_agents() {
     let mut coder = agent("coder", Some("lead"), "write coder.txt");
     coder.model = Some(ModelRef::new(ProviderId::Acp, "coder"));
     let spec = RunSpec {
+        worker_model: None,
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("lead", None, "coordinate"), coder],
@@ -484,6 +550,7 @@ async fn escalation_never_swaps_out_an_acp_agent() {
     coder.model = Some(ModelRef::new(ProviderId::Acp, "coder"));
     let bad = agent("bad", Some("lead"), "a task that keeps failing");
     let spec = RunSpec {
+        worker_model: None,
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("lead", None, "coordinate"), coder, bad],

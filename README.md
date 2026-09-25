@@ -60,6 +60,24 @@ The interface is a plain chat box. When you send a message, orchopork asks
   keeps the goal and resets the branch; **⧉ Retry as new** starts a separate task with the same goal (e.g. another
   model, or a team instead of one agent) and keeps the original. Rewound states stay under `refs/orchopork/rewound/`.
 
+### Token economy: a strong lead with cheaper workers
+
+A typical setup is one Opus lead with two Sonnet workers. In the team editor, **Workers:** sets the model of every
+agent below the lead that has no model of its own (with an Opus or Fable lead, Sonnet is suggested when it is
+available). The engine is built so such a team spends fewer tokens than the lead model working alone:
+
+- **Prompt caching (Claude).** Every turn's context is split into a stable part and a volatile tail. The stable
+  part is the mission and the repository as it was when the run started (identical for every agent, cached once
+  for all of them), the agent's role, and its conversation so far; it is sent with cache breakpoints and re-read at
+  a fraction of the input price. What changes every turn (who has reported, which files changed) goes after the
+  last breakpoint. Commanders, who wait for their subordinates between turns, use the 1-hour cache.
+- **A window that moves in steps.** When the conversation outgrows the context budget, old turns are dropped a
+  third of the budget at a time rather than one per turn, so the cached prefix survives many turns in a row.
+- **Reports carry diffs**, and teammates see each other's reports: fewer turns spent re-reading files.
+- The run header, each agent's node and its panel show input tokens, the share read from cache, and output tokens.
+  Cached tokens are billed at their real rates (reads 0.1x, or 0.05x on Opus 5.5; writes 1.25x, 2x for 1 hour);
+  the budget guard still reserves the uncached worst case.
+
 ### Agents on this computer (ACP)
 
 Claude Code, Gemini CLI, Codex and any other agent that speaks the
@@ -89,8 +107,11 @@ Sign in to each tool once in a terminal (e.g. `claude` → `/login`). The **Test
 From the CLI: `orchopork init --actor acp:claude-code`.
 
 How an orchestra executes: an agent acts only after all of its subordinates have reported, so work flows bottom-up.
-Commanders read their subordinates' reports, check the files, and can **`delegate`** work back to a direct
-subordinate with an order. `finish` sends a report to the agent's commander. When the lead finishes, the optional
+Commanders read their subordinates' reports and can **`delegate`** work back to a direct subordinate with an order.
+`finish` sends a report to the agent's commander, **with the diff of that agent's changes attached automatically**, so
+a commander reviews from diffs instead of re-reading files. Teammates under the same commander see each other's
+reports (with the list of changed files) as they come in, so later agents build on earlier work instead of
+re-exploring it. When the lead finishes, the optional
 verification command gates completion. All agents share the run's worktree and act one at a time. The whole command
 state is checkpointed with every step, so pause, resume and rewind work exactly as they do for single runs.
 

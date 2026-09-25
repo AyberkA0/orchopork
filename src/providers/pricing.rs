@@ -54,6 +54,30 @@ pub fn cost_from((inp, out): (f64, f64), prompt_tokens: u64, completion_tokens: 
     (prompt_tokens as f64 / 1_000_000.0) * inp + (completion_tokens as f64 / 1_000_000.0) * out
 }
 
+/// Price of a cache read as a fraction of the base input price. Claude
+/// writes cost 1.25x (5-minute entries) or 2x (1-hour entries). Providers
+/// whose cache discount is not known here are billed as if uncached, so the
+/// budget never under-counts.
+fn cache_read_factor(provider: ProviderId, model: &str) -> f64 {
+    match provider {
+        ProviderId::Claude if model.starts_with("claude-fable-5-1") => 0.025,
+        ProviderId::Claude if model.starts_with("claude-opus-5-5") => 0.05,
+        ProviderId::Claude => 0.1,
+        ProviderId::DeepSeek => 0.1,
+        _ => 1.0,
+    }
+}
+
+/// Cost of a completion, pricing cached input at the provider's rates.
+pub fn cost_with_cache(rates: (f64, f64), provider: ProviderId, model: &str, c: &super::Completion) -> f64 {
+    let (inp, _) = rates;
+    let per = |t: u64, factor: f64| (t as f64 / 1_000_000.0) * inp * factor;
+    cost_from(rates, c.prompt_tokens, c.completion_tokens)
+        + per(c.cache_read_tokens, cache_read_factor(provider, model))
+        + per(c.cache_write_tokens, 1.25)
+        + per(c.cache_write_long_tokens, 2.0)
+}
+
 /// Reasoning-effort levels a model accepts (empty: no effort knob).
 pub fn effort_levels(provider: ProviderId, model: &str) -> &'static [&'static str] {
     match provider {
@@ -87,6 +111,25 @@ mod tests {
         assert_eq!(rates(ProviderId::Gemini, "gemini-2.5-flash-lite"), (0.30, 2.50));
         let c = cost_usd(ProviderId::Claude, "claude-haiku-4-5", 1_000_000, 1_000_000);
         assert!((c - 6.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cached_input_is_priced_by_kind() {
+        let c = super::super::Completion {
+            prompt_tokens: 1_000_000,
+            completion_tokens: 0,
+            cache_read_tokens: 1_000_000,
+            cache_write_tokens: 1_000_000,
+            cache_write_long_tokens: 1_000_000,
+            ..Default::default()
+        };
+        let r = rates(ProviderId::Claude, "claude-sonnet-5");
+        // 2.0 uncached + 0.2 read + 2.5 write(5m) + 4.0 write(1h)
+        assert!((cost_with_cache(r, ProviderId::Claude, "claude-sonnet-5", &c) - 8.7).abs() < 1e-9);
+        // Unknown cache discount: billed like normal input.
+        let r = rates(ProviderId::Compat, "x");
+        let plain = super::super::Completion { prompt_tokens: 0, cache_read_tokens: 1_000_000, ..Default::default() };
+        assert!((cost_with_cache(r, ProviderId::Compat, "x", &plain) - 5.0).abs() < 1e-9);
     }
 
     #[test]

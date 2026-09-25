@@ -102,23 +102,38 @@ impl Role {
 pub struct Message {
     pub role: Role,
     pub content: String,
+    /// Prompt-caching hint: the first `cache_split` bytes of `content` are a
+    /// prefix other requests share too (e.g. every agent of an orchestra
+    /// sees the same mission and file overview), so providers with explicit
+    /// caching mark it as its own cache entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_split: Option<usize>,
 }
 
 impl Message {
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: Role::User, content: content.into() }
+        Self { role: Role::User, content: content.into(), cache_split: None }
     }
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: Role::Assistant, content: content.into() }
+        Self { role: Role::Assistant, content: content.into(), cache_split: None }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CompletionRequest {
     pub system: String,
     /// Must start with a user message and end with one (current models
-    /// reject assistant prefill).
+    /// reject assistant prefill). Everything here is expected to be
+    /// byte-stable from one turn to the next, so it can be cached.
     pub messages: Vec<Message>,
+    /// Context that changes every turn (who has reported, which files
+    /// changed). Sent after the last cache breakpoint, so it never
+    /// invalidates the cached history in front of it.
+    pub tail: Option<String>,
+    /// Cache for an hour instead of five minutes: for callers whose next
+    /// turn is likely more than five minutes away (commanders waiting on
+    /// their subordinates).
+    pub cache_long: bool,
     pub max_tokens: u32,
     /// Reasoning effort (`low`…`max`); set by the gateway from the target's
     /// `effort` option. Providers without such a knob ignore it.
@@ -129,8 +144,15 @@ pub struct CompletionRequest {
 #[derive(Debug, Clone, Default)]
 pub struct Completion {
     pub text: String,
+    /// Input tokens billed at the full rate (not read from or written to
+    /// a cache).
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    /// Input tokens served from the provider's prompt cache.
+    pub cache_read_tokens: u64,
+    /// Input tokens written to a 5-minute / 1-hour cache entry.
+    pub cache_write_tokens: u64,
+    pub cache_write_long_tokens: u64,
     /// The reply hit `max_tokens` and is cut off.
     pub truncated: bool,
 }
@@ -140,8 +162,11 @@ pub struct Completion {
 pub struct CallOutcome {
     pub model: ModelRef,
     pub text: String,
+    /// All input tokens, cached or not.
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
     pub cost_usd: f64,
     pub truncated: bool,
 }
@@ -255,14 +280,16 @@ impl Gateway {
         let result = provider.complete(&target.model, &tuned).await;
         let outcome = match result {
             Ok(c) => {
-                let cost = pricing::cost_from(rates, c.prompt_tokens, c.completion_tokens);
+                let cost = pricing::cost_with_cache(rates, target.provider, &target.model, &c);
+                let prompt_tokens =
+                    c.prompt_tokens + c.cache_read_tokens + c.cache_write_tokens + c.cache_write_long_tokens;
                 let recorded = self
                     .store
                     .record_spend(
                         run_id,
                         target.provider.as_str(),
                         &target.model,
-                        c.prompt_tokens,
+                        prompt_tokens,
                         c.completion_tokens,
                         cost,
                     )
@@ -270,8 +297,10 @@ impl Gateway {
                 recorded.map(|()| CallOutcome {
                     model: target.clone(),
                     text: c.text,
-                    prompt_tokens: c.prompt_tokens,
+                    prompt_tokens,
                     completion_tokens: c.completion_tokens,
+                    cache_read_tokens: c.cache_read_tokens,
+                    cache_write_tokens: c.cache_write_tokens + c.cache_write_long_tokens,
                     cost_usd: cost,
                     truncated: c.truncated,
                 })
@@ -289,7 +318,12 @@ impl Gateway {
 }
 
 fn estimate_cost(rates: (f64, f64), req: &CompletionRequest) -> f64 {
-    let bytes = req.system.len() + req.messages.iter().map(|m| m.content.len() + 16).sum::<usize>();
+    // Priced as if nothing were cached (and a long cache write costs 2x),
+    // so the reservation stays a true worst case.
+    let bytes = req.system.len()
+        + req.messages.iter().map(|m| m.content.len() + 16).sum::<usize>()
+        + req.tail.as_ref().map_or(0, String::len);
+    let bytes = if req.cache_long { bytes * 2 } else { bytes * 5 / 4 };
     let prompt_tokens = (bytes as u64) * 2 / 5 + 64;
     pricing::cost_from(rates, prompt_tokens, u64::from(req.max_tokens))
 }
@@ -369,13 +403,77 @@ fn error_message(body: &str) -> String {
     crate::fsutil::clip(body.trim(), 300)
 }
 
-fn wire_messages<'a>(system: Option<&'a str>, messages: &'a [Message]) -> Vec<serde_json::Value> {
+/// OpenAI-style messages. The volatile `tail` is appended to the last
+/// message, after the stable history, so providers with automatic prefix
+/// caching (OpenAI, DeepSeek, …) still reuse everything before it.
+fn wire_messages(system: Option<&str>, messages: &[Message], tail: Option<&str>) -> Vec<serde_json::Value> {
+    let last = messages.len().saturating_sub(1);
     system
         .filter(|s| !s.is_empty())
         .map(|s| json!({ "role": "system", "content": s }))
         .into_iter()
-        .chain(messages.iter().map(|m| json!({ "role": m.role.as_str(), "content": m.content })))
+        .chain(messages.iter().enumerate().map(|(i, m)| {
+            let content = match tail.filter(|t| i == last && !t.trim().is_empty()) {
+                Some(t) => format!("{}\n\n{t}", m.content),
+                None => m.content.clone(),
+            };
+            json!({ "role": m.role.as_str(), "content": content })
+        }))
         .collect()
+}
+
+/// Claude messages with explicit cache breakpoints: after the system prompt,
+/// after each message's shared prefix (`cache_split`), and at the end of the
+/// stable history. The volatile `tail` goes after the last breakpoint as its
+/// own block, so a turn only pays full price for what is new since the last
+/// one. At most 4 breakpoints are allowed; this uses at most 3 (only the
+/// first message carries a `cache_split`).
+fn claude_body(model: &str, req: &CompletionRequest) -> serde_json::Value {
+    let cc = if req.cache_long { json!({ "type": "ephemeral", "ttl": "1h" }) } else { json!({ "type": "ephemeral" }) };
+    let text = |t: &str, cached: bool| {
+        let mut b = json!({ "type": "text", "text": t });
+        if cached {
+            b["cache_control"] = cc.clone();
+        }
+        b
+    };
+    let mut splits = 0;
+    let last = req.messages.len().saturating_sub(1);
+    let messages: Vec<serde_json::Value> = req
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let mut blocks = Vec::new();
+            let split = m.cache_split.filter(|&n| n > 0 && n < m.content.len() && m.content.is_char_boundary(n));
+            match split {
+                Some(n) if splits == 0 && !m.content[..n].trim().is_empty() && !m.content[n..].trim().is_empty() => {
+                    splits += 1;
+                    blocks.push(text(&m.content[..n], true));
+                    blocks.push(text(&m.content[n..], false));
+                }
+                _ => blocks.push(text(&m.content, false)),
+            }
+            if i == last {
+                if let Some(b) = blocks.last_mut() {
+                    b["cache_control"] = cc.clone();
+                }
+                if let Some(t) = req.tail.as_deref().filter(|t| !t.trim().is_empty()) {
+                    blocks.push(text(t, false));
+                }
+            }
+            json!({ "role": m.role.as_str(), "content": blocks })
+        })
+        .collect();
+    let mut body = json!({
+        "model": model,
+        "max_tokens": req.max_tokens,
+        "messages": messages,
+    });
+    if !req.system.trim().is_empty() {
+        body["system"] = json!([text(&req.system, true)]);
+    }
+    body
 }
 
 // ---- Ollama (local, free) ------------------------------------------------
@@ -439,7 +537,7 @@ impl Provider for OllamaProvider {
     async fn complete(&self, model: &str, req: &CompletionRequest) -> Result<Completion> {
         let body = json!({
             "model": model,
-            "messages": wire_messages(Some(&req.system), &req.messages),
+            "messages": wire_messages(Some(&req.system), &req.messages, req.tail.as_deref()),
             "stream": false,
             "options": { "num_ctx": self.num_ctx, "num_predict": req.max_tokens },
         });
@@ -450,6 +548,7 @@ impl Provider for OllamaProvider {
             prompt_tokens: r.prompt_eval_count,
             completion_tokens: r.eval_count,
             truncated: r.done_reason.as_deref() == Some("length"),
+            ..Default::default()
         })
     }
 
@@ -500,6 +599,20 @@ struct ClaudeBlock {
 struct ClaudeUsage {
     input_tokens: u64,
     output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+    #[serde(default)]
+    cache_creation: Option<ClaudeCacheCreation>,
+}
+
+#[derive(Deserialize)]
+struct ClaudeCacheCreation {
+    #[serde(default)]
+    ephemeral_5m_input_tokens: u64,
+    #[serde(default)]
+    ephemeral_1h_input_tokens: u64,
 }
 
 #[derive(Deserialize)]
@@ -520,12 +633,7 @@ impl Provider for ClaudeProvider {
     }
 
     async fn complete(&self, model: &str, req: &CompletionRequest) -> Result<Completion> {
-        let mut body = json!({
-            "model": model,
-            "max_tokens": req.max_tokens,
-            "system": req.system,
-            "messages": wire_messages(None, &req.messages),
-        });
+        let mut body = claude_body(model, req);
         // Haiku 4.5 rejects `effort`; every newer model accepts it.
         if let Some(e) = req.effort.as_deref().filter(|_| !model.starts_with("claude-haiku")) {
             body["output_config"] = json!({ "effort": e });
@@ -542,10 +650,23 @@ impl Provider for ClaudeProvider {
         }
         // Only text blocks: thinking blocks are the model's private reasoning.
         let text = r.content.into_iter().filter(|b| b.kind == "text").map(|b| b.text).collect::<Vec<_>>().join("");
+        let u = &r.usage;
+        // The TTL breakdown is authoritative when present; without it all
+        // writes are 5-minute ones unless this request asked for 1 hour.
+        let (w5, w1h) = match &u.cache_creation {
+            Some(c) if c.ephemeral_5m_input_tokens + c.ephemeral_1h_input_tokens > 0 => {
+                (c.ephemeral_5m_input_tokens, c.ephemeral_1h_input_tokens)
+            }
+            _ if req.cache_long => (0, u.cache_creation_input_tokens),
+            _ => (u.cache_creation_input_tokens, 0),
+        };
         Ok(Completion {
             text,
-            prompt_tokens: r.usage.input_tokens,
-            completion_tokens: r.usage.output_tokens,
+            prompt_tokens: u.input_tokens,
+            completion_tokens: u.output_tokens,
+            cache_read_tokens: u.cache_read_input_tokens,
+            cache_write_tokens: w5,
+            cache_write_long_tokens: w1h,
             truncated: r.stop_reason.as_deref() == Some("max_tokens"),
         })
     }
@@ -638,6 +759,18 @@ struct OaiUsage {
     prompt_tokens: u64,
     #[serde(default)]
     completion_tokens: u64,
+    /// OpenAI-style automatic prefix caching.
+    #[serde(default)]
+    prompt_tokens_details: Option<OaiPromptDetails>,
+    /// DeepSeek's name for the same thing.
+    #[serde(default)]
+    prompt_cache_hit_tokens: u64,
+}
+
+#[derive(Deserialize)]
+struct OaiPromptDetails {
+    #[serde(default)]
+    cached_tokens: u64,
 }
 
 #[async_trait::async_trait]
@@ -649,7 +782,7 @@ impl Provider for OpenAiCompatProvider {
     async fn complete(&self, model: &str, req: &CompletionRequest) -> Result<Completion> {
         let mut body = json!({
             "model": model,
-            "messages": wire_messages(Some(&req.system), &req.messages),
+            "messages": wire_messages(Some(&req.system), &req.messages, req.tail.as_deref()),
             "max_tokens": req.max_tokens.min(self.max_tokens_cap),
         });
         // Gemini's OpenAI endpoint takes low/medium/high.
@@ -674,12 +807,20 @@ impl Provider for OpenAiCompatProvider {
             .into_iter()
             .next()
             .ok_or_else(|| Error::Provider(format!("{}: response had no choices", self.id.as_str())))?;
-        let usage = r.usage.unwrap_or(OaiUsage { prompt_tokens: 0, completion_tokens: 0 });
+        let (prompt, completion, cached) = match r.usage {
+            Some(u) => {
+                let cached = u.prompt_tokens_details.map_or(0, |d| d.cached_tokens).max(u.prompt_cache_hit_tokens);
+                (u.prompt_tokens, u.completion_tokens, cached.min(u.prompt_tokens))
+            }
+            None => (0, 0, 0),
+        };
         Ok(Completion {
             text: choice.message.content.unwrap_or_default(),
-            prompt_tokens: usage.prompt_tokens,
-            completion_tokens: usage.completion_tokens,
+            prompt_tokens: prompt - cached,
+            completion_tokens: completion,
+            cache_read_tokens: cached,
             truncated: choice.finish_reason.as_deref() == Some("length"),
+            ..Default::default()
         })
     }
 
@@ -772,15 +913,52 @@ mod tests {
         }
         async fn complete(&self, _model: &str, _req: &CompletionRequest) -> Result<Completion> {
             tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
-            Ok(Completion { text: "ok".into(), prompt_tokens: 1000, completion_tokens: 1000, truncated: false })
+            Ok(Completion { text: "ok".into(), prompt_tokens: 1000, completion_tokens: 1000, ..Default::default() })
         }
         async fn list_models(&self) -> Result<Vec<String>> {
             Ok(vec![])
         }
     }
 
+    #[test]
+    fn claude_requests_cache_the_stable_prefix_and_keep_the_tail_after_it() {
+        let req = CompletionRequest {
+            system: "system prompt".into(),
+            messages: vec![
+                Message { cache_split: Some("SHARED ".len()), ..Message::user("SHARED own part") },
+                Message::assistant("a call"),
+                Message::user("its result"),
+            ],
+            tail: Some("status now".into()),
+            max_tokens: 100,
+            ..Default::default()
+        };
+        let body = claude_body("claude-sonnet-5", &req);
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        let first = &body["messages"][0]["content"];
+        assert_eq!(first[0]["text"], "SHARED ");
+        assert!(first[0]["cache_control"].is_object(), "the shared prefix is its own cache entry");
+        assert_eq!(first[1]["text"], "own part");
+        let last = body["messages"][2]["content"].as_array().unwrap();
+        assert_eq!(last.len(), 2);
+        assert!(last[0]["cache_control"].is_object(), "breakpoint at the end of the stable history");
+        assert_eq!(last[1]["text"], "status now");
+        assert!(last[1].get("cache_control").is_none(), "the volatile tail is never cached");
+        let marks = body.to_string().matches("cache_control").count();
+        assert!(marks <= 4, "at most 4 breakpoints, got {marks}");
+
+        let long = claude_body("claude-sonnet-5", &CompletionRequest { cache_long: true, ..req });
+        assert_eq!(long["system"][0]["cache_control"]["ttl"], "1h");
+    }
+
+    #[test]
+    fn openai_style_requests_append_the_tail_to_the_last_message() {
+        let m = wire_messages(Some("s"), &[Message::user("history")], Some("tail"));
+        assert_eq!(m[1]["content"], "history\n\ntail");
+    }
+
     fn req(max_tokens: u32) -> CompletionRequest {
-        CompletionRequest { system: "s".into(), messages: vec![Message::user("hi")], max_tokens, effort: None }
+        CompletionRequest { system: "s".into(), messages: vec![Message::user("hi")], max_tokens, ..Default::default() }
     }
 
     async fn store() -> (tempfile::TempDir, Store) {

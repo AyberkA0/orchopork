@@ -186,6 +186,24 @@ impl GitRepo {
         Ok(files)
     }
 
+    /// Files tracked at `commit`, repo-relative and sorted. Unlike
+    /// `ls_files`, this never changes while a run edits its tree, so it can
+    /// sit in a cached prompt prefix.
+    pub async fn ls_files_at(&self, commit: &str) -> Result<Vec<String>> {
+        validate_commit(commit)?;
+        let out = self.run(&["ls-tree", "-r", "--name-only", commit]).await?;
+        let mut files: Vec<String> = out.lines().map(str::to_string).collect();
+        files.sort();
+        Ok(files)
+    }
+
+    /// `git diff --name-status` of the working tree against `base`: one
+    /// `M path` / `A path` / `D path` line per changed file.
+    pub async fn changed_names(&self, base: &str) -> Result<String> {
+        validate_commit(base)?;
+        self.run(&["diff", "--name-status", "--no-color", "--no-renames", base]).await
+    }
+
     /// `git grep` over tracked and untracked files. No match is `Ok("")`.
     pub async fn grep(&self, pattern: &str, path: &str) -> Result<String> {
         let args = ["grep", "-n", "-I", "--untracked", "--no-color", "-E", "-e", pattern, "--", path];

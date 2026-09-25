@@ -45,7 +45,7 @@ fn subtree_size(spec: &RunSpec, id: &str) -> usize {
     spec.children(id).map(|c| 1 + subtree_size(spec, &c.id)).sum()
 }
 
-const EXTERNAL_SUFFIX: &str = "\n\n---\nWork directly in the current directory (the shared git working tree). Do only your task. When you are done, end with a concise report for your commander: what you changed, how you verified it, and anything left open.";
+const EXTERNAL_SUFFIX: &str = "\n\n---\nWork directly in the current directory (the shared git working tree). Do only your task. When you are done, end with a concise report for your commander: what you did, how you verified it, and anything left open. The diff of your changes is attached to your report automatically, so do not paste code.";
 
 const DESIGNER: &str = "You design teams of AI agents for software tasks, organised like a decimal military chain of
 command: exactly one lead agent at the top; any agent may command subordinates; keep each commander's direct reports
@@ -53,6 +53,11 @@ at 10 or fewer. Use the fewest agents that make sense: 1 for a trivial task, typ
 missions. Leaf agents do concrete work (read code, edit files, run tests). Commanders integrate and review their
 subordinates' work, send it back when it is wrong, and report upward. All agents share one working tree and act one at
 a time, so give each a clearly separated responsibility and tell dependent agents what to expect.
+Token economy matters: every agent re-reads its whole context on every turn, and agents below the lead usually run
+on a cheaper model than the lead. So put the reading and editing in leaf agents; keep the lead to integrating and
+reviewing (reports arrive with the diff of each agent's changes, so the lead rarely needs to re-read files). Name the
+files or modules each agent owns in its task, so agents do not explore or edit the same code twice. Prefer 2-3 leaf
+agents for typical tasks; add an agent only when its work is clearly separable.
 Reply with only a JSON object:
 {\"agents\": [{\"id\": \"lead\", \"name\": \"Lead\", \"role\": \"short role\", \"task\": \"concrete, self-contained task\", \"parent\": null}, ...]}
 Ids are short snake_case; `parent` is the commander's id (null only for the lead).";
@@ -72,7 +77,7 @@ impl Engine {
             system: DESIGNER.into(),
             messages: vec![Message::user(input)],
             max_tokens: ws.config().limits.max_output_tokens,
-            effort: None,
+            ..Default::default()
         };
         let out = ws.gateway.complete(lead, &req, "team-design").await?;
         Ok(parse_team(&out.text, goal))
@@ -234,7 +239,10 @@ impl Inner {
             state.escalate = false;
         }
 
-        let base = me.model.clone().or_else(|| spec.model.clone()).or_else(|| cfg.routing.actor.clone());
+        // Own model, else the team's worker model (below the lead), else the
+        // lead's model, else the workspace default.
+        let worker = me.parent.as_ref().and(spec.worker_model.clone());
+        let base = me.model.clone().or(worker).or_else(|| spec.model.clone()).or_else(|| cfg.routing.actor.clone());
         let base = base.ok_or_else(|| Error::InvalidRequest(format!("no model for agent {}", me.name)))?;
         // Escalation swaps in a different (internal) model, so it never
         // applies when the agent's own model is an external ACP agent.
@@ -243,15 +251,18 @@ impl Inner {
             _ => (base, false),
         };
 
+        let wt = GitRepo::new(&run.worktree);
+        let files = wt.ls_files_at(&run.base_commit).await?;
+        let tail = turn_tail(spec, &me, &subordinates, &state, &wt.changed_names(&run.base_commit).await?);
+
         if model.provider == crate::providers::ProviderId::Acp {
-            let files = GitRepo::new(&run.worktree).ls_files().await?;
-            let mut pin = pinned(run, spec, &me, &subordinates, &state, &files);
+            let mut pin = pinned(run, spec, &me, &subordinates, &files);
             if !subordinates.is_empty() {
-                pin.push_str("\nYou cannot delegate in this mode: review your subordinates' work in the files and fix or complete what is missing yourself.\n");
+                pin.own.push_str("\nYou cannot delegate in this mode: review your subordinates' work in the files and fix or complete what is missing yourself.\n");
             }
             let groups = transcript(spec, &me, &root, steps, cfg.limits.tool_output_chars);
             let messages = prompts::windowed(pin, groups, cfg.limits.cloud_context_chars);
-            let prompt = format!("{}{}", super::external::as_prompt(&messages), EXTERNAL_SUFFIX);
+            let prompt = format!("{}\n\n{tail}{}", super::external::as_prompt(&messages), EXTERNAL_SUFFIX);
             let out = self.external_turn(cfg, run, &model, &me.name, prompt).await?;
             let mut meta = super::external::meta(&model, &out);
             meta["agent"] = json!(me.id);
@@ -260,6 +271,9 @@ impl Inner {
                 if out.text.is_empty() { format!("({} finished without a report)", me.name) } else { out.text.clone() };
             if !out.cancelled {
                 meta["summary"] = json!(clip(&text, 6_000));
+                if let Some(c) = unit_changes(run, spec, &me, steps, cfg.limits.tool_output_chars).await {
+                    meta["changes"] = c;
+                }
                 next.done.push(me.id.clone());
                 next.stack.pop();
                 if me.parent.is_none() {
@@ -281,12 +295,20 @@ impl Inner {
             );
         }
         let system = format!("{}\n\n{}", prompts::actor_system(&tools), skills.system).trim_end().to_string();
-        let files = GitRepo::new(&run.worktree).ls_files().await?;
-        let pinned = pinned(run, spec, &me, &subordinates, &state, &files);
+        let pinned = pinned(run, spec, &me, &subordinates, &files);
         let groups = transcript(spec, &me, &root, steps, cfg.limits.tool_output_chars);
         let messages = prompts::windowed(pinned, groups, cfg.context_chars(&model));
         self.log(&run.id, format!("{} is working", me.name));
-        let out = self.call(cfg, run, &model, system, messages).await?;
+        // Commanders wait for their subordinates between turns, often for
+        // longer than the default 5-minute cache lifetime.
+        let req = CompletionRequest {
+            system,
+            messages,
+            tail: Some(tail),
+            cache_long: !subordinates.is_empty(),
+            ..Default::default()
+        };
+        let out = self.call_req(cfg, run, &model, req).await?;
 
         let mut meta = call_meta(&out);
         meta["agent"] = json!(me.id);
@@ -309,6 +331,9 @@ impl Inner {
                     let summary = if summary.is_empty() { out.text.clone() } else { summary };
                     meta["tool"] = json!("finish");
                     meta["summary"] = json!(summary);
+                    if let Some(c) = unit_changes(run, spec, &me, steps, cfg.limits.tool_output_chars).await {
+                        meta["changes"] = c;
+                    }
                     next.done.push(me.id.clone());
                     next.stack.pop();
                     let msg = match me.parent.as_deref().and_then(|p| spec.agent(p)) {
@@ -368,17 +393,14 @@ impl Inner {
     }
 }
 
-fn pinned(
-    run: &Run,
-    spec: &RunSpec,
-    me: &AgentSpec,
-    subs: &[&AgentSpec],
-    state: &RunState,
-    files: &[String],
-) -> String {
+/// The stable first message of `me`'s turns: the mission and the
+/// repository as it was when the run started (shared by every agent, so
+/// cached once for all of them), then who `me` is. Anything that changes
+/// from turn to turn is in `turn_tail` instead.
+fn pinned(run: &Run, spec: &RunSpec, me: &AgentSpec, subs: &[&AgentSpec], files: &[String]) -> prompts::Pinned {
+    let shared = format!("# Mission (from the user)\n{}\n{}\n", run.goal.trim(), prompts::file_overview(files, 150));
     let mut s = format!(
-        "# Mission (from the user)\n{}\n\n# You\n{} (id {}), rank {}. Role: {}\nYour task: {}\n",
-        run.goal.trim(),
+        "# You\n{} (id {}), rank {}. Role: {}\nYour task: {}\n",
         me.name,
         me.id,
         rank(spec, &me.id),
@@ -387,7 +409,7 @@ fn pinned(
     );
     match me.parent.as_deref().and_then(|p| spec.agent(p)) {
         Some(c) => s.push_str(&format!(
-            "You report to {} ({}). Do your task only, then call finish with a precise report of what you did and anything they must know.\n",
+            "You report to {} ({}). Do your task only, then call finish with a short report: what you did, how you verified it, and anything they must know. The diff of your changes is attached to your report automatically, so do not paste code into it.\n",
             c.name, c.role
         )),
         None => s.push_str(
@@ -397,34 +419,142 @@ fn pinned(
     if !subs.is_empty() {
         s.push_str("\n# Your subordinates (their reports are below)\n");
         for c in subs {
-            let status = if state.done.contains(&c.id) { "reported" } else { "working" };
-            s.push_str(&format!("- {} [{}]: {} ({status}) — {}\n", c.id, c.name, c.role, clip(&c.task, 300)));
+            s.push_str(&format!("- {} [{}]: {} — {}\n", c.id, c.name, c.role, clip(&c.task, 300)));
         }
         s.push_str(
-            "Check their work in the files. If something is wrong or missing, use delegate with a precise instruction instead of redoing it yourself; integrate and verify, then finish.\n",
+            "Each report comes with the diff of that agent's changes: review the work from the diffs and read files only for what a diff does not show. If something is wrong or missing, use delegate with a precise instruction instead of redoing it yourself; integrate and verify, then finish.\n",
         );
+    }
+    if let Some(p) = me.parent.as_deref() {
+        let peers: Vec<String> = spec
+            .children(p)
+            .filter(|a| a.id != me.id)
+            .map(|a| format!("{} ({}: {})", a.name, a.role, clip(&a.task, 160)))
+            .collect();
+        if !peers.is_empty() {
+            s.push_str(&format!(
+                "\nTeammates under the same commander: {}. Their reports appear below as they finish; build on their work instead of redoing it, and do not edit what they own.\n",
+                peers.join("; ")
+            ));
+        }
     }
     let others: Vec<String> = spec
         .agents
         .iter()
-        .filter(|a| a.id != me.id && a.parent.as_deref() != Some(&me.id) && Some(a.id.as_str()) != me.parent.as_deref())
+        .filter(|a| {
+            a.id != me.id
+                && a.parent.as_deref() != Some(&me.id)
+                && Some(a.id.as_str()) != me.parent.as_deref()
+                && (me.parent.is_none() || a.parent != me.parent)
+        })
         .map(|a| format!("{} ({})", a.name, a.role))
         .collect();
     if !others.is_empty() {
         s.push_str(&format!("\nOther agents working in the same tree: {}.\n", others.join(", ")));
     }
-    s.push_str(&prompts::file_overview(files, 150));
+    prompts::Pinned { shared, own: s }
+}
+
+/// What changed since `me`'s last turn: who has reported, and which files
+/// the team has touched. Sent after the cache breakpoint.
+fn turn_tail(spec: &RunSpec, me: &AgentSpec, subs: &[&AgentSpec], state: &RunState, name_status: &str) -> String {
+    let mut s = String::from("# Status now\n");
+    let status = |id: &str| if state.done.iter().any(|d| d == id) { "reported" } else { "working" };
+    if !subs.is_empty() {
+        let list: Vec<String> = subs.iter().map(|c| format!("{} {}", c.id, status(&c.id))).collect();
+        s.push_str(&format!("Subordinates: {}.\n", list.join(", ")));
+    }
+    if let Some(p) = me.parent.as_deref() {
+        let list: Vec<String> =
+            spec.children(p).filter(|a| a.id != me.id).map(|a| format!("{} {}", a.id, status(&a.id))).collect();
+        if !list.is_empty() {
+            s.push_str(&format!("Teammates: {}.\n", list.join(", ")));
+        }
+    }
+    s.push_str(&prompts::changes_note(name_status));
     s
 }
 
+/// `me` and everyone under it.
+fn unit(spec: &RunSpec, id: &str) -> Vec<String> {
+    let mut out = vec![id.to_string()];
+    let mut i = 0;
+    while i < out.len() {
+        let kids: Vec<String> = spec.children(&out[i]).map(|c| c.id.clone()).collect();
+        out.extend(kids);
+        i += 1;
+    }
+    out
+}
+
+/// The commit `me`'s current assignment started from: the checkpoint right
+/// before its unit (itself and its subordinates) first acted after `me`'s
+/// previous report. Everything since then is the unit's work.
+fn assignment_start(spec: &RunSpec, me: &str, steps: &[Step], base: &str) -> String {
+    let members = unit(spec, me);
+    let mut start = base.to_string();
+    let mut prev = base.to_string();
+    let mut open = false;
+    for s in steps {
+        if s.kind == StepKind::Act {
+            let agent = s.meta["agent"].as_str().unwrap_or("");
+            if !open && members.iter().any(|m| m == agent) {
+                start = prev.clone();
+                open = true;
+            }
+            if agent == me && s.meta["tool"] == "finish" {
+                open = false;
+            }
+        }
+        prev = s.git_commit.clone();
+    }
+    if open { start } else { prev }
+}
+
+/// The diff a report carries to the commander (not for the lead: its report
+/// goes to the user, who sees the whole diff anyway).
+async fn unit_changes(
+    run: &Run,
+    spec: &RunSpec,
+    me: &AgentSpec,
+    steps: &[Step],
+    patch_chars: usize,
+) -> Option<serde_json::Value> {
+    me.parent.as_ref()?;
+    let start = assignment_start(spec, &me.id, steps, &run.base_commit);
+    let (stat, patch) = GitRepo::new(&run.worktree).diff_from(&start).await.ok()?;
+    Some(json!({ "stat": stat.trim(), "patch": clip(&patch, patch_chars) }))
+}
+
+/// A report as its reader sees it: commanders get the diff, teammates only
+/// the list of changed files (enough to avoid overlapping work).
+fn report_text(s: &Step, with_patch: bool) -> String {
+    let mut out = s.meta["summary"].as_str().unwrap_or(&s.output).to_string();
+    let stat = s.meta["changes"]["stat"].as_str().unwrap_or("");
+    if stat.is_empty() {
+        if s.meta.get("changes").is_some() {
+            out.push_str("\n\n(no file changes)");
+        }
+        return out;
+    }
+    out.push_str(&format!("\n\nFiles changed:\n{stat}"));
+    let patch = s.meta["changes"]["patch"].as_str().unwrap_or("");
+    if with_patch && !patch.trim().is_empty() {
+        out.push_str(&format!("\n\nDiff:\n```diff\n{patch}\n```"));
+    }
+    out
+}
+
 /// What `me` has seen: its own turns, orders addressed to it, reports from
-/// its direct subordinates, user messages for it, and (lead only)
-/// verification results.
+/// its direct subordinates (with their diffs), reports from teammates under
+/// the same commander, user messages for it, and (lead only) verification
+/// results.
 fn transcript(spec: &RunSpec, me: &AgentSpec, root: &str, steps: &[Step], obs_chars: usize) -> Vec<Vec<Message>> {
     let mut groups = Vec::new();
     let name = |id: &str| spec.agent(id).map(|a| a.name.clone()).unwrap_or_else(|| id.to_string());
     for s in steps {
         let agent = s.meta["agent"].as_str().unwrap_or(root);
+        let parent = spec.agent(agent).and_then(|a| a.parent.as_deref());
         match s.kind {
             StepKind::Act if agent == me.id => {
                 let tool = s.meta["tool"].as_str().unwrap_or("action");
@@ -444,15 +574,21 @@ fn transcript(spec: &RunSpec, me: &AgentSpec, root: &str, steps: &[Step], obs_ch
                     s.meta["instruction"].as_str().unwrap_or("")
                 ))]);
             }
-            StepKind::Act
-                if s.meta["tool"] == "finish"
-                    && spec.agent(agent).and_then(|a| a.parent.as_deref()) == Some(&me.id) =>
-            {
+            StepKind::Act if s.meta["tool"] == "finish" && parent == Some(&me.id) => {
                 groups.push(vec![Message::user(format!(
                     "Report from {} ({}):\n{}",
                     name(agent),
                     agent,
-                    s.meta["summary"].as_str().unwrap_or(&s.output)
+                    report_text(s, true)
+                ))]);
+            }
+            StepKind::Act if s.meta["tool"] == "finish" && parent.is_some() && parent == me.parent.as_deref() => {
+                groups.push(vec![Message::user(format!(
+                    "Teammate {} ({}) reported to {}:\n{}",
+                    name(agent),
+                    agent,
+                    name(parent.unwrap_or(root)),
+                    report_text(s, false)
                 ))]);
             }
             StepKind::Inject if agent == me.id => {

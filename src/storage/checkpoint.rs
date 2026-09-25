@@ -67,8 +67,12 @@ pub struct AgentSpec {
 #[serde(default)]
 pub struct RunSpec {
     pub mode: RunMode,
-    /// Solo: the model. Orchestra: the lead model every agent inherits.
+    /// Solo: the model. Orchestra: the lead's model, and every agent's when
+    /// `worker_model` is not set.
     pub model: Option<ModelRef>,
+    /// Orchestra: the model of every agent below the lead that does not
+    /// pick its own, e.g. a strong lead with cheaper workers.
+    pub worker_model: Option<ModelRef>,
     pub agents: Vec<AgentSpec>,
 }
 
@@ -456,6 +460,7 @@ mod spec_tests {
     #[test]
     fn agent_trees_are_validated() {
         let ok = RunSpec {
+            worker_model: None,
             mode: RunMode::Orchestra,
             model: None,
             agents: vec![a("r", None), a("x", Some("r")), a("y", Some("x"))],

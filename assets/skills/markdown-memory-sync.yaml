@@ -1,0 +1,11 @@
+name: "markdown-memory-sync"
+version: "1.0.0"
+type: "system_modifier"
+description: "Keeps STATE.md, PROJECT_CONTEXT.md and SCRATCHPAD.md consistent."
+priority: 40
+prompt_injection: |
+  Maintain three files at the workspace root:
+  - PROJECT_CONTEXT.md: stable goal, constraints, architecture decisions. Edit only on goal/design change.
+  - STATE.md: current phase, completed subtasks, next action, known failures. Rewrite after every node transition.
+  - SCRATCHPAD.md: disposable working notes; may be truncated freely.
+  Use fixed H2 headings, bullet lists, and ISO-8601 timestamps. Never leave STATE.md stale relative to the last commit.

@@ -26,6 +26,7 @@ pub enum RewindTarget {
 }
 
 /// Couples every graph transition to exactly one git commit and one SQLite row.
+#[derive(Clone)]
 pub struct Checkpointer {
     store: Store,
     repo: GitRepo,

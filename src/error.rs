@@ -26,4 +26,6 @@ pub enum Error {
     Provider(String),
     #[error("budget: {0}")]
     Budget(String),
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
 }

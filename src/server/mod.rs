@@ -14,18 +14,34 @@ use serde::Deserialize;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::bootstrap;
 use crate::error::Error;
 use crate::git::GitRepo;
-use crate::providers::{ClaudeProvider, Gateway, OpenAiCompatProvider, ProviderId};
+use crate::graph::{Executor, NodeKind, StepOutcome};
+use crate::providers::{Gateway, ProviderId};
 use crate::secrets::SecretStore;
 use crate::skills::SkillRegistry;
+use crate::storage::{RewindTarget, Snapshot};
 use wizard::{Event, RemoteAuth, Step, VcsChoice, Wizard};
 
 pub struct AppState {
     pub wizard: Mutex<Wizard>,
-    pub skills: SkillRegistry,
-    pub gateway: Gateway,
+    pub skills: Arc<SkillRegistry>,
+    pub gateway: Arc<Gateway>,
     pub secrets: SecretStore,
+    pub executor: Executor,
+}
+
+impl AppState {
+    pub fn from_workspace(ws: bootstrap::Workspace) -> Self {
+        Self {
+            wizard: Mutex::new(Wizard::default()),
+            skills: ws.skills,
+            gateway: ws.gateway,
+            secrets: ws.secrets,
+            executor: ws.executor,
+        }
+    }
 }
 
 pub type Shared = Arc<AppState>;
@@ -42,6 +58,10 @@ pub fn router(state: Shared) -> Router {
         .route("/api/skills/reload", post(reload_skills))
         .route("/api/providers/budget", get(get_budget))
         .route("/api/providers/keys", post(set_provider_key))
+        .route("/api/run/step", post(run_step))
+        .route("/api/run/inject", post(run_inject))
+        .route("/api/run/history", get(run_history))
+        .route("/api/run/rewind", post(run_rewind))
         .route("/app", get(app_gate))
         // Static SPA (ServeDir / include_dir) is added as the fallback service.
         .layer(TraceLayer::new_for_http())
@@ -61,6 +81,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let code = match self.0 {
             Error::Wizard(_) | Error::Skill(_) | Error::SkillFile { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            Error::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             Error::NotFound(_) => StatusCode::NOT_FOUND,
             Error::Budget(_) => StatusCode::PAYMENT_REQUIRED,
             Error::Provider(_) => StatusCode::BAD_GATEWAY,
@@ -174,13 +195,61 @@ async fn set_provider_key(
         return Err(ApiError(Error::Provider("ollama is local and needs no API key".into())));
     }
     s.secrets.set(req.provider, req.api_key.clone()).map_err(ApiError)?;
-    match req.provider {
-        ProviderId::Claude => s.gateway.register(Box::new(ClaudeProvider::new(req.api_key))),
-        ProviderId::DeepSeek => s.gateway.register(Box::new(OpenAiCompatProvider::deepseek(req.api_key))),
-        ProviderId::Gemini => s.gateway.register(Box::new(OpenAiCompatProvider::gemini(req.api_key))),
-        ProviderId::Ollama => unreachable!(),
-    }
+    bootstrap::register_cloud(&s.gateway, req.provider, req.api_key);
     Ok(Json(serde_json::json!({ "configured_providers": s.gateway.configured() })))
+}
+
+#[derive(Deserialize)]
+struct RunStepReq {
+    thread_id: String,
+    node: NodeKind,
+    provider: ProviderId,
+    model: String,
+}
+
+async fn run_step(State(s): State<Shared>, Json(req): Json<RunStepReq>) -> Result<Json<StepOutcome>, ApiError> {
+    let outcome = s.executor.step(&req.thread_id, req.node, req.provider, &req.model).await?;
+    Ok(Json(outcome))
+}
+
+#[derive(Deserialize)]
+struct RunInjectReq {
+    thread_id: String,
+    text: String,
+}
+
+async fn run_inject(State(s): State<Shared>, Json(req): Json<RunInjectReq>) -> Result<Json<Snapshot>, ApiError> {
+    Ok(Json(s.executor.inject(&req.thread_id, &req.text).await?))
+}
+
+#[derive(Deserialize)]
+struct ThreadQuery {
+    thread_id: String,
+}
+
+async fn run_history(
+    State(s): State<Shared>,
+    axum::extract::Query(q): axum::extract::Query<ThreadQuery>,
+) -> Result<Json<Vec<Snapshot>>, ApiError> {
+    Ok(Json(s.executor.history(&q.thread_id).await?))
+}
+
+#[derive(Deserialize)]
+struct RunRewindReq {
+    thread_id: String,
+    /// Exactly one of the two must be set: rewind to a specific snapshot,
+    /// or back N steps from the current head.
+    snapshot_id: Option<String>,
+    steps: Option<u32>,
+}
+
+async fn run_rewind(State(s): State<Shared>, Json(req): Json<RunRewindReq>) -> Result<Json<Snapshot>, ApiError> {
+    let target = match (req.snapshot_id, req.steps) {
+        (Some(id), None) => RewindTarget::Snapshot(id),
+        (None, Some(n)) => RewindTarget::Steps(n),
+        _ => return Err(ApiError(Error::InvalidRequest("rewind needs exactly one of snapshot_id or steps".into()))),
+    };
+    Ok(Json(s.executor.rewind(&req.thread_id, target).await?))
 }
 
 /// Dashboard is unlocked only after steps 1-4; otherwise bounce to the

@@ -1,5 +1,6 @@
 //! orchopork: hybrid local/cloud agent orchestration engine.
 
+pub mod bootstrap;
 pub mod error;
 pub mod git;
 pub mod graph;

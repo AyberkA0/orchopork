@@ -7,6 +7,8 @@
 //! stop calling `step`), Inject a plain checkpoint with no LLM call, and
 //! Rewind exactly `Checkpointer::rewind` — no separate state machine needed.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -52,7 +54,7 @@ impl NodeKind {
 }
 
 /// One node's LLM call plus the checkpoint it produced.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StepOutcome {
     pub snapshot: Snapshot,
     pub response: CompletionResponse,
@@ -62,15 +64,30 @@ pub struct StepOutcome {
 /// one workspace. Holds no per-thread state itself: the transcript is
 /// rebuilt from checkpoint history on every call, so an `Executor` is cheap
 /// to construct and safe to share.
+///
+/// Gateway and SkillRegistry are `Arc`-shared rather than owned: the same
+/// instances back the standalone `/api/skills` and `/api/providers/*`
+/// endpoints, so a key set or a skill toggled through those routes is
+/// visible to the very next `step` call, from any of the three call sites
+/// (in-process embedding, HTTP API, CLI) alike.
+#[derive(Clone)]
 pub struct Executor {
-    gateway: Gateway,
-    skills: SkillRegistry,
+    gateway: Arc<Gateway>,
+    skills: Arc<SkillRegistry>,
     checkpointer: Checkpointer,
 }
 
 impl Executor {
-    pub fn new(gateway: Gateway, skills: SkillRegistry, checkpointer: Checkpointer) -> Self {
+    pub fn new(gateway: Arc<Gateway>, skills: Arc<SkillRegistry>, checkpointer: Checkpointer) -> Self {
         Self { gateway, skills, checkpointer }
+    }
+
+    pub async fn history(&self, thread_id: &str) -> Result<Vec<Snapshot>> {
+        self.checkpointer.history(thread_id).await
+    }
+
+    pub async fn rewind(&self, thread_id: &str, target: crate::storage::RewindTarget) -> Result<Snapshot> {
+        self.checkpointer.rewind(thread_id, target).await
     }
 
     /// Replays a thread's checkpoint history into the message list a
@@ -161,7 +178,7 @@ mod tests {
         gateway.register(Box::new(Stub { calls: AtomicUsize::new(0), reply: "plan ready" }));
         let skills =
             SkillRegistry::open(dir.join(".orchopork/skills"), dir.join(".orchopork/skills.enabled.yaml")).unwrap();
-        Executor::new(gateway, skills, checkpointer)
+        Executor::new(Arc::new(gateway), Arc::new(skills), checkpointer)
     }
 
     #[tokio::test]

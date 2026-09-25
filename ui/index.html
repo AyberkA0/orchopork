@@ -175,6 +175,11 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .mgroup { padding: 8px 12px 4px; font: 600 11px var(--sans); color: var(--faint); text-transform: uppercase; letter-spacing: .06em; background: var(--bg2); border-bottom: 1px solid var(--line); position: sticky; top: 0; }
 .spin.sm { width: 12px; height: 12px; border-width: 2px; margin: 0 6px 0 0; display: inline-block; }
 .tuner select { font-size: 12.5px; }
+.addgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.addcard { text-align: left; display: grid; gap: 3px; padding: 11px 12px; border-radius: 12px; font-weight: 400; }
+.addcard:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
+.addcard b { font-size: 13.5px; }
+.conn { display: grid; grid-template-columns: 1fr auto auto; gap: 6px 10px; align-items: center; }
 .mitem.off { opacity: .5; cursor: default; } .mitem.off:hover { background: none; }
 .agents-grid { display: grid; grid-template-columns: 150px 1fr auto auto auto; gap: 8px; align-items: center; margin-top: 10px; }
 .msg-user.pending div { opacity: .55; }
@@ -441,12 +446,16 @@ async function pickModel({ title, subtitle }) {
     close = modal(h("div", {},
       h("h2", { text: title }), subtitle && h("p", { class: "muted small", text: subtitle }),
       empty ? h("div", { class: "card", style: { marginTop: "12px", boxShadow: "none" } },
-        h("b", { text: "No models or agents are ready yet." }),
+        h("b", { text: "Let's add your first model." }),
         h("p", { class: "muted small", text: "Start Ollama (ollama pull qwen2.5-coder:14b), add a cloud API key, or install Claude Code / Gemini CLI / Codex." }),
         data.notes.map((n) => h("div", { class: "small warn", text: n })))
         : [q, list, tuneArea, data.notes.map((n) => h("div", { class: "small warn", style: { marginTop: "6px" }, text: n }))],
       h("div", { class: "actions" },
-        h("button", { class: "ghost", text: "Set up models →", onclick: () => { close(); resolve(null); go("#/models"); } }),
+        h("button", { class: empty ? "accent" : "ghost", text: "＋ Add a model", onclick: async () => {
+          close(); const added = await openAddModel();
+          resolve(await pickModel({ title, subtitle }));
+          void added;
+        } }),
         h("span", { class: "grow" }),
         !empty && h("button", { class: "primary", text: "Continue", onclick: done }))));
     paint(); retune(); if (!empty) setTimeout(() => q.focus());
@@ -498,6 +507,168 @@ function tuner(ref, efforts, onChange) {
   }
   onChange({ ...opts });
   return box;
+}
+
+// ---------- add a model ----------
+const KEY_LINKS = { claude: "https://console.anthropic.com/settings/keys", gemini: "https://aistudio.google.com/apikey", deepseek: "https://platform.deepseek.com/api_keys" };
+const ENDPOINT_PRESETS = [
+  { name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", key: "https://openrouter.ai/keys", blurb: "Hundreds of models behind one key" },
+  { name: "Groq", base_url: "https://api.groq.com/openai/v1", key: "https://console.groq.com/keys", blurb: "Very fast open models" },
+  { name: "Mistral", base_url: "https://api.mistral.ai/v1", key: "https://console.mistral.ai/api-keys", blurb: "Mistral & Codestral" },
+  { name: "OpenAI", base_url: "https://api.openai.com/v1", key: "https://platform.openai.com/api-keys", blurb: "GPT models" },
+  { name: "Together", base_url: "https://api.together.xyz/v1", key: "https://api.together.ai/settings/api-keys", blurb: "Open models, hosted" },
+  { name: "xAI", base_url: "https://api.x.ai/v1", key: "https://console.x.ai", blurb: "Grok models" },
+];
+const LOCAL_PRESETS = [
+  { name: "LM Studio", base_url: "http://127.0.0.1:1234/v1", local: true, blurb: "Local server on port 1234" },
+  { name: "vLLM", base_url: "http://127.0.0.1:8000/v1", local: true, blurb: "Local server on port 8000" },
+];
+const AGENT_HINTS = {
+  "claude-code": "Install Claude Code (npm i -g @anthropic-ai/claude-code), run `claude` once to sign in. Needs Node.js for npx.",
+  "gemini-cli": "Install Gemini CLI (npm i -g @google/gemini-cli), run `gemini` once to sign in.",
+  codex: "Install Codex (npm i -g @openai/codex), run `codex` once to sign in. Needs Node.js for npx.",
+};
+const POPULAR_OLLAMA = ["qwen2.5-coder:7b", "qwen2.5-coder:14b", "qwen3:8b", "llama3.1:8b", "deepseek-r1:8b", "gpt-oss:20b"];
+
+// Opens the "add a model" flow; resolves with a model to use (or null).
+function openAddModel() {
+  return new Promise((resolve) => {
+    let close;
+    const body = h("div");
+    const finish = (value) => { close(); resolve(value); };
+    const card = (title, blurb, badge, onclick) => h("button", { class: "addcard", onclick }, h("div", { class: "row" }, h("b", { class: "grow", text: title }), badge && h("span", { class: "pill", text: badge })), h("span", { class: "small muted", text: blurb }));
+    const back = () => h("button", { class: "ghost", text: "← Back", onclick: step1 });
+    const success = (label, models, provider) => {
+      S.models = null;
+      body.replaceChildren(h("div", { class: "enter" },
+        h("div", { class: "orb", style: { width: "40px", height: "40px", borderRadius: "12px" } }),
+        h("h2", { text: `✓ ${label} connected` }),
+        h("p", { class: "muted small", text: models.length ? `${models.length} model${models.length === 1 ? "" : "s"} available:` : "Connected. No models are installed there yet." }),
+        h("div", { class: "chips", style: { justifyContent: "flex-start" } }, models.slice(0, 14).map((m) => h("span", { class: "chip", text: m, onclick: () => finish({ provider, model: m, options: {} }) })), models.length > 14 && h("span", { class: "small faint", text: `+${models.length - 14} more` })),
+        h("div", { class: "actions" }, h("button", { class: "ghost", text: "Add another", onclick: step1 }), h("button", { class: "primary", text: "Done", onclick: () => finish(models[0] ? { provider, model: models[0], options: {} } : null) }))));
+    };
+    const submit = (btn, payload, provider, label) => guard(async () => {
+      btn.disabled = true; const old = btn.textContent; btn.textContent = "Connecting…";
+      try { const r = await api("/api/models/add", { body: payload }); success(label || r.added, r.models, provider); }
+      finally { btn.disabled = false; btn.textContent = old; }
+    })();
+
+    function keyForm(provider, title) {
+      const key = h("input", { type: "password", placeholder: "Paste your API key", autocomplete: "off" });
+      const btn = h("button", { class: "primary", text: "Connect", onclick: () => submit(btn, { kind: "cloud", provider, api_key: key.value }, provider, title) });
+      key.addEventListener("keydown", (e) => { if (e.key === "Enter") btn.click(); });
+      body.replaceChildren(h("div", { class: "enter" }, h("h2", { text: title }),
+        h("p", { class: "small muted", text: "The key is checked right away and stored only on this machine (.orchopork/secrets.yaml)." }),
+        key, h("a", { class: "small", href: KEY_LINKS[provider], target: "_blank", rel: "noopener", text: "Get a key ↗" }),
+        h("div", { class: "actions" }, back(), h("span", { class: "grow" }), btn)));
+      setTimeout(() => key.focus());
+    }
+    function endpointForm(preset) {
+      const name = h("input", { value: preset.name || "", placeholder: "Name, e.g. My server" });
+      const url = h("input", { class: "mono", value: preset.base_url || "", placeholder: "https://…/v1" });
+      const key = h("input", { type: "password", placeholder: preset.local ? "API key (usually not needed)" : "Paste your API key", autocomplete: "off" });
+      const local = h("input", { type: "checkbox", style: { width: "auto" }, checked: !!preset.local });
+      const pin = h("input", { type: "number", step: "0.01", placeholder: "input $/1M" }), pout = h("input", { type: "number", step: "0.01", placeholder: "output $/1M" });
+      const btn = h("button", { class: "primary", text: "Connect", onclick: () => submit(btn, { kind: "endpoint", name: name.value, base_url: url.value, api_key: key.value, local: local.checked,
+        price_in: pin.value ? Number(pin.value) : null, price_out: pout.value ? Number(pout.value) : null }, "compat", name.value) });
+      body.replaceChildren(h("div", { class: "enter" }, h("h2", { text: preset.name || "OpenAI-compatible endpoint" }),
+        h("label", { text: "Name" }), name, h("label", { text: "Base URL" }), url, h("label", { text: "API key" }), key,
+        preset.key && h("a", { class: "small", href: preset.key, target: "_blank", rel: "noopener", text: "Get a key ↗" }),
+        h("label", { class: "row", style: { color: "var(--text)", marginTop: "12px" } }, local, "Runs on this computer (free, not budget-limited)"),
+        h("details", { class: "out", style: { marginTop: "8px" } }, h("summary", { text: "Price (optional) ▾" }),
+          h("p", { class: "small muted", text: "Without a price, hosted endpoints are budgeted conservatively ($5 / $15 per 1M tokens)." }), h("div", { class: "row" }, pin, pout)),
+        h("div", { class: "actions" }, back(), h("span", { class: "grow" }), btn)));
+      setTimeout(() => (preset.base_url ? key : name).focus());
+    }
+    async function ollamaForm() {
+      const cfg = S.state.workspace.config;
+      const url = h("input", { class: "mono", value: cfg.ollama_url });
+      const status = h("div", { class: "small muted", text: "Checking…" });
+      const pullName = h("input", { class: "mono", placeholder: "model to download, e.g. qwen2.5-coder:7b" });
+      const bar = h("div", { class: "meter", style: { marginTop: "8px", display: "none" } }, h("div", { style: { width: "0%" } }));
+      const pstat = h("div", { class: "small muted" });
+      const check = async () => {
+        try { const r = await api(`/api/providers/ollama/models?url=${encodeURIComponent(url.value)}`); status.textContent = r.models.length ? `✓ Running · installed: ${r.models.join(", ")}` : "✓ Running · no models installed yet — download one below"; status.className = "small ok"; return r.models; }
+        catch (e) { status.textContent = "Ollama is not reachable here. Install it from ollama.com and start it, then check again."; status.className = "small bad"; return null; }
+      };
+      const pull = guard(async (btnEl) => {
+        const model = pullName.value.trim(); if (!model) return;
+        btnEl.disabled = true; bar.style.display = ""; pstat.textContent = "Starting download…";
+        try {
+          await api("/api/models/add", { body: { kind: "ollama", url: url.value } });
+          const res = await fetch("/api/ollama/pull", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model }) });
+          if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+          const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "", last = null;
+          for (;;) {
+            const { done, value } = await reader.read(); if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let i; while ((i = buf.indexOf("\n")) >= 0) {
+              const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1); if (!line) continue;
+              const ev = JSON.parse(line); last = ev;
+              if (ev.error) throw new Error(ev.error);
+              if (ev.total) { bar.firstChild.style.width = Math.round((ev.completed || 0) / ev.total * 100) + "%"; pstat.textContent = `${ev.status} · ${((ev.completed || 0) / 1e9).toFixed(2)} / ${(ev.total / 1e9).toFixed(2)} GB`; }
+              else pstat.textContent = ev.status;
+            }
+          }
+          if (!last || last.status !== "success") throw new Error("download did not finish");
+          const models = (await check()) || [];
+          success("Ollama", models, "ollama");
+        } finally { btnEl.disabled = false; }
+      });
+      const pbtn = h("button", { text: "Download", onclick: (e) => pull(e.target) });
+      body.replaceChildren(h("div", { class: "enter" }, h("h2", { text: "Ollama — local models" }),
+        h("p", { class: "small muted", text: "Free and private: models run on your machine." }),
+        h("label", { text: "Ollama URL" }), h("div", { class: "row" }, h("div", { class: "grow" }, url), h("button", { class: "ghost", text: "Check", onclick: () => check() })), status,
+        h("label", { text: "Download a model" }), h("div", { class: "row" }, h("div", { class: "grow" }, pullName), pbtn),
+        h("div", { class: "chips", style: { justifyContent: "flex-start", marginTop: "8px" } }, POPULAR_OLLAMA.map((m) => h("span", { class: "chip", text: m, onclick: () => { pullName.value = m; } }))),
+        bar, pstat,
+        h("div", { class: "actions" }, back(), h("span", { class: "grow" }), h("button", { class: "primary", text: "Use installed models", onclick: guard(async (e) => { e.target.disabled = true; try { const r = await api("/api/models/add", { body: { kind: "ollama", url: url.value } }); success("Ollama", r.models, "ollama"); } finally { e.target.disabled = false; } }) }))));
+      check();
+    }
+    function agentForm(preset) {
+      const name = h("input", { value: preset ? preset.name : "", placeholder: "Name" });
+      const cmd = h("input", { class: "mono", value: preset ? preset.command : "", placeholder: "command that starts the agent in ACP mode" });
+      const btn = h("button", { class: "primary", text: preset && preset.exists ? "Test" : "Test & add", onclick: guard(async () => {
+        btn.disabled = true; btn.textContent = "Starting the agent…";
+        try {
+          if (preset && preset.exists) { await api("/api/agents/probe", { body: { id: preset.id } }); success(preset.name, [preset.id], "acp"); }
+          else { const r = await api("/api/models/add", { body: { kind: "acp", name: name.value, command: cmd.value } }); success(name.value, r.models, "acp"); }
+        } finally { btn.disabled = false; btn.textContent = preset && preset.exists ? "Test" : "Test & add"; }
+      }) });
+      body.replaceChildren(h("div", { class: "enter" }, h("h2", { text: preset ? preset.name : "Custom ACP agent" }),
+        preset && AGENT_HINTS[preset.id] && h("p", { class: "small muted", text: AGENT_HINTS[preset.id] }),
+        preset && preset.exists ? h("p", { class: "small " + (preset.available ? "ok" : "warn"), text: preset.available ? "✓ Found on this computer. Test it to be sure you are signed in." : "Not found on PATH yet." }) : [h("label", { text: "Name" }), name],
+        h("label", { text: "Command" }), cmd,
+        h("p", { class: "small faint", text: "It uses your own login for that tool; its cost is not counted against the budget." }),
+        h("div", { class: "actions" }, back(), h("span", { class: "grow" }), btn)));
+      if (preset && preset.exists) cmd.disabled = true;
+    }
+    async function step1() {
+      const data = await loadModels(true).catch(() => ({ models: [], agents: [] }));
+      const prov = Object.fromEntries((S.state.workspace.providers || []).map((p) => [p.id, p]));
+      const has = (p) => data.models.some((m) => m.provider === p);
+      const group = (title, cards) => [h("div", { class: "mgroup", style: { position: "static", background: "none", border: 0, padding: "14px 0 6px" }, text: title }), h("div", { class: "addgrid" }, cards)];
+      body.replaceChildren(h("div", { class: "enter" },
+        h("h2", { text: "Add a model" }), h("p", { class: "small muted", style: { margin: 0 }, text: "Pick where it runs. Everything is tested before it is saved." }),
+        group("On this computer · free", [
+          card("Ollama", "Download and run open models locally", has("ollama") ? "connected" : "recommended", ollamaForm),
+          ...LOCAL_PRESETS.map((p) => card(p.name, p.blurb, null, () => endpointForm(p))),
+          card("llama.cpp", "llama-server (OpenAI-compatible)", prov.llamacpp && prov.llamacpp.configured ? "connected" : null, () => endpointForm({ name: "llama.cpp", base_url: "http://127.0.0.1:8080/v1", local: true })),
+        ]),
+        group("Agents you already use", (data.agents || []).map((a) => card(a.name, a.available ? "Found on this computer" : "Not installed yet", a.available ? "ready" : null,
+          () => agentForm({ id: a.model, name: a.name, command: a.command, exists: true, available: a.available }))).concat([card("Other ACP agent", "Any agent that speaks ACP", null, () => agentForm(null))])),
+        group("Cloud · API key", [
+          card("Claude", "Anthropic: Haiku, Sonnet, Opus, Fable", prov.claude && prov.claude.configured ? "connected" : null, () => keyForm("claude", "Claude")),
+          card("Gemini", "Google Gemini", prov.gemini && prov.gemini.configured ? "connected" : null, () => keyForm("gemini", "Gemini")),
+          card("DeepSeek", "DeepSeek chat & reasoner", prov.deepseek && prov.deepseek.configured ? "connected" : null, () => keyForm("deepseek", "DeepSeek")),
+          ...ENDPOINT_PRESETS.map((p) => card(p.name, p.blurb, null, () => endpointForm(p))),
+          card("Other endpoint", "Any OpenAI-compatible API", null, () => endpointForm({})),
+        ])));
+    }
+    close = modal(body, { wide: true });
+    const orig = close; close = () => { orig(); };
+    step1();
+  });
 }
 
 const startSolo = guard(async (goal, verify, model) => {
@@ -1034,21 +1205,6 @@ async function viewModels(main) {
   main.append(topbar(h("span", { class: "title grow", text: "Models & settings" })));
   const page = h("div", { class: "page" }), inner = h("div", { class: "inner stack" }); page.append(inner); main.append(page);
 
-  const ollama = h("input", { value: cfg.ollama_url, class: "mono" }), oOut = h("div", { class: "small muted" });
-  const llama = h("input", { value: cfg.llamacpp_url || "", placeholder: "http://127.0.0.1:8080/v1 (optional)", class: "mono" }), lOut = h("div", { class: "small muted" });
-  const probe = (p, input, out) => guard(async () => {
-    out.textContent = "checking…"; out.className = "small muted";
-    try { const r = await api(`/api/providers/${p}/models?url=${encodeURIComponent(input.value)}`); out.textContent = r.models.length ? `✓ ${r.models.length} models: ${r.models.slice(0, 8).join(", ")}` : "✓ reachable, no models pulled yet (ollama pull qwen2.5-coder:14b)"; out.className = "small ok"; }
-    catch (e) { out.textContent = e.message; out.className = "small bad"; }
-  });
-  const keyRow = (p, label) => {
-    const key = h("input", { type: "password", placeholder: pv[p].configured ? "•••••• stored — paste to replace" : "paste API key" });
-    const out = h("span", { class: "small " + (pv[p].configured ? "ok" : "faint"), text: pv[p].configured ? "✓ set" : "not set" });
-    return [h("b", { class: "small", text: label }), key,
-      h("button", { text: "Save", onclick: guard(async () => { await api("/api/providers/keys", { body: { provider: p, api_key: key.value } }); key.value = ""; out.textContent = "✓ saved"; out.className = "small ok"; S.models = null; }) }),
-      h("button", { class: "ghost", text: "Test", onclick: guard(async () => { try { const r = await api(`/api/providers/${p}/models`); out.textContent = `✓ ${r.models.length} models`; out.className = "small ok"; } catch (e) { out.textContent = e.message; out.className = "small bad"; } }) }),
-      out];
-  };
   const cap = h("input", { type: "number", min: "0", value: cfg.monthly_cap_usd });
   const numCtx = h("input", { type: "number", value: cfg.ollama_num_ctx });
   const allow = h("input", { type: "checkbox", style: { width: "auto" }, checked: cfg.limits.allow_commands });
@@ -1094,13 +1250,27 @@ async function viewModels(main) {
       const id = uid(extAgents.map((x) => ({ id: x.id })), "agent"); extAgents.push({ id, name: "New agent", command: "", args: [] }); paintAgents();
     } })));
 
+  // Connections: everything that provides models, with one "Add a model" entry point.
+  const data = await loadModels(true).catch(() => ({ models: [], agents: [], notes: [] }));
+  const count = (pred) => data.models.filter(pred).length;
+  const rows = [];
+  const row = (title, detail, ok, remove) => rows.push(h("div", {}, h("b", { text: title }), h("div", { class: "small " + (ok ? "muted" : "warn"), text: detail })),
+    h("span", { class: "pill " + (ok ? "done" : ""), text: ok ? "connected" : "check" }),
+    remove ? h("button", { class: "ghost", text: "Remove", onclick: guard(async () => { if (!confirm(`Remove ${title}?`)) return; await api("/api/models/remove", { body: remove }); S.models = null; route(); }) }) : h("span"));
+  const nOllama = count((m) => m.provider === "ollama");
+  row("Ollama", `${cfg.ollama_url} · ${nOllama ? nOllama + " models" : "not reachable or no models"}`, nOllama > 0, null);
+  if (cfg.llamacpp_url) row("llama.cpp", cfg.llamacpp_url, count((m) => m.provider === "llamacpp") > 0, null);
+  for (const p of ["claude", "gemini", "deepseek"]) if (pv[p] && pv[p].configured) row(p[0].toUpperCase() + p.slice(1), `${count((m) => m.provider === p)} models · API key stored`, true, { kind: "cloud", provider: p });
+  for (const e of cfg.endpoints || []) row(e.name, `${e.base_url}${e.local ? " · local" : ""} · ${count((m) => m.provider === "compat" && m.model.startsWith(e.id + "/"))} models`, count((m) => m.model.startsWith(e.id + "/")) > 0, { kind: "endpoint", id: e.id });
+  const connCard = h("div", { class: "card" },
+    h("div", { class: "row" }, h("h3", { class: "grow", style: { margin: 0 }, text: "Models" }),
+      h("button", { class: "accent", text: "＋ Add a model", onclick: async () => { await openAddModel(); S.models = null; route(); } })),
+    h("div", { class: "conn", style: { marginTop: "12px" } }, rows),
+    data.notes.length > 0 && h("div", { class: "small warn", style: { marginTop: "8px" }, text: data.notes.join(" · ") }));
+
   inner.append(
-    h("div", { class: "card" }, h("h3", { text: "Local models · free" }),
-      h("label", { text: "Ollama" }), h("div", { class: "row" }, h("div", { class: "grow" }, ollama), h("button", { text: "Detect", onclick: probe("ollama", ollama, oOut) })), oOut,
-      h("label", { text: "llama.cpp server" }), h("div", { class: "row" }, h("div", { class: "grow" }, llama), h("button", { text: "Detect", onclick: probe("llamacpp", llama, lOut) })), lOut,
-      h("label", { text: "Ollama context window (num_ctx)" }), numCtx),
-    h("div", { class: "card" }, h("h3", { text: "Cloud models" }), h("p", { class: "small muted", style: { margin: 0 }, text: "Keys are stored in .orchopork/secrets.yaml (0600) and never sent back to the browser." }),
-      h("div", { class: "kv" }, keyRow("claude", "Claude"), keyRow("deepseek", "DeepSeek"), keyRow("gemini", "Gemini"))),
+    connCard,
+    h("div", { class: "card" }, h("h3", { text: "Local tuning" }), h("label", { text: "Ollama context window (num_ctx, tokens)" }), numCtx),
     agentsCard,
     h("div", { class: "card" }, h("h3", { text: "Budget & routing" }),
       h("label", { text: "Monthly cloud cap (USD) — calls that could exceed it are refused before they are sent" }), cap,
@@ -1112,13 +1282,13 @@ async function viewModels(main) {
       h("button", { class: "ghost", text: "Reload", onclick: guard(async () => { const r = await api("/api/skills/reload", { body: {} }); paintSkills(r.skills, r.errors); }) })), skills),
     h("div", { class: "row" }, h("span", { class: "grow" }),
       h("button", { class: "primary", text: "Save settings", onclick: guard(async () => {
-        const next = { ...cfg, ollama_url: ollama.value.trim(), llamacpp_url: llama.value.trim() || null, monthly_cap_usd: Number(cap.value), ollama_num_ctx: Number(numCtx.value),
-          routing: { ...cfg.routing, escalation: parseRef(esc.value), actor: parseRef(def.value) }, limits: { ...cfg.limits, allow_commands: allow.checked } };
+        const fresh = (await api("/api/state")).workspace.config; // keep models added since the page opened
+        const next = { ...fresh, monthly_cap_usd: Number(cap.value), ollama_num_ctx: Number(numCtx.value),
+          routing: { ...fresh.routing, escalation: parseRef(esc.value), actor: parseRef(def.value) }, limits: { ...fresh.limits, allow_commands: allow.checked } };
         limits.querySelectorAll("input[data-k]").forEach((i) => { next.limits[i.dataset.k] = Number(i.value); });
         next.external_agents = extAgents.filter((a) => a.command.trim());
         await api("/api/config", { method: "PUT", body: next }); S.models = null; toast("Saved");
       }) })));
-  probe("ollama", ollama, oOut)();
 }
 
 // ---------- live events ----------

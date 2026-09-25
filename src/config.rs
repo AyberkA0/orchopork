@@ -157,6 +157,25 @@ pub struct Config {
     pub limits: Limits,
     /// Agents driven over ACP (see `acp.rs`), usable anywhere a model is.
     pub external_agents: Vec<crate::acp::ExternalAgent>,
+    /// OpenAI-compatible endpoints you added (keys live in secrets as
+    /// `endpoint:<id>`).
+    pub endpoints: Vec<Endpoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Endpoint {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    /// Runs on this machine: free, never budget-gated.
+    #[serde(default)]
+    pub local: bool,
+    /// USD per 1M (input, output) tokens; unknown hosted endpoints are
+    /// priced conservatively high.
+    #[serde(default)]
+    pub price_in: Option<f64>,
+    #[serde(default)]
+    pub price_out: Option<f64>,
 }
 
 impl Default for Config {
@@ -174,6 +193,7 @@ impl Default for Config {
             routing: Routing::default(),
             limits: Limits::default(),
             external_agents: crate::acp::default_agents(),
+            endpoints: Vec::new(),
         }
     }
 }

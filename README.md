@@ -181,6 +181,19 @@ validator:
 Bundled skills: `anti-sycophancy-terse` and `test-driven-loop` (enabled by default), plus `explain-like-principal`
 and `markdown-memory-sync` (off by default, because every enabled modifier costs context on every call).
 
+## Adding models
+
+Everything goes through **＋ Add a model** (in the model picker and on *Models & settings*). Each option is tested
+before it is saved:
+
+- **Ollama**: shows what is installed and downloads new models in-app with a progress bar.
+- **LM Studio, vLLM, llama.cpp**: local OpenAI-compatible servers, free and never budget-limited.
+- **Claude, Gemini, DeepSeek**: paste an API key; the model list is fetched live from the provider.
+- **OpenRouter, Groq, Mistral, OpenAI, Together, xAI or any other OpenAI-compatible endpoint**: base URL + key,
+  with an optional price per 1M tokens (without one, hosted endpoints are budgeted conservatively). Their models
+  appear as `compat:<endpoint>/<model>`.
+- **Claude Code, Gemini CLI, Codex or any ACP agent**: detected automatically; the add flow tests the handshake.
+
 ## Providers and budget
 
 | Provider   | Kind  | Configure                                                                     |

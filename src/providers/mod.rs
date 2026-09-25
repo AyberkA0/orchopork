@@ -39,11 +39,21 @@ pub enum ProviderId {
     /// called through the gateway.
     #[serde(rename = "acp")]
     Acp,
+    /// Any OpenAI-compatible endpoint you add (OpenRouter, Groq, Mistral,
+    /// LM Studio, vLLM…); `model` is `<endpoint id>/<model>`.
+    #[serde(rename = "compat")]
+    Compat,
 }
 
 impl ProviderId {
-    pub const ALL: [ProviderId; 5] =
-        [ProviderId::Ollama, ProviderId::LlamaCpp, ProviderId::Claude, ProviderId::DeepSeek, ProviderId::Gemini];
+    pub const ALL: [ProviderId; 6] = [
+        ProviderId::Ollama,
+        ProviderId::LlamaCpp,
+        ProviderId::Claude,
+        ProviderId::DeepSeek,
+        ProviderId::Gemini,
+        ProviderId::Compat,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -53,6 +63,7 @@ impl ProviderId {
             ProviderId::DeepSeek => "deepseek",
             ProviderId::Gemini => "gemini",
             ProviderId::Acp => "acp",
+            ProviderId::Compat => "compat",
         }
     }
 
@@ -142,6 +153,11 @@ pub trait Provider: Send + Sync {
     /// Models the endpoint offers. For cloud providers this doubles as an
     /// API key check.
     async fn list_models(&self) -> Result<Vec<String>>;
+    /// Provider-specific (input, output) USD per 1M tokens, overriding the
+    /// static table; `Some((0.0, 0.0))` marks a free (local) model.
+    fn rates(&self, _model: &str) -> Option<(f64, f64)> {
+        None
+    }
 }
 
 pub struct Gateway {
@@ -215,10 +231,12 @@ impl Gateway {
     /// the model writes its longest possible answer.
     pub async fn complete(&self, target: &ModelRef, req: &CompletionRequest, run_id: &str) -> Result<CallOutcome> {
         let provider = self.provider(target.provider)?;
-        let reservation = if target.provider.is_local() {
+        let rates = provider.rates(&target.model).unwrap_or_else(|| pricing::rates(target.provider, &target.model));
+        let free = target.provider.is_local() || rates == (0.0, 0.0);
+        let reservation = if free {
             0.0
         } else {
-            let est = estimate_cost(target, req);
+            let est = estimate_cost(rates, req);
             let mut reserved = self.reserved_usd.lock().await;
             let spent = self.spent_this_month().await?;
             let cap = self.cap();
@@ -237,7 +255,7 @@ impl Gateway {
         let result = provider.complete(&target.model, &tuned).await;
         let outcome = match result {
             Ok(c) => {
-                let cost = pricing::cost_usd(target.provider, &target.model, c.prompt_tokens, c.completion_tokens);
+                let cost = pricing::cost_from(rates, c.prompt_tokens, c.completion_tokens);
                 let recorded = self
                     .store
                     .record_spend(
@@ -270,10 +288,10 @@ impl Gateway {
     }
 }
 
-fn estimate_cost(target: &ModelRef, req: &CompletionRequest) -> f64 {
+fn estimate_cost(rates: (f64, f64), req: &CompletionRequest) -> f64 {
     let bytes = req.system.len() + req.messages.iter().map(|m| m.content.len() + 16).sum::<usize>();
     let prompt_tokens = (bytes as u64) * 2 / 5 + 64;
-    pricing::cost_usd(target.provider, &target.model, prompt_tokens, u64::from(req.max_tokens))
+    pricing::cost_from(rates, prompt_tokens, u64::from(req.max_tokens))
 }
 
 // ---- shared HTTP plumbing ------------------------------------------------
@@ -570,6 +588,11 @@ impl OpenAiCompatProvider {
         Self::new(ProviderId::LlamaCpp, &base_url.into(), None, u32::MAX, 1800)
     }
 
+    /// A user-added OpenAI-compatible endpoint (served through `CompatRouter`).
+    pub fn endpoint(base_url: &str, api_key: Option<String>, local: bool) -> Self {
+        Self::new(ProviderId::Compat, base_url, api_key, u32::MAX, if local { 1800 } else { 600 })
+    }
+
     fn new(id: ProviderId, base_url: &str, api_key: Option<String>, max_tokens_cap: u32, timeout: u64) -> Self {
         Self {
             id,
@@ -639,7 +662,12 @@ impl Provider for OpenAiCompatProvider {
             body["reasoning_effort"] = json!(e);
         }
         let rb = self.auth(self.client.post(format!("{}/chat/completions", self.base_url)).json(&body));
-        let retries = if self.id.is_local() { 0 } else { 3 };
+        let retries =
+            if self.id.is_local() || self.base_url.contains("://127.0.0.1") || self.base_url.contains("://localhost") {
+                0
+            } else {
+                3
+            };
         let r: OaiResp = send_json(self.id.as_str(), rb, retries).await?;
         let choice = r
             .choices
@@ -662,6 +690,69 @@ impl Provider for OpenAiCompatProvider {
             list.data.into_iter().map(|m| m.id.trim_start_matches("models/").to_string()).collect();
         v.sort();
         Ok(v)
+    }
+}
+
+// ---- user-added OpenAI-compatible endpoints --------------------------------
+
+/// One configured endpoint, as the router needs it.
+pub struct CompatEndpoint {
+    pub id: String,
+    pub client: OpenAiCompatProvider,
+    pub local: bool,
+    pub price: Option<(f64, f64)>,
+}
+
+/// Dispatches `compat` models (`<endpoint>/<model>`) to their endpoint.
+pub struct CompatRouter {
+    endpoints: Vec<CompatEndpoint>,
+}
+
+impl CompatRouter {
+    pub fn new(endpoints: Vec<CompatEndpoint>) -> Self {
+        Self { endpoints }
+    }
+
+    fn route<'a>(&'a self, model: &'a str) -> Result<(&'a CompatEndpoint, &'a str)> {
+        let (ep, name) = model
+            .split_once('/')
+            .ok_or_else(|| Error::InvalidRequest(format!("compat model {model:?} must be <endpoint>/<model>")))?;
+        let e = self
+            .endpoints
+            .iter()
+            .find(|e| e.id == ep)
+            .ok_or_else(|| Error::Provider(format!("endpoint {ep:?} is not configured")))?;
+        Ok((e, name))
+    }
+}
+
+#[async_trait::async_trait]
+impl Provider for CompatRouter {
+    fn id(&self) -> ProviderId {
+        ProviderId::Compat
+    }
+
+    async fn complete(&self, model: &str, req: &CompletionRequest) -> Result<Completion> {
+        let (e, name) = self.route(model)?;
+        e.client.complete(name, req).await.map_err(|err| match err {
+            Error::Provider(m) => Error::Provider(m.replacen("compat", &e.id, 1)),
+            other => other,
+        })
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>> {
+        let mut all = Vec::new();
+        for e in &self.endpoints {
+            if let Ok(Ok(ms)) = tokio::time::timeout(Duration::from_secs(4), e.client.list_models()).await {
+                all.extend(ms.into_iter().map(|m| format!("{}/{m}", e.id)));
+            }
+        }
+        Ok(all)
+    }
+
+    fn rates(&self, model: &str) -> Option<(f64, f64)> {
+        let (e, _) = self.route(model).ok()?;
+        if e.local { Some((0.0, 0.0)) } else { e.price }
     }
 }
 
@@ -746,6 +837,36 @@ mod tests {
         let spent = store.spend_since(0).await.unwrap();
         assert!((spent - 2.0 * pricing::cost_usd(ProviderId::Claude, "claude-haiku-4-5", 1000, 1000)).abs() < 1e-9);
         assert!((gw.budget_remaining().await.unwrap() - (1.0 - spent)).abs() < 1e-9, "reservations released");
+    }
+
+    #[tokio::test]
+    async fn compat_models_route_by_endpoint_and_local_ones_are_free() {
+        let (_d, store) = store().await;
+        let router = CompatRouter::new(vec![
+            CompatEndpoint {
+                id: "lm".into(),
+                client: OpenAiCompatProvider::endpoint("http://127.0.0.1:9", None, true),
+                local: true,
+                price: None,
+            },
+            CompatEndpoint {
+                id: "or".into(),
+                client: OpenAiCompatProvider::endpoint("http://127.0.0.1:9", None, false),
+                local: false,
+                price: Some((1.0, 2.0)),
+            },
+        ]);
+        assert_eq!(router.rates("lm/x"), Some((0.0, 0.0)));
+        assert_eq!(router.rates("or/x"), Some((1.0, 2.0)));
+        assert!(matches!(router.complete("nope/x", &req(10)).await, Err(Error::Provider(_))));
+        assert!(matches!(router.complete("no-slash", &req(10)).await, Err(Error::InvalidRequest(_))));
+        // A local endpoint is never budget-gated, even with the cap at zero.
+        let gw = Gateway::new(store, 0.0);
+        gw.register(Box::new(router));
+        let err = gw.complete(&ModelRef::new(ProviderId::Compat, "lm/x"), &req(10), "r").await.unwrap_err();
+        assert!(matches!(err, Error::Provider(_)), "fails on the network, not the budget: {err}");
+        let err = gw.complete(&ModelRef::new(ProviderId::Compat, "or/x"), &req(10), "r").await.unwrap_err();
+        assert!(matches!(err, Error::Budget(_)));
     }
 
     #[test]

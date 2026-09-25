@@ -113,13 +113,15 @@ impl Checkpointer {
     pub async fn rewind(&self, thread_id: &str, target: RewindTarget) -> Result<Snapshot> {
         let head = self.head(thread_id).await?.ok_or_else(|| Error::NotFound(format!("thread {thread_id}")))?;
         let dest: Snapshot = match target {
-            RewindTarget::Snapshot(id) => sqlx::query_as("SELECT * FROM snapshots WHERE id = ? AND thread_id = ? AND seq <= ?")
-                .bind(&id)
-                .bind(thread_id)
-                .bind(head.seq)
-                .fetch_optional(&self.store.pool)
-                .await?
-                .ok_or_else(|| Error::NotFound(format!("snapshot {id} in thread {thread_id}")))?,
+            RewindTarget::Snapshot(id) => {
+                sqlx::query_as("SELECT * FROM snapshots WHERE id = ? AND thread_id = ? AND seq <= ?")
+                    .bind(&id)
+                    .bind(thread_id)
+                    .bind(head.seq)
+                    .fetch_optional(&self.store.pool)
+                    .await?
+                    .ok_or_else(|| Error::NotFound(format!("snapshot {id} in thread {thread_id}")))?
+            }
             RewindTarget::Steps(n) => {
                 let seq = head.seq - i64::from(n);
                 sqlx::query_as("SELECT * FROM snapshots WHERE thread_id = ? AND seq = ?")
@@ -132,9 +134,7 @@ impl Checkpointer {
         };
 
         let safety = self.repo.commit_all("orchopork: pre-rewind safety").await?;
-        self.repo
-            .update_ref(&format!("refs/orchopork/rewound/{}-{}", now_unix(), head.seq), &safety)
-            .await?;
+        self.repo.update_ref(&format!("refs/orchopork/rewound/{}-{}", now_unix(), head.seq), &safety).await?;
 
         let mut tx = self.store.pool.begin().await?;
         sqlx::query("DELETE FROM snapshots WHERE thread_id = ? AND seq > ?")

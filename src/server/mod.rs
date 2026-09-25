@@ -16,12 +16,16 @@ use tower_http::trace::TraceLayer;
 
 use crate::error::Error;
 use crate::git::GitRepo;
+use crate::providers::{ClaudeProvider, Gateway, OpenAiCompatProvider, ProviderId};
+use crate::secrets::SecretStore;
 use crate::skills::SkillRegistry;
 use wizard::{Event, RemoteAuth, Step, VcsChoice, Wizard};
 
 pub struct AppState {
     pub wizard: Mutex<Wizard>,
     pub skills: SkillRegistry,
+    pub gateway: Gateway,
+    pub secrets: SecretStore,
 }
 
 pub type Shared = Arc<AppState>;
@@ -36,6 +40,8 @@ pub fn router(state: Shared) -> Router {
         .route("/api/wizard/back", post(back))
         .route("/api/skills", get(list_skills))
         .route("/api/skills/reload", post(reload_skills))
+        .route("/api/providers/budget", get(get_budget))
+        .route("/api/providers/keys", post(set_provider_key))
         .route("/app", get(app_gate))
         // Static SPA (ServeDir / include_dir) is added as the fallback service.
         .layer(TraceLayer::new_for_http())
@@ -56,6 +62,8 @@ impl IntoResponse for ApiError {
         let code = match self.0 {
             Error::Wizard(_) | Error::Skill(_) | Error::SkillFile { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Error::NotFound(_) => StatusCode::NOT_FOUND,
+            Error::Budget(_) => StatusCode::PAYMENT_REQUIRED,
+            Error::Provider(_) => StatusCode::BAD_GATEWAY,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (code, Json(serde_json::json!({ "error": self.0.to_string() }))).into_response()
@@ -130,18 +138,49 @@ async fn confirm_skills(State(s): State<Shared>, Json(req): Json<SkillsReq>) -> 
 }
 
 async fn list_skills(State(s): State<Shared>) -> Json<serde_json::Value> {
-    let errors: Vec<_> = s
-        .skills
-        .load_errors()
-        .into_iter()
-        .map(|(p, e)| serde_json::json!({ "path": p, "error": e }))
-        .collect();
+    let errors: Vec<_> =
+        s.skills.load_errors().into_iter().map(|(p, e)| serde_json::json!({ "path": p, "error": e })).collect();
     Json(serde_json::json!({ "skills": s.skills.list(), "errors": errors }))
 }
 
 async fn reload_skills(State(s): State<Shared>) -> Result<Json<serde_json::Value>, ApiError> {
     let errors = s.skills.reload()?;
     Ok(Json(serde_json::json!({ "errors": errors.len() })))
+}
+
+async fn get_budget(State(s): State<Shared>) -> Result<Json<serde_json::Value>, ApiError> {
+    let spent = s.gateway.spent_this_month().await.map_err(ApiError)?;
+    let remaining = s.gateway.budget_remaining().await.map_err(ApiError)?;
+    Ok(Json(serde_json::json!({
+        "spent_this_month_usd": spent,
+        "remaining_usd": remaining,
+        "configured_providers": s.gateway.configured(),
+    })))
+}
+
+#[derive(Deserialize)]
+struct ProviderKeyReq {
+    provider: ProviderId,
+    api_key: String,
+}
+
+/// Persists the key and immediately (re)registers the provider so it is
+/// usable without a restart. Keys never pass through `Wizard` state.
+async fn set_provider_key(
+    State(s): State<Shared>,
+    Json(req): Json<ProviderKeyReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if req.provider == ProviderId::Ollama {
+        return Err(ApiError(Error::Provider("ollama is local and needs no API key".into())));
+    }
+    s.secrets.set(req.provider, req.api_key.clone()).map_err(ApiError)?;
+    match req.provider {
+        ProviderId::Claude => s.gateway.register(Box::new(ClaudeProvider::new(req.api_key))),
+        ProviderId::DeepSeek => s.gateway.register(Box::new(OpenAiCompatProvider::deepseek(req.api_key))),
+        ProviderId::Gemini => s.gateway.register(Box::new(OpenAiCompatProvider::gemini(req.api_key))),
+        ProviderId::Ollama => unreachable!(),
+    }
+    Ok(Json(serde_json::json!({ "configured_providers": s.gateway.configured() })))
 }
 
 /// Dashboard is unlocked only after steps 1-4; otherwise bounce to the

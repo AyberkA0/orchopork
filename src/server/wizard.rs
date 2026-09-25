@@ -203,7 +203,8 @@ mod tests {
         assert!(!w.can_access(Step::Permissions));
         w.apply(Event::Initialize).unwrap();
         w.apply(Event::PermissionsChecked { report: report(true) }).unwrap();
-        w.apply(Event::VcsConfigured { choice: VcsChoice { repo_ready: true, remote_auth: RemoteAuth::None } }).unwrap();
+        w.apply(Event::VcsConfigured { choice: VcsChoice { repo_ready: true, remote_auth: RemoteAuth::None } })
+            .unwrap();
         assert!(!w.can_access(Step::Dashboard));
         let s = w.apply(Event::SkillsConfirmed { enabled_skills: vec![], providers: vec!["ollama".into()] }).unwrap();
         assert_eq!(s, Step::Dashboard);

@@ -28,6 +28,8 @@ fn fallback(provider: ProviderId) -> (f64, f64) {
         ProviderId::DeepSeek => (0.6, 2.5),
         ProviderId::Gemini => (2.5, 15.0),
         ProviderId::Ollama | ProviderId::LlamaCpp | ProviderId::Acp => (0.0, 0.0),
+        // Unknown hosted endpoint: priced high unless you set its price.
+        ProviderId::Compat => (5.0, 15.0),
     }
 }
 
@@ -45,7 +47,10 @@ pub fn rates(provider: ProviderId, model: &str) -> (f64, f64) {
 }
 
 pub fn cost_usd(provider: ProviderId, model: &str, prompt_tokens: u64, completion_tokens: u64) -> f64 {
-    let (inp, out) = rates(provider, model);
+    cost_from(rates(provider, model), prompt_tokens, completion_tokens)
+}
+
+pub fn cost_from((inp, out): (f64, f64), prompt_tokens: u64, completion_tokens: u64) -> f64 {
     (prompt_tokens as f64 / 1_000_000.0) * inp + (completion_tokens as f64 / 1_000_000.0) * out
 }
 

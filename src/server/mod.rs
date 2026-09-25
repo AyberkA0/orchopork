@@ -35,6 +35,8 @@ use wizard::{Event, VcsStatus, Wizard};
 const INDEX_HTML: &str = include_str!("../../ui/index.html");
 
 pub struct AppState {
+    /// Live model lists of cloud providers, refreshed every 10 minutes.
+    cloud_models: tokio::sync::Mutex<std::collections::HashMap<ProviderId, (std::time::Instant, Vec<String>)>>,
     /// Discovered ACP session options per agent id (discovery spawns the
     /// agent, so it is done once per server run unless refreshed).
     agent_options: tokio::sync::Mutex<std::collections::HashMap<String, Value>>,
@@ -52,6 +54,7 @@ impl AppState {
     /// nothing on disk until the user picks a directory.
     pub async fn new(default_root: PathBuf) -> Result<Shared> {
         let state = Arc::new(Self {
+            cloud_models: Default::default(),
             agent_options: Default::default(),
             engine: RwLock::new(None),
             wizard: Mutex::new(Wizard::default()),
@@ -66,6 +69,44 @@ impl AppState {
             }
         }
         Ok(state)
+    }
+
+    /// Known models first (curated order), then anything else the
+    /// provider's API lists that looks like a chat model.
+    async fn cloud_models(&self, ws: &Workspace, id: ProviderId) -> Vec<String> {
+        let mut out: Vec<String> = pricing::suggested_models(id).into_iter().map(String::from).collect();
+        let mut cache = self.cloud_models.lock().await;
+        let fresh =
+            cache.get(&id).filter(|(t, _)| t.elapsed() < std::time::Duration::from_secs(600)).map(|(_, v)| v.clone());
+        let live = match fresh {
+            Some(v) => v,
+            None => {
+                let listed = match ws.gateway.provider(id) {
+                    Ok(p) => tokio::time::timeout(std::time::Duration::from_secs(5), p.list_models())
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok()),
+                    Err(_) => None,
+                };
+                let v: Vec<String> = listed
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|m| match id {
+                        ProviderId::Claude => m.starts_with("claude-"),
+                        ProviderId::Gemini => m.contains("gemini") && !m.contains("embedding") && !m.contains("image"),
+                        _ => true,
+                    })
+                    .collect();
+                cache.insert(id, (std::time::Instant::now(), v.clone()));
+                v
+            }
+        };
+        for m in live {
+            if !out.contains(&m) {
+                out.push(m);
+            }
+        }
+        out
     }
 
     fn engine(&self) -> Result<Engine> {
@@ -111,6 +152,9 @@ pub fn router(state: Shared) -> Router {
         .route("/api/models", get(available_models))
         .route("/api/agents/probe", post(probe_agent))
         .route("/api/agents/options", post(agent_options))
+        .route("/api/models/add", post(add_model))
+        .route("/api/models/remove", post(remove_model))
+        .route("/api/ollama/pull", post(ollama_pull))
         .route("/api/orchestra/propose", post(propose_team))
         .route("/api/providers/keys", post(set_provider_key))
         .route("/api/providers/{id}/models", get(provider_models))
@@ -361,6 +405,10 @@ fn validate_routing(ws: &Workspace, cfg: &Config) -> Result<()> {
             ProviderId::Ollama => true,
             ProviderId::LlamaCpp => cfg.llamacpp_url.as_deref().is_some_and(|u| !u.trim().is_empty()),
             ProviderId::Acp => cfg.external_agents.iter().any(|a| a.id == m.model),
+            ProviderId::Compat => {
+                let ep = m.model.split('/').next().unwrap_or("");
+                cfg.endpoints.iter().any(|e| e.id == ep)
+            }
             p => ws.secrets.provider_key(p).is_some(),
         };
         if !usable {
@@ -441,8 +489,21 @@ async fn available_models(State(s): State<Shared>) -> ApiResult {
     let ws = engine.workspace();
     let mut out = Vec::new();
     let mut notes = Vec::new();
+    let cfg = ws.config();
     for id in ws.gateway.configured() {
-        if id.is_local() {
+        if id == ProviderId::Compat {
+            let router = ws.gateway.provider(id)?;
+            let models = router.list_models().await.unwrap_or_default();
+            for e in &cfg.endpoints {
+                let mine: Vec<&String> = models.iter().filter(|m| m.starts_with(&format!("{}/", e.id))).collect();
+                if mine.is_empty() {
+                    notes.push(format!("{}: no models listed (is it reachable?)", e.name));
+                }
+                out.extend(mine.into_iter().map(
+                    |m| json!({ "provider": id, "model": m, "local": e.local, "efforts": [], "endpoint": e.name }),
+                ));
+            }
+        } else if id.is_local() {
             let provider = ws.gateway.provider(id)?;
             match tokio::time::timeout(std::time::Duration::from_secs(4), provider.list_models()).await {
                 Ok(Ok(models)) => out.extend(
@@ -452,9 +513,10 @@ async fn available_models(State(s): State<Shared>) -> ApiResult {
                 Err(_) => notes.push(format!("{}: timed out", id.as_str())),
             }
         } else {
-            out.extend(pricing::suggested_models(id).into_iter().map(
-                |m| json!({ "provider": id, "model": m, "local": false, "efforts": pricing::effort_levels(id, m) }),
-            ));
+            for m in s.cloud_models(ws, id).await {
+                let efforts = pricing::effort_levels(id, &m);
+                out.push(json!({ "provider": id, "model": m, "local": false, "efforts": efforts }));
+            }
         }
     }
     // External agents: offered when their launcher is on PATH.
@@ -466,6 +528,196 @@ async fn available_models(State(s): State<Shared>) -> ApiResult {
     }
     let default = ws.config().routing.actor;
     Ok(Json(json!({ "models": out, "agents": agents, "notes": notes, "default": default })))
+}
+
+/// One-step "add a model": tests the connection first and only saves what
+/// works, then returns the models it made available.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum AddModelReq {
+    /// Claude / DeepSeek / Gemini with an API key.
+    Cloud {
+        provider: ProviderId,
+        api_key: String,
+    },
+    /// Any OpenAI-compatible endpoint.
+    Endpoint {
+        name: String,
+        base_url: String,
+        #[serde(default)]
+        api_key: String,
+        #[serde(default)]
+        local: bool,
+        #[serde(default)]
+        price_in: Option<f64>,
+        #[serde(default)]
+        price_out: Option<f64>,
+    },
+    Ollama {
+        url: String,
+    },
+    Llamacpp {
+        url: String,
+    },
+    /// An ACP agent started by `command` (a full command line).
+    Acp {
+        name: String,
+        command: String,
+    },
+}
+
+fn slug(name: &str, taken: &[String]) -> String {
+    let base: String = name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let base = if base.is_empty() { "endpoint".to_string() } else { base };
+    let mut id = base.clone();
+    let mut n = 2;
+    while taken.contains(&id) {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    id
+}
+
+async fn add_model(State(s): State<Shared>, Json(req): Json<AddModelReq>) -> ApiResult {
+    let engine = s.engine()?;
+    let ws = engine.workspace();
+    let timeout = std::time::Duration::from_secs(15);
+    let listed = |r: Result<Result<Vec<String>>, tokio::time::error::Elapsed>| -> Result<Vec<String>> {
+        r.map_err(|_| Error::Provider("no answer within 15 s".into()))?
+    };
+    let (label, models) = match req {
+        AddModelReq::Cloud { provider, api_key } => {
+            let key = api_key.trim().to_string();
+            if key.is_empty() || provider.is_local() || matches!(provider, ProviderId::Acp | ProviderId::Compat) {
+                return Err(Error::InvalidRequest("paste an API key for Claude, DeepSeek or Gemini".into()).into());
+            }
+            let probe: Box<dyn crate::providers::Provider> = match provider {
+                ProviderId::Claude => Box::new(crate::providers::ClaudeProvider::new(key.clone())),
+                ProviderId::DeepSeek => Box::new(OpenAiCompatProvider::deepseek(key.clone())),
+                _ => Box::new(OpenAiCompatProvider::gemini(key.clone())),
+            };
+            listed(tokio::time::timeout(timeout, probe.list_models()).await)?;
+            ws.set_provider_key(provider, &key)?;
+            s.cloud_models.lock().await.remove(&provider);
+            (provider.as_str().to_string(), s.cloud_models(ws, provider).await)
+        }
+        AddModelReq::Endpoint { name, base_url, api_key, local, price_in, price_out } => {
+            let base = base_url.trim().trim_end_matches('/').to_string();
+            if !(base.starts_with("http://") || base.starts_with("https://")) {
+                return Err(Error::InvalidRequest("the base URL must start with http:// or https://".into()).into());
+            }
+            let key = Some(api_key.trim().to_string()).filter(|k| !k.is_empty());
+            let found = listed(
+                tokio::time::timeout(timeout, OpenAiCompatProvider::endpoint(&base, key.clone(), local).list_models())
+                    .await,
+            )?;
+            let taken: Vec<String> = ws.config().endpoints.iter().map(|e| e.id.clone()).collect();
+            let id = slug(&name, &taken);
+            if let Some(k) = &key {
+                ws.secrets.set(&format!("endpoint:{id}"), k)?;
+            }
+            let ep = crate::config::Endpoint {
+                id: id.clone(),
+                name: if name.trim().is_empty() { id.clone() } else { name.trim().to_string() },
+                base_url: base,
+                local,
+                price_in,
+                price_out,
+            };
+            ws.update_config(|c| c.endpoints.push(ep))?;
+            (id.clone(), found.into_iter().map(|m| format!("{id}/{m}")).collect())
+        }
+        AddModelReq::Ollama { url } => {
+            let url = url.trim().trim_end_matches('/').to_string();
+            let found =
+                listed(tokio::time::timeout(timeout, OllamaProvider::new(url.clone(), 2048).list_models()).await)?;
+            ws.update_config(|c| c.ollama_url = url)?;
+            ("ollama".into(), found)
+        }
+        AddModelReq::Llamacpp { url } => {
+            let url = url.trim().trim_end_matches('/').to_string();
+            let found =
+                listed(tokio::time::timeout(timeout, OpenAiCompatProvider::llamacpp(url.clone()).list_models()).await)?;
+            ws.update_config(|c| c.llamacpp_url = Some(url))?;
+            ("llamacpp".into(), found)
+        }
+        AddModelReq::Acp { name, command } => {
+            let mut parts = command.split_whitespace().map(String::from);
+            let program =
+                parts.next().ok_or_else(|| Error::InvalidRequest("enter the command that starts the agent".into()))?;
+            let taken: Vec<String> = ws.config().external_agents.iter().map(|a| a.id.clone()).collect();
+            let agent = crate::acp::ExternalAgent {
+                id: slug(&name, &taken),
+                name: name.trim().to_string(),
+                command: program,
+                args: parts.collect(),
+            };
+            crate::acp::probe(&agent, &ws.root).await?;
+            let id = agent.id.clone();
+            ws.update_config(|c| c.external_agents.push(agent))?;
+            (id.clone(), vec![id])
+        }
+    };
+    Ok(Json(json!({ "added": label, "models": models })))
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum RemoveModelReq {
+    Cloud { provider: ProviderId },
+    Endpoint { id: String },
+    Acp { id: String },
+}
+
+async fn remove_model(State(s): State<Shared>, Json(req): Json<RemoveModelReq>) -> ApiResult {
+    let engine = s.engine()?;
+    let ws = engine.workspace();
+    match req {
+        RemoveModelReq::Cloud { provider } => ws.set_provider_key(provider, "")?,
+        RemoveModelReq::Endpoint { id } => {
+            ws.secrets.set(&format!("endpoint:{id}"), "")?;
+            ws.update_config(|c| c.endpoints.retain(|e| e.id != id))?;
+        }
+        RemoveModelReq::Acp { id } => {
+            ws.update_config(|c| c.external_agents.retain(|a| a.id != id))?;
+        }
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct PullReq {
+    model: String,
+}
+
+/// Streams `ollama pull` progress (Ollama's own NDJSON lines) to the UI.
+async fn ollama_pull(State(s): State<Shared>, Json(req): Json<PullReq>) -> Result<Response, ApiError> {
+    let engine = s.engine()?;
+    let url = engine.workspace().config().ollama_url;
+    let model = req.model.trim().to_string();
+    if model.is_empty() || model.contains(char::is_whitespace) {
+        return Err(Error::InvalidRequest("enter a model name like qwen2.5-coder:7b".into()).into());
+    }
+    let resp = reqwest::Client::new()
+        .post(format!("{}/api/pull", url.trim_end_matches('/')))
+        .json(&json!({ "model": model, "stream": true }))
+        .send()
+        .await
+        .map_err(|e| Error::Provider(format!("cannot reach Ollama at {url}: {e}")))?;
+    if !resp.status().is_success() {
+        return Err(Error::Provider(format!("ollama pull: HTTP {}", resp.status())).into());
+    }
+    let body = axum::body::Body::from_stream(resp.bytes_stream());
+    Ok(([(header::CONTENT_TYPE, "application/x-ndjson")], body).into_response())
 }
 
 #[derive(Deserialize)]
@@ -698,6 +950,13 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use tower::ServiceExt;
+
+    #[test]
+    fn slugs_are_unique_and_url_safe() {
+        assert_eq!(slug("Open Router!", &[]), "open-router");
+        assert_eq!(slug("Open Router", &["open-router".into()]), "open-router-2");
+        assert_eq!(slug("  ", &[]), "endpoint");
+    }
 
     #[test]
     fn host_check_accepts_only_loopback_names() {

@@ -12,7 +12,9 @@ use std::sync::{Arc, RwLock};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::git::{GitRepo, STATE_DIR};
-use crate::providers::{ClaudeProvider, Gateway, OllamaProvider, OpenAiCompatProvider, ProviderId};
+use crate::providers::{
+    ClaudeProvider, CompatEndpoint, CompatRouter, Gateway, OllamaProvider, OpenAiCompatProvider, ProviderId,
+};
 use crate::secrets::SecretStore;
 use crate::skills::SkillRegistry;
 use crate::storage::Store;
@@ -109,6 +111,23 @@ impl Workspace {
         }
         if let Some(k) = self.secrets.provider_key(ProviderId::Gemini) {
             gw.register(Box::new(OpenAiCompatProvider::gemini(k)));
+        }
+        if !cfg.endpoints.is_empty() {
+            let eps = cfg
+                .endpoints
+                .iter()
+                .map(|e| CompatEndpoint {
+                    id: e.id.clone(),
+                    client: OpenAiCompatProvider::endpoint(
+                        &e.base_url,
+                        self.secrets.get(&format!("endpoint:{}", e.id)),
+                        e.local,
+                    ),
+                    local: e.local,
+                    price: e.price_in.zip(e.price_out),
+                })
+                .collect();
+            gw.register(Box::new(CompatRouter::new(eps)));
         }
     }
 }

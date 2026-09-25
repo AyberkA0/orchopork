@@ -44,6 +44,22 @@ The interface is a plain chat box. When you send a message, orchopork asks
   **Approve & deploy** starts it. The same tree then shows live status (who is working, who reported, turns and
   cost per agent), and clicking an agent opens its feed, where you can message that agent directly.
 
+### Juggling many tasks and changing your mind
+
+- **Sidebar** groups conversations by what needs you: *Pinned*, *Running*, *Needs you* (finished or stopped since
+  you last looked, shown bold with a dot), then *Today / This week / Older* by last activity. Search it, or pin a
+  long-lived task with ☆. The tab title shows how many tasks are waiting, e.g. `(2) ▶ myrepo · orchopork`.
+- **`Ctrl/⌘ K`** jumps to any conversation, recent project or action.
+- **Background updates**: when a task you are not looking at finishes or stops, a toast links to it; turn on 🔔 in
+  the sidebar for desktop notifications while the tab is in the background.
+- **Drafts are kept**: unsent text in any composer (home, each chat, each orchestra agent) survives navigation,
+  reloads and project switches. A team the lead drafted is saved as you edit it; **Later** keeps it on the home
+  screen under *Pick up where you left off*.
+- **Rewind from the UI**: hover a step and choose **↺ Rewind here**, or hover one of your messages and choose
+  **✎ Edit & resend** to take it (and everything after it) back and send a corrected version. **↺ Start over**
+  keeps the goal and resets the branch; **⧉ Retry as new** starts a separate task with the same goal (e.g. another
+  model, or a team instead of one agent) and keeps the original. Rewound states stay under `refs/orchopork/rewound/`.
+
 ### Agents on this computer (ACP)
 
 Claude Code, Gemini CLI, Codex and any other agent that speaks the

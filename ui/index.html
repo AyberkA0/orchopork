@@ -41,6 +41,7 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px
 .running .dot, .pulse { animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }
 .toasts { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; z-index: 50; pointer-events: none; }
+.banner { display: flex; gap: 10px; align-items: center; }
 .toast { background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 13px; z-index: 50; max-width: 80vw; box-shadow: var(--shadow); }
 .toast.err { background: var(--bad); color: #fff; }
 
@@ -83,7 +84,7 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px
 .scroll { flex: 1; overflow-y: auto; }
 .thread { width: min(780px, 100%); margin: 0 auto; padding: 8px 20px 30px; }
 .msg-user { display: flex; justify-content: flex-end; margin: 18px 0; }
-.msg-user div { background: var(--bg2); border: 1px solid var(--line); padding: 10px 14px; border-radius: 16px 16px 4px 16px; max-width: 82%; white-space: pre-wrap; }
+.msg-user > div:not(.steptools) { background: var(--bg2); border: 1px solid var(--line); padding: 10px 14px; border-radius: 16px 16px 4px 16px; max-width: 82%; white-space: pre-wrap; }
 .msg-ai { margin: 14px 0; white-space: pre-wrap; }
 .act { display: flex; gap: 10px; align-items: flex-start; padding: 5px 0; font-size: 13.5px; }
 .act .ic { width: 22px; height: 22px; flex: none; border-radius: 6px; display: grid; place-items: center; background: var(--bg2); border: 1px solid var(--line); font-size: 11px; color: var(--muted); }
@@ -194,7 +195,7 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .found .mitem { border: 1px solid var(--line); border-radius: 10px; cursor: default; }
 .mitem.off { opacity: .5; cursor: default; } .mitem.off:hover { background: none; }
 .agents-grid { display: grid; grid-template-columns: 150px 1fr auto auto auto; gap: 8px; align-items: center; margin-top: 10px; }
-.msg-user.pending div { opacity: .55; }
+.msg-user.pending > div { opacity: .55; }
 .live-line { transition: opacity .2s; }
 
 /* skeletons: panels open instantly and shimmer until their data lands */
@@ -237,7 +238,77 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 @keyframes toastOut { to { opacity: 0; transform: translateY(6px); } }
 @keyframes fadeOut { to { opacity: 0; } }
 @keyframes sink { to { opacity: 0; transform: translateY(6px) scale(.98); } }
-@media (max-width: 860px) { .shell { grid-template-columns: 0 1fr; } .orch { grid-template-columns: 1fr; } .panel { display: none; } .reserve { display: none; } }
+/* sidebar: search, sections, per-run status */
+.sfind { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.sfind input { padding: 6px 9px; font-size: 12.5px; background: var(--panel); }
+.kbd { font: 600 10.5px var(--mono); color: var(--faint); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; background: var(--panel); white-space: nowrap; }
+.hist h6 { display: flex; align-items: center; gap: 6px; }
+.hist h6 .n { font-weight: 500; letter-spacing: 0; }
+.hitem { position: relative; }
+.hitem .when { font-size: 11px; color: var(--faint); flex: none; }
+.hitem .sdot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--line); }
+.sdot.running { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.sdot.paused { background: var(--warn); } .sdot.done { background: var(--ok); } .sdot.error { background: var(--bad); }
+.hitem.unread .t { font-weight: 650; }
+.hitem .ud { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.hitem .pin { display: none; padding: 0 4px; border: 0; background: none; color: var(--faint); font-size: 12px; line-height: 1; }
+.hitem:hover .pin, .hitem .pin.on { display: inline; } .hitem .pin.on { color: var(--warn); }
+.hitem:hover .when { display: none; }
+.hitem .dr { font-size: 11px; color: var(--faint); flex: none; }
+.more-btn { width: 100%; text-align: left; font-size: 12px; padding: 6px 9px; }
+
+/* step tools: rewind / edit, revealed on hover */
+.stepwrap { position: relative; }
+.steptools { position: absolute; top: 2px; right: 0; display: none; gap: 4px; z-index: 2; }
+.stepwrap:hover > .steptools, .stepwrap:focus-within > .steptools { display: flex; }
+.steptools button { white-space: nowrap; font-size: 11.5px; padding: 3px 8px; border-radius: 7px; background: var(--panel); box-shadow: var(--shadow); color: var(--muted); }
+.steptools button:hover { color: var(--text); border-color: var(--accent); }
+.busy .steptools { display: none !important; }
+.msg-user.stepwrap { align-items: center; gap: 8px; }
+.msg-user.stepwrap .steptools { position: static; order: -1; }
+
+/* popover menu */
+.pop { position: fixed; z-index: 45; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 5px; min-width: 210px; animation: fade .12s; }
+.pop button { display: flex; width: 100%; gap: 8px; text-align: left; border: 0; background: none; font-weight: 500; padding: 7px 10px; border-radius: 8px; }
+.pop button:hover { background: var(--bg2); } .pop hr { border: 0; border-top: 1px solid var(--line); margin: 4px 2px; }
+.pop .d { color: var(--bad); }
+
+/* command palette */
+.modal.pal { padding: 0; overflow: hidden; width: min(640px, 100%); align-self: start; margin-top: 12vh; }
+.pal input { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 14px 16px; font-size: 15px; box-shadow: none !important; }
+.pal .res { max-height: 52vh; overflow-y: auto; padding: 6px; }
+.pal .it { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 9px; cursor: pointer; font-size: 13.5px; }
+.pal .it.on { background: var(--glow); }
+.pal .it .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pal .it .k { font-size: 11px; color: var(--faint); }
+.pal .grp { padding: 8px 10px 3px; font: 600 11px var(--sans); color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+.pal .hint { padding: 8px 14px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--faint); display: flex; gap: 12px; }
+
+/* home: pick up where you left off */
+.resume { width: min(760px, 100%); display: grid; gap: 6px; }
+.resume h6 { margin: 0 0 2px; font: 600 11px var(--sans); color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+.rcard { display: flex; gap: 10px; align-items: center; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); cursor: pointer; font-size: 13.5px; }
+.rcard:hover { border-color: var(--faint); }
+.rcard .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rcard.draft { border-style: dashed; }
+.banner .row button { padding: 4px 10px; font-size: 12px; }
+.toast.act { pointer-events: auto; cursor: pointer; }
+.toast.act u { text-decoration: none; opacity: .75; margin-left: 8px; }
+
+@media (max-width: 860px) {
+  .shell, .shell.collapsed { grid-template-columns: 1fr; }
+  .side { position: fixed; left: 0; top: 0; bottom: 0; width: min(300px, 86vw); z-index: 40; transform: translateX(-102%); box-shadow: var(--shadow); transition: transform .25s cubic-bezier(.2,.8,.2,1); }
+  .shell.mob .side { transform: none; }
+  .shell.mob::after { content: ""; position: fixed; inset: 0; background: rgba(10,10,14,.35); z-index: 35; }
+  .topbar .menu-btn { display: inline-block !important; }
+  .side .top .hide-side { display: none; }
+  .orch { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 45vh); }
+  .panel { border-left: 0; border-top: 1px solid var(--line); }
+  .reserve { display: none; }
+  .topbar { flex-wrap: wrap; }
+  .sfind .kbd { display: none; }
+  .kv, .agents-grid { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
@@ -265,7 +336,8 @@ const money = (x) => "$" + (x || 0).toFixed((x || 0) < 1 ? 3 : 2);
 const mref = (m) => (m ? `${m.provider}:${m.model}` : "");
 const firstLine = (s, n = 90) => { const l = (s || "").trim().split("\n")[0]; return l.length > n ? l.slice(0, n) + "…" : l; };
 const store = { get(k, d) { try { const v = localStorage.getItem("op." + k); return v ? JSON.parse(v) : d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem("op." + k, JSON.stringify(v)); } catch {} } };
+  set(k, v) { try { localStorage.setItem("op." + k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem("op." + k); } catch {} } };
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { method: opts.method || (opts.body !== undefined ? "POST" : "GET"),
@@ -274,10 +346,50 @@ async function api(path, opts = {}) {
   if (!res.ok) throw new Error((body && body.error) || `HTTP ${res.status}`);
   return body;
 }
-function toast(msg, err) {
+// `action` = { label, run }: the toast becomes clickable and stays longer.
+function toast(msg, err, action) {
   let box = $(".toasts"); if (!box) { box = h("div", { class: "toasts" }); document.body.append(box); }
-  const t = h("div", { class: "toast" + (err ? " err" : ""), text: msg }); box.append(t);
-  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 220); }, err ? 6000 : 2600);
+  const t = h("div", { class: "toast" + (err ? " err" : "") + (action ? " act" : ""), text: msg }); box.append(t);
+  const bye = () => { t.classList.add("out"); setTimeout(() => t.remove(), 220); };
+  if (action) { t.append(h("u", { text: action.label + " →" })); t.addEventListener("click", () => { bye(); action.run(); }); }
+  setTimeout(bye, action ? 9000 : err ? 6000 : 2600);
+}
+// Per-project browser storage: drafts, pins and "seen" marks belong to the
+// project they were made in, so switching projects never mixes them up.
+const wsKey = () => (S.state && S.state.workspace && S.state.workspace.root) || "";
+const pget = (k, d) => store.get(k + "@" + wsKey(), d);
+const pset = (k, v) => (v == null || v === "" ? store.del(k + "@" + wsKey()) : store.set(k + "@" + wsKey(), v));
+function ago(ts) {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "now"; if (s < 3600) return Math.floor(s / 60) + "m"; if (s < 86400) return Math.floor(s / 3600) + "h";
+  if (s < 7 * 86400) return Math.floor(s / 86400) + "d";
+  return new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+// A styled replacement for confirm(). Resolves true/false.
+function confirmBox({ title, text, ok = "Confirm", danger }) {
+  return new Promise((resolve) => {
+    let answered = false;
+    const done = (v) => { if (answered) return; answered = true; close(); resolve(v); };
+    const okBtn = h("button", { class: danger ? "danger" : "primary", text: ok, onclick: () => done(true) });
+    const close = modal(h("div", {}, h("h2", { text: title }), text && h("p", { class: "muted small", style: { whiteSpace: "pre-wrap" }, text }),
+      h("div", { class: "actions" }, h("button", { class: "ghost", text: "Cancel", onclick: () => done(false) }), okBtn)), { onClose: () => done(false) });
+    setTimeout(() => okBtn.focus());
+  });
+}
+// A small popover menu under `anchor`. items: [{ label, run, danger } | "-"]
+function popMenu(anchor, items) {
+  document.querySelectorAll(".pop").forEach((p) => p.remove());
+  const r = anchor.getBoundingClientRect();
+  const pop = h("div", { class: "pop" }, items.filter(Boolean).map((it) => it === "-" ? h("hr")
+    : h("button", { class: it.danger ? "d" : "", title: it.title || "", onclick: () => { off(); it.run(); } }, it.label)));
+  document.body.append(pop);
+  const w = pop.offsetWidth;
+  pop.style.top = Math.min(r.bottom + 6, innerHeight - pop.offsetHeight - 8) + "px";
+  pop.style.left = Math.max(8, Math.min(r.right - w, innerWidth - w - 8)) + "px";
+  const away = (e) => { if (!pop.contains(e.target)) off(); };
+  const esc = (e) => { if (e.key === "Escape") off(); };
+  const off = () => { pop.remove(); document.removeEventListener("mousedown", away, true); document.removeEventListener("keydown", esc); };
+  setTimeout(() => { document.addEventListener("mousedown", away, true); document.addEventListener("keydown", esc); });
 }
 const sk = (cls) => h("span", { class: "sk " + cls, "aria-hidden": "true" });
 const skLines = (n, widths = ["w80", "w60", "w40"]) => Array.from({ length: n }, (_, i) => sk("sk-line " + widths[i % widths.length]));
@@ -288,11 +400,46 @@ function autosize(t) { const f = () => { t.style.height = "auto"; t.style.height
 const S = { state: null, runs: null, models: null, view: null, detail: null, pending: null, es: null, sideOpen: store.get("side", true) };
 
 async function loadState() { S.state = await api("/api/state"); }
-async function loadRuns() { if (S.state.workspace) S.runs = (await api("/api/runs")).runs; }
+async function loadRuns() {
+  if (!S.state.workspace) return;
+  S.runs = (await api("/api/runs")).runs;
+  // First visit to this project in this browser: nothing counts as unread.
+  if (!pget("seen", null)) pset("seen", Object.fromEntries(S.runs.map((r) => [r.id, r.updated_at])));
+  updateTitle();
+}
+
+// ---------- attention: what changed while you were elsewhere ----------
+const seenMap = () => pget("seen", {}) || {};
+function markSeen(run) {
+  const m = seenMap(); if (m[run.id] >= run.updated_at) return;
+  m[run.id] = run.updated_at; pset("seen", m);
+  const it = document.querySelector(`.hitem[data-id="${run.id}"]`);
+  if (it) { it.classList.remove("unread"); it.querySelector(".ud")?.remove(); }
+  updateTitle();
+}
+const isUnread = (r, seen = seenMap()) => r.status !== "running" && (seen[r.id] || 0) < r.updated_at && !(S.view && S.view.id === r.id);
+function updateTitle() {
+  const ws = S.state && S.state.workspace; if (!ws) { document.title = "orchopork"; return; }
+  const runs = S.runs || [], seen = seenMap();
+  const running = runs.filter((r) => r.status === "running").length, unread = runs.filter((r) => isUnread(r, seen)).length;
+  document.title = `${unread ? `(${unread}) ` : ""}${running ? "▶ " : ""}${baseName(ws.root)} · orchopork`;
+}
+const runHash = (r) => `#/${r.spec.mode === "orchestra" ? "o" : "c"}/${r.id}`;
+const pinned = () => pget("pins", []);
+function togglePin(id) { const p = pinned(); pset("pins", p.includes(id) ? p.filter((x) => x !== id) : [id, ...p]); replaceSide(); }
+const hasDraft = (id) => !!pget("draft:" + id, "");
+// Status of a run as one word: running, paused, done, or error.
+const runState = (r) => (r.status === "running" ? "running" : r.status === "done" ? "done" : r.error ? "error" : "paused");
+const STATE_LABEL = { running: "running", paused: "paused", done: "done", error: "stopped" };
 async function loadModels(force) { if (!S.models || force) S.models = await api("/api/models"); return S.models; }
 
 // ---------- router ----------
-window.addEventListener("hashchange", route);
+let lastHash = location.hash;
+window.addEventListener("hashchange", () => {
+  if (S.view && S.view.leave && !S.view.leave()) { history.replaceState(null, "", lastHash || "#/"); return; }
+  lastHash = location.hash; route();
+});
+window.addEventListener("beforeunload", (e) => { if (S.view && S.view.kind === "models" && S.settingsDirty) { e.preventDefault(); e.returnValue = ""; } });
 function viewFor(hash) {
   const [, a, b] = hash.slice(1).split("/");
   if (a === "models") return viewModels;
@@ -313,37 +460,93 @@ async function route() {
   if (!S.state.workspace) return viewOpen();
   remember(S.state.workspace.root);
   shell(viewFor(location.hash));
-  loadRuns().then(() => { const side = $(".side"); if (side) side.replaceWith(sideEl()); }).catch(() => {});
+  loadRuns().then(replaceSide).catch(() => {});
   loadModels().catch(() => {}); // warm the model picker
 }
 const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
 
 // ---------- shell ----------
+const isMac = /Mac|iP(hone|ad)/.test(navigator.platform);
+const MOD = isMac ? "⌘" : "Ctrl";
+const narrow = () => matchMedia("(max-width: 860px)").matches;
+
+// History, grouped by what needs you: pinned, running, finished or stopped
+// since you last looked, then everything else by last activity.
+function histEl() {
+  const cur = location.hash.split("/")[2];
+  const pins = pinned(), seen = seenMap();
+  const f = (S.sideFilter || "").trim().toLowerCase();
+  const runs = (S.runs || []).filter((r) => !f || r.goal.toLowerCase().includes(f) || r.branch.toLowerCase().includes(f) || r.id.includes(f));
+  const item = (r) => {
+    const st = runState(r), unread = isUnread(r, seen), pin = pins.includes(r.id);
+    return h("div", { class: "hitem" + (r.id === cur ? " sel" : "") + (unread ? " unread" : ""), "data-id": r.id,
+      title: `${r.goal}\n${STATE_LABEL[st]} · ${r.spec.mode === "orchestra" ? "orchestra" : "single agent"} · ${r.branch}${r.error ? "\n" + r.error : ""}`,
+      onclick: () => { go(runHash(r)); if (narrow()) toggleSide(false); } },
+      h("span", { class: "sdot " + st }), h("span", { class: "ic", text: r.spec.mode === "orchestra" ? "⎇" : "›" }), h("span", { class: "t", text: r.goal }),
+      hasDraft(r.id) && h("span", { class: "dr", title: "Unsent draft", text: "✎" }),
+      unread ? h("span", { class: "ud", title: "Changed since you last looked" }) : h("span", { class: "when", text: ago(r.updated_at) }),
+      h("button", { class: "pin" + (pin ? " on" : ""), title: pin ? "Unpin" : "Pin to top", text: pin ? "★" : "☆", onclick: (e) => { e.stopPropagation(); togglePin(r.id); } }));
+  };
+  const used = new Set();
+  const take = (pred) => runs.filter((r) => !used.has(r.id) && pred(r)).map((r) => (used.add(r.id), r));
+  const byActivity = (a, b) => b.updated_at - a.updated_at;
+  const sections = [
+    ["Pinned", take((r) => pins.includes(r.id))],
+    ["Running", take((r) => r.status === "running")],
+    ["Needs you", take((r) => isUnread(r, seen)).sort(byActivity)],
+  ];
+  const rest = take(() => true).sort(byActivity);
+  const day = 86400, now = Date.now() / 1000, midnight = new Date().setHours(0, 0, 0, 0) / 1000;
+  sections.push(["Today", rest.filter((r) => r.updated_at >= midnight)], ["This week", rest.filter((r) => r.updated_at < midnight && r.updated_at >= now - 7 * day)],
+    ["Older", rest.filter((r) => r.updated_at < now - 7 * day)]);
+  const limit = S.sideAll || f ? Infinity : 40;
+  let shown = 0;
+  const out = [];
+  for (const [title, list] of sections) {
+    if (!list.length || shown >= limit) continue;
+    const vis = list.slice(0, limit - shown); shown += vis.length;
+    out.push(h("h6", {}, title, h("span", { class: "n", text: list.length > 1 ? String(list.length) : "" })), vis.map(item));
+  }
+  const total = runs.length;
+  return h("div", { class: "hist" },
+    out,
+    shown < total && h("button", { class: "ghost more-btn", text: `Show all ${total}`, onclick: () => { S.sideAll = true; replaceSide(); } }),
+    S.runs === null && h("div", { style: { padding: "8px 6px" } }, Array.from({ length: 5 }, () => sk("sk-row"))),
+    S.runs && !S.runs.length && h("div", { class: "small faint", style: { padding: "12px 8px" }, text: "Your conversations will appear here." }),
+    S.runs && S.runs.length > 0 && !total && h("div", { class: "small faint", style: { padding: "12px 8px" }, text: "Nothing matches." }));
+}
+// Rebuilds the sidebar while keeping the search box's focus and caret.
+function replaceSide() {
+  const side = $(".side"); if (!side) return;
+  const q = side.querySelector(".sfind input"), focused = q && document.activeElement === q, caret = q && q.selectionStart;
+  const scroll = side.querySelector(".hist")?.scrollTop || 0;
+  const next = sideEl(); side.replaceWith(next);
+  next.querySelector(".hist").scrollTop = scroll;
+  if (focused) { const n = next.querySelector(".sfind input"); n.focus(); n.setSelectionRange(caret, caret); }
+  updateTitle();
+}
+
 function sideEl() {
   const ws = S.state.workspace;
   const b = ws.budget, pct = b.cap_usd > 0 ? Math.min(100, (b.spent_usd / b.cap_usd) * 100) : 100;
-  const cur = location.hash.split("/")[2];
-  const item = (r) => h("div", { class: "hitem" + (r.id === cur ? " sel" : ""), title: r.goal, onclick: () => go(`#/${r.spec.mode === "orchestra" ? "o" : "c"}/${r.id}`) },
-    h("span", { class: "ic", text: r.spec.mode === "orchestra" ? "⎇" : "›" }), h("span", { class: "t", text: r.goal }),
-    r.status === "running" && h("span", { class: "dot pulse", style: { color: "var(--accent)" } }));
-  const runs = S.runs || [];
-  const orch = runs.filter((r) => r.spec.mode === "orchestra"), chats = runs.filter((r) => r.spec.mode !== "orchestra");
+  const find = h("input", { placeholder: "Search conversations", value: S.sideFilter || "",
+    oninput: (e) => { S.sideFilter = e.target.value; $(".side .hist").replaceWith(histEl()); },
+    onkeydown: (e) => { if (e.key === "Escape") { e.target.value = ""; S.sideFilter = ""; $(".side .hist").replaceWith(histEl()); e.target.blur(); } } });
+  const notifyOn = store.get("notify", false) && "Notification" in window && Notification.permission === "granted";
   return h("aside", { class: "side" },
     h("div", { class: "top" },
       h("div", { class: "row" }, h("div", { class: "brand" }, h("i"), "orchopork"), h("span", { class: "grow" }),
-        h("button", { class: "ghost", title: "Hide sidebar", text: "⟨", onclick: () => toggleSide() })),
+        h("button", { class: "ghost hide-side", title: "Hide sidebar", text: "⟨", onclick: () => toggleSide() })),
       h("button", { class: "ghost projbtn", title: ws.root + " — switch project", onclick: switchProject }, h("span", { text: "▣" }), h("span", { class: "n grow", text: baseName(ws.root) }), h("span", { class: "faint", text: "⇅" })),
       ws.vcs && !ws.vcs.is_repo && h("div", { class: "small warn", style: { padding: "6px 4px 0" } }, "Not a git repository yet. ", h("a", { href: "#", text: "Initialize", onclick: guard(async (e) => { e.preventDefault(); await api("/api/workspace", { body: { path: ws.root, git_init: true } }); await loadState(); refreshSide(); toast("Repository initialized"); }) })),
-      h("button", { style: { width: "100%", marginTop: "10px", textAlign: "left" }, onclick: () => go("#/"), text: "＋  New chat" })),
-    h("div", { class: "hist" },
-      orch.length > 0 && [h("h6", { text: "Orchestras" }), orch.map(item)],
-      chats.length > 0 && [h("h6", { text: "Chats" }), chats.map(item)],
-      S.runs === null && h("div", { style: { padding: "8px 6px" } }, Array.from({ length: 5 }, () => sk("sk-row"))),
-      S.runs && !S.runs.length && h("div", { class: "small faint", style: { padding: "12px 8px" }, text: "Your conversations will appear here." })),
+      h("button", { style: { width: "100%", marginTop: "10px", textAlign: "left" }, onclick: () => { go("#/"); if (narrow()) toggleSide(false); }, text: "＋  New chat" }),
+      h("div", { class: "sfind" }, find, h("span", { class: "kbd", title: "Jump anywhere", style: { cursor: "pointer" }, text: MOD + " K", onclick: palette }))),
+    histEl(),
     h("div", { class: "foot" },
       h("div", { class: "row small" }, h("span", { class: "muted", text: `${money(b.spent_usd)} of ${money(b.cap_usd)}` }), h("span", { class: "grow" }), h("span", { class: "faint", text: "this month" })),
       h("div", { class: "meter" }, h("div", { style: { width: pct + "%" } })),
-      h("div", { class: "row" }, h("button", { class: "ghost", style: { padding: "6px 8px" }, onclick: () => go("#/models"), text: "⚙  Models & settings" })),
+      h("div", { class: "row" }, h("button", { class: "ghost", style: { padding: "6px 8px" }, onclick: () => go("#/models"), text: "⚙  Models & settings" }), h("span", { class: "grow" }),
+        "Notification" in window && h("button", { class: "ghost", style: { padding: "6px 8px", opacity: notifyOn ? 1 : .6 }, title: notifyOn ? "Desktop notifications on — click to turn off" : "Notify me when a task finishes or stops while this tab is in the background", text: notifyOn ? "🔔" : "🔕", onclick: toggleNotify })),
       h("div", { class: "small faint mono", title: ws.root, style: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }, text: ws.root, onclick: switchProject })));
 }
 // The shell (sidebar + frame) persists across navigation; only the main
@@ -351,15 +554,28 @@ function sideEl() {
 function shell(render) {
   const main = h("main", { class: "main view-in" });
   const sh = $(".shell");
-  if (sh) { sh.querySelector(".side").replaceWith(sideEl()); sh.querySelector(".main").replaceWith(main); }
-  else $("#root").replaceChildren(h("div", { class: "shell" + (S.sideOpen ? "" : " collapsed") }, sideEl(), main));
+  if (sh) { sh.classList.remove("mob"); replaceSide(); sh.querySelector(".main").replaceWith(main); }
+  else {
+    const shellEl = h("div", { class: "shell" + (S.sideOpen ? "" : " collapsed") }, sideEl(), main);
+    // Narrow screens: a tap on the dimmed area closes the drawer.
+    shellEl.addEventListener("click", (e) => { if (e.target === shellEl) toggleSide(false); });
+    $("#root").replaceChildren(shellEl);
+  }
   S.view = null; S.lastLive = null;
   render(main);
   connectEvents();
 }
-function toggleSide() {
+function toggleSide(force) {
+  // Narrow screens: the sidebar is a drawer over the content.
+  if (narrow()) { $(".shell").classList.toggle("mob", force); return; }
   S.sideOpen = !S.sideOpen; store.set("side", S.sideOpen); $(".shell").classList.toggle("collapsed", !S.sideOpen);
   document.querySelectorAll(".topbar .menu-btn").forEach((b) => (b.style.display = S.sideOpen ? "none" : ""));
+}
+async function toggleNotify() {
+  if (store.get("notify", false) && Notification.permission === "granted") { store.set("notify", false); replaceSide(); return; }
+  const p = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+  if (p !== "granted") { toast("Notifications are blocked for this page in your browser settings.", true); return; }
+  store.set("notify", true); replaceSide(); toast("You'll be notified when a task finishes or stops");
 }
 const topbar = (...kids) => h("div", { class: "topbar" }, h("button", { class: "ghost menu-btn", text: "☰", style: { display: S.sideOpen ? "none" : "" }, onclick: toggleSide }), ...kids);
 
@@ -455,53 +671,100 @@ function viewOpen() {
 }
 
 // ---------- home ----------
-function composer({ placeholder, onSend, verify, running, onStop, big }) {
+// `draft`: a key under which unsent text is kept (per project), so switching
+// between conversations or projects never loses a half-written message.
+function composer({ placeholder, onSend, verify, running, onStop, big, draft }) {
   const t = h("textarea", { rows: 1, placeholder });
+  if (draft) t.value = pget("draft:" + draft, "");
   autosize(t);
+  let saveT = null;
+  const save = () => { if (!draft) return; clearTimeout(saveT); saveT = setTimeout(() => { pset("draft:" + draft, t.value.trim() ? t.value : null); if (vIn) pset("draft:" + draft + ":verify", vIn.value.trim() || null); }, 250); };
+  t.addEventListener("input", save);
   let vIn = null;
+  const openVerify = (value) => {
+    vIn = h("input", { class: "verify-in", value: value || "", placeholder: "verification command, e.g. cargo test / pytest -q / npm test", oninput: save }); box.append(vIn);
+  };
   const vBtn = verify && h("button", { class: "ghost small", title: "A command that must pass before the agent may finish", text: "✓ verify", onclick: () => {
-    if (vIn) { vIn.remove(); vIn = null; return; }
-    vIn = h("input", { class: "verify-in", placeholder: "verification command, e.g. cargo test / pytest -q / npm test" }); box.append(vIn); vIn.focus();
+    if (vIn) { vIn.remove(); vIn = null; save(); return; }
+    openVerify(pget("verify", "")); vIn.focus(); save();
   } });
-  const send = () => { const v = t.value.trim(); if (!v) return; onSend(v, vIn ? vIn.value.trim() : "", () => { t.value = ""; t.dispatchEvent(new Event("input")); }); };
+  const send = () => { const v = t.value.trim(); if (!v) return; onSend(v, vIn ? vIn.value.trim() : "", () => {
+    if (vIn && vIn.value.trim()) pset("verify", vIn.value.trim()); // remembered for the next task in this project
+    t.value = ""; t.dispatchEvent(new Event("input")); clearTimeout(saveT); if (draft) { pset("draft:" + draft, null); pset("draft:" + draft + ":verify", null); }
+  }); };
   t.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
   const sendBtn = running ? h("button", { class: "send stop", title: "Pause after the current step", text: "■", onclick: onStop })
     : h("button", { class: "send", title: "Send (Enter)", text: "↑", onclick: send });
   const box = h("div", { class: "composer" }, t, h("div", { class: "bar" }, vBtn, h("span", { class: "grow" }), running && h("button", { class: "ghost small", text: "send", onclick: send }), sendBtn));
-  if (big) setTimeout(() => t.focus());
+  if (verify && draft && pget("draft:" + draft + ":verify", "")) openVerify(pget("draft:" + draft + ":verify", ""));
+  if (big) setTimeout(() => { t.focus(); t.setSelectionRange(t.value.length, t.value.length); });
   box.textarea = t;
+  box.setText = (v, verifyCmd) => { t.value = v; if (verifyCmd && !vIn && verify) openVerify(verifyCmd); else if (verifyCmd && vIn) vIn.value = verifyCmd; t.dispatchEvent(new Event("input")); t.focus(); t.setSelectionRange(v.length, v.length); };
   return box;
 }
 
 function viewHome(main) {
   const hour = new Date().getHours();
   const hi = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-  const c = composer({ placeholder: "Describe what you want built, fixed or explained…", verify: true, big: true, onSend: (goal, verify) => askMode(goal, verify) });
+  const c = composer({ placeholder: "Describe what you want built, fixed or explained…", verify: true, big: true, draft: "home",
+    onSend: (goal, verify, clear) => askMode(goal, verify, clear) });
+  if (S.prefill) { const p = S.prefill; S.prefill = null; setTimeout(() => c.setText(p.goal, p.verify)); }
   const ideas = ["Add tests for the least covered module", "Find and fix the most likely bug in this repo", "Write a README section explaining the architecture", "Refactor the largest function into smaller pieces"];
+  const resume = h("div", { class: "resume" });
+  const paintResume = () => {
+    // Where you left off: an unfinished team draft, then what is running,
+    // what changed since you last looked, and the latest stopped work.
+    const od = pget("orchDraft", null), seen = seenMap();
+    const runs = (S.runs || []).filter((r) => r.status !== "done" || isUnread(r, seen));
+    const score = (r) => (r.status === "running" ? 3 : isUnread(r, seen) ? 2 : 1) * 1e11 + r.updated_at;
+    const top = runs.sort((a, b) => score(b) - score(a)).slice(0, od ? 3 : 4);
+    if (!od && !top.length) { resume.replaceChildren(); return; }
+    resume.replaceChildren(...[h("h6", { text: "Pick up where you left off" }),
+      od && h("div", { class: "rcard draft enter", title: od.goal, onclick: () => go("#/o/new") },
+        h("span", { class: "ic", text: "⎇" }), h("span", { class: "t" }, h("b", { text: "Unfinished team · " }), od.goal),
+        h("span", { class: "small faint", text: `${od.agents.length} agents · ${ago(od.at)}` }),
+        h("button", { class: "ghost small", title: "Discard this draft", text: "✕", onclick: async (e) => { e.stopPropagation(); if (await confirmBox({ title: "Discard the team draft?", text: od.goal, ok: "Discard", danger: true })) { pset("orchDraft", null); paintResume(); } } })),
+      top.map((r) => { const st = runState(r); return h("div", { class: "rcard enter", title: r.error || r.goal, onclick: () => go(runHash(r)) },
+        h("span", { class: "sdot " + st, style: { width: "8px", height: "8px", borderRadius: "50%", flex: "none" } }),
+        h("span", { class: "t" }, isUnread(r, seen) ? h("b", { text: r.goal }) : r.goal),
+        hasDraft(r.id) && h("span", { class: "small faint", title: "Unsent draft", text: "✎" }),
+        h("span", { class: "small faint", text: `${STATE_LABEL[st]} · ${ago(r.updated_at)}` })); })].flat().filter(Boolean));
+  };
+  paintResume();
+  if (S.runs === null) loadRuns().then(() => document.body.contains(resume) && paintResume()).catch(() => {});
+  S.view = { kind: "home", refresh: async () => paintResume() };
   main.append(topbar(), h("div", { class: "hero" },
     h("h1", {}, `${hi}. `, h("span", { text: "What shall we build?" })),
     c,
-    h("div", { class: "chips" }, ideas.map((i) => h("span", { class: "chip", text: i, onclick: () => { c.textarea.value = i; c.textarea.dispatchEvent(new Event("input")); c.textarea.focus(); } })))));
+    h("div", { class: "chips" }, ideas.map((i) => h("span", { class: "chip", text: i, onclick: () => c.setText(i) }))),
+    resume));
 }
 
 // ---------- modals ----------
-function modal(content, { wide } = {}) {
+function modal(content, { wide, onClose, cls } = {}) {
   const scrim = h("div", { class: "scrim" });
   let closed = false;
-  const close = () => { if (closed) return; closed = true; document.removeEventListener("keydown", esc); scrim.classList.add("out"); setTimeout(() => scrim.remove(), 170); };
+  const close = () => { if (closed) return; closed = true; document.removeEventListener("keydown", esc); scrim.classList.add("out"); setTimeout(() => scrim.remove(), 170); onClose && onClose(); };
   const esc = (e) => { if (e.key === "Escape") close(); };
   scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) close(); });
   document.addEventListener("keydown", esc);
-  scrim.append(h("div", { class: "modal" + (wide ? " wide" : "") }, content));
+  scrim.append(h("div", { class: "modal" + (wide ? " wide" : "") + (cls ? " " + cls : "") }, content));
   document.body.append(scrim);
   return close;
 }
 
-function askMode(goal, verify) {
+// `clear` empties the home composer (and its draft) once a task was really
+// started; backing out of any step keeps the text.
+function askMode(goal, verify, clear) {
   let close;
-  const yes = h("button", { class: "hot", onclick: () => { close(); S.pending = { goal, verify }; go("#/o/new"); } },
+  const yes = h("button", { class: "hot", onclick: async () => {
+    close();
+    const od = pget("orchDraft", null);
+    if (od && od.goal !== goal && !(await confirmBox({ title: "Replace the unfinished team?", text: `You have an unfinished team draft for:\n“${firstLine(od.goal, 120)}”\n\nStarting a new orchestra replaces it.`, ok: "Replace it" }))) return;
+    pset("orchDraft", null); S.pending = { goal, verify, clear }; go("#/o/new");
+  } },
     h("b", { text: "⎇  Yes, assemble an orchestra" }), h("span", { text: "A lead model designs a team with a chain of command. You review and edit it before anything runs." }));
-  const no = h("button", { onclick: async () => { close(); const m = await pickModel({ title: "Which model should work on this?" }); if (m) startSolo(goal, verify, m); } },
+  const no = h("button", { onclick: async () => { close(); const m = await pickModel({ title: "Which model should work on this?" }); if (m && (await startSolo(goal, verify, m))) clear && clear(); } },
     h("b", { text: "›  No, a single agent" }), h("span", { text: "One agent with tools works on it directly, like a classic coding assistant." }));
   close = modal(h("div", {},
     h("div", { class: "orb" }), h("h2", { text: "Activate an agent orchestra?" }),
@@ -827,7 +1090,8 @@ function openAddModel() {
 
 const startSolo = guard(async (goal, verify, model) => {
   const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "solo", model } });
-  go(`#/c/${run.id}`);
+  markSeen(run); go(`#/c/${run.id}`);
+  return true;
 });
 
 // ---------- chat view ----------
@@ -884,6 +1148,39 @@ function setLive(text) {
 const nearBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight < 120;
 const toBottom = (el, smooth) => el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
 
+// ---------- changing your mind: rewind, edit & resend, retry ----------
+// Rewinds `run` so that step `seq` is the last one kept (-1 = back to the
+// start). The worktree is reset too; the old tree stays under a safety ref.
+async function rewindTo(run, seq, { dropped, title, why } = {}) {
+  if (S.detail && S.detail.run.id === run.id && S.detail.active) { toast("Pause the run first (■), then rewind.", true); return false; }
+  const ok = await confirmBox({ title: title || (seq < 0 ? "Start over from the beginning?" : "Rewind to this point?"),
+    text: `${why ? why + "\n\n" : ""}${dropped ? `${dropped} later step${dropped === 1 ? " is" : "s are"} removed from this conversation and the` : "The"} branch ${run.branch} is reset to ${seq < 0 ? "where it started" : "this point"}.\n\nNothing is lost for good: the previous state is kept under refs/orchopork/rewound/${run.id}/….`,
+    ok: seq < 0 ? "Start over" : "Rewind" });
+  if (!ok) return false;
+  try { await api(`/api/runs/${run.id}/rewind`, { body: { seq } }); } catch (e) { toast(e.message, true); return false; }
+  toast(seq < 0 ? "Back at the start. Reply to steer it in a new direction." : "Rewound. Reply to continue from here.");
+  return true;
+}
+// Hover tools on a rendered step: rewind to it, or (for your own messages)
+// take it back, edit it and send it again.
+function withStepTools(el, s, ctx) {
+  if (!el || s.seq == null) return el;
+  const later = () => ctx.steps().filter((x) => x.seq > s.seq).length;
+  const tools = h("div", { class: "steptools" },
+    s.kind === "inject"
+      ? h("button", { title: "Take this message back, edit it and send it again. Everything after it is rewound.", text: "✎ Edit & resend", onclick: async (e) => {
+          e.stopPropagation();
+          if (await rewindTo(ctx.run(), s.seq - 1, { dropped: later() + 1, title: "Edit this message?", why: "Your message and everything after it are taken back; the text goes into the composer for you to change." })) ctx.edit(s.output);
+        } })
+      : h("button", { title: "Keep everything up to here and drop the rest", text: "↺ Rewind here", onclick: async (e) => { e.stopPropagation(); if (await rewindTo(ctx.run(), s.seq, { dropped: later() })) ctx.after && ctx.after(); } }));
+  el.classList.add("stepwrap"); el.append(tools);
+  if (s.created_at) el.title = new Date(s.created_at * 1000).toLocaleString();
+  return el;
+}
+// Starts over as a new task with the same goal, e.g. to try a different
+// model, or a team instead of a single agent. The old run is kept.
+function retryAsNew(run) { S.prefill = { goal: run.goal, verify: run.verify_command || "" }; go("#/"); toast("Adjust the goal if you like, then send it."); }
+
 // Keyed, incremental chat: only new steps are added (animated), so live
 // updates never flicker or jump.
 async function viewChat(main, id) {
@@ -896,7 +1193,8 @@ async function viewChat(main, id) {
   head.append(topbar(h("span", { class: "grow" }, sk("sk-title"))));
   const skel = h("div", { class: "thread-skel" }, sk("sk-bubble"), skLines(3), sk("sk-block"), skLines(2));
   thread.append(skel);
-  const seen = new Map(); let lastActive = null, headKey = "", first = true, goalShown = false;
+  const seen = new Map(); let lastActive = null, headKey = "", first = true, goalShown = false, comp = null;
+  const ctx = { run: () => S.detail.run, steps: () => S.detail.steps, edit: (text) => comp && comp.setText(text) };
 
   const send = guard(async (text, _v, clear) => {
     const bubble = h("div", { class: "msg-user pending enter" }, h("div", { text }));
@@ -906,7 +1204,7 @@ async function viewChat(main, id) {
     try {
       await api(`/api/runs/${id}/inject`, { body: { text } });
       if (!(S.detail && S.detail.active)) await api(`/api/runs/${id}/resume`, { body: {} });
-    } catch (e) { bubble.remove(); throw e; }
+    } catch (e) { bubble.remove(); if (comp && !comp.textarea.value.trim()) comp.setText(text); throw e; } // never lose what you typed
     paint();
   });
 
@@ -922,11 +1220,20 @@ async function viewChat(main, id) {
         h("span", { class: "title grow", text: run.goal }),
         h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "working" : run.status),
         run.spec.model && h("span", { class: "pill", title: mref(run.spec.model), text: (run.spec.model.provider === "acp" ? "⚡ " : "") + fmtRef(run.spec.model) }),
+        run.verify_command && h("span", { class: "pill mono", title: "Must pass before the agent may finish: " + run.verify_command, text: "✓ " + firstLine(run.verify_command, 24) }),
         h("span", { class: "small faint", text: money(run.cost_usd) }),
         runMenu(run, active)));
-      banner.replaceChildren(run.error && !active ? h("div", { class: "banner enter", text: run.error }) : "");
+      banner.replaceChildren(errorBanner(run, active));
     }
-    if (!goalShown) { skel.remove(); thread.append(h("div", { class: "msg-user" }, h("div", { text: run.goal }))); goalShown = true; }
+    thread.classList.toggle("busy", !!active);
+    if (!document.hidden) markSeen(run);
+    if (!goalShown) {
+      skel.remove();
+      const g = h("div", { class: "msg-user stepwrap" }, h("div", { text: run.goal }),
+        h("div", { class: "steptools" }, h("button", { title: "Keep the goal, drop every step and reset the branch", text: "↺ Start over", onclick: () => rewindTo(S.detail.run, -1, { dropped: S.detail.steps.length }) }),
+          h("button", { title: "Start a separate task with this goal (e.g. another model, or a team)", text: "⧉ Retry as new", onclick: () => retryAsNew(S.detail.run) })));
+      thread.append(g); goalShown = true;
+    }
     // A rewind removed steps: rebuild from scratch.
     const maxSeq = steps.length ? steps[steps.length - 1].seq : -1;
     if ([...seen.keys()].some((q) => q > maxSeq)) { seen.forEach((el) => el && el.remove()); seen.clear(); }
@@ -935,9 +1242,9 @@ async function viewChat(main, id) {
       if (seen.has(s.seq)) continue;
       if (s.kind === "inject") {
         const pend = [...thread.querySelectorAll(".msg-user.pending")].find((b) => b.dataset.text === s.output.trim());
-        if (pend) { pend.classList.remove("pending"); seen.set(s.seq, pend); continue; }
+        if (pend) { pend.classList.remove("pending"); withStepTools(pend, s, ctx); seen.set(s.seq, pend); continue; }
       }
-      const el = chatItem(s);
+      const el = withStepTools(chatItem(s), s, ctx);
       if (el && !first) el.classList.add("enter");
       seen.set(s.seq, el);
       if (el) th ? thread.insertBefore(el, th) : thread.append(el);
@@ -947,10 +1254,11 @@ async function viewChat(main, id) {
     if (active !== lastActive) {
       lastActive = active;
       const prev = dock.querySelector("textarea");
-      const c = composer({ placeholder: active ? "Message the agent (read on its next turn)…" : "Reply to continue…", running: active,
+      const c = comp = composer({ placeholder: active ? "Message the agent (read on its next turn)…" : run.status === "done" ? "Follow up — this re-opens the task…" : "Reply to continue…", running: active, draft: id,
         onStop: guard(async () => { await api(`/api/runs/${id}/pause`, { body: {} }); toast("Pausing after the current step"); }), onSend: send });
       if (prev && prev.value) c.textarea.value = prev.value;
       dock.replaceChildren(c);
+      if (first && c.textarea.value) setTimeout(() => c.textarea.dispatchEvent(new Event("input")));
       if (prev && document.activeElement === prev) c.textarea.focus();
     }
     if (wasBottom) toBottom(scroll, !first);
@@ -960,15 +1268,37 @@ async function viewChat(main, id) {
   await paint();
 }
 
+const resumeRun = guard(async (run) => { await api(`/api/runs/${run.id}/resume`, { body: {} }); S.view && S.view.refresh && S.view.refresh(); });
+const copy = (text, what) => navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}`), () => toast("Could not copy: " + text, true));
+
+// Why a run stopped, with the obvious next step next to it.
+function errorBanner(run, active) {
+  if (!run.error || active) return "";
+  return h("div", { class: "banner enter" }, h("span", { class: "grow", style: { whiteSpace: "pre-wrap" }, text: run.error }),
+    run.status !== "done" && h("span", { class: "row", style: { flex: "none" } }, h("button", { text: "▶ Resume", onclick: () => resumeRun(run) })));
+}
+
 function runMenu(run, active) {
+  const pin = pinned().includes(run.id);
+  const more = h("button", { class: "ghost", title: "More", text: "⋯", onclick: () => popMenu(more, [
+    { label: pin ? "★  Unpin" : "☆  Pin to top of the sidebar", run: () => { togglePin(run.id); } },
+    { label: "⧉  Retry as a new task…", title: "Same goal, fresh start: pick another model or use a team. This one is kept.", run: () => retryAsNew(run) },
+    !active && { label: "↺  Start over…", title: "Keep the goal, drop every step and reset the branch", run: () => rewindTo(run, -1, { dropped: run.step_count }) },
+    "-",
+    { label: "⎘  Copy branch name", run: () => copy(run.branch, "branch name") },
+    { label: "⎘  Copy merge command", run: () => copy(`git merge ${run.branch}`, "merge command") },
+    { label: "⎘  Copy worktree path", run: () => copy(run.worktree, "worktree path") },
+    !active && "-",
+    !active && { label: "🗑  Delete…", danger: true, run: guard(async () => {
+      if (!(await confirmBox({ title: "Delete this conversation?", text: `“${firstLine(run.goal, 120)}”\n\nIts worktree and the branch ${run.branch} are removed. Spending stays recorded.`, ok: "Delete", danger: true }))) return;
+      await api(`/api/runs/${run.id}`, { method: "DELETE" }); pset("draft:" + run.id, null); go("#/");
+    }) },
+  ]) });
   return h("span", { class: "row" },
-    !active && run.status !== "done" && h("button", { class: "ghost", text: "▶ Resume", onclick: guard(async () => { await api(`/api/runs/${run.id}/resume`, { body: {} }); S.view && S.view.refresh(); }) }),
+    !active && run.status !== "done" && h("button", { class: "ghost", text: "▶ Resume", onclick: () => resumeRun(run) }),
     h("button", { class: "ghost", text: "Diff", onclick: guard(() => showDiff(run)) }),
     h("button", { class: "ghost", text: "Push", onclick: guard(async () => { const r = await api(`/api/runs/${run.id}/push`, { body: {} }); toast(firstLine(r.output) || "Pushed"); }) }),
-    !active && h("button", { class: "ghost danger", title: "Delete this conversation, its worktree and branch", text: "🗑", onclick: guard(async () => {
-      if (!confirm(`Delete "${firstLine(run.goal, 60)}" with its branch ${run.branch}?`)) return;
-      await api(`/api/runs/${run.id}`, { method: "DELETE" }); go("#/");
-    }) }));
+    more);
 }
 
 async function showDiff(run) {
@@ -979,7 +1309,8 @@ async function showDiff(run) {
     pre.append(h("div", { class: c, text: line || " " }));
   }
   modal(h("div", {}, h("h2", { text: "Changes on " + run.branch }), h("pre", { class: "block", text: d.stat || "no changes" }), pre,
-    h("p", { class: "small muted", text: `Happy with it? git merge ${run.branch}` })), { wide: true });
+    h("div", { class: "row small muted", style: { marginTop: "10px" } }, h("span", { class: "grow" }, "Happy with it? ", h("code", { text: `git merge ${run.branch}` })),
+      h("button", { class: "ghost small", text: "Copy", onclick: () => copy(`git merge ${run.branch}`, "merge command") }))), { wide: true });
 }
 
 // ---------- orchestra: tree editor ----------
@@ -1200,8 +1531,17 @@ function removeAgent(ed, id) {
 
 // ---------- orchestra: draft ----------
 async function viewOrchestraDraft(main) {
+  // A team drafted earlier (and kept across reloads) reopens as it was left.
+  const saved = pget("orchDraft", null);
+  if (!S.pending && saved) {
+    S.view = { kind: "draft" };
+    main.append(topbar(h("span", { class: "title grow", text: "New orchestra" }), h("span", { class: "small faint", text: firstLine(saved.goal, 80) })));
+    const models = (await loadModels().catch(() => ({ models: [] }))).models;
+    orchestraEditor(main, { ...saved, models, restored: true });
+    return;
+  }
   if (!S.pending) { go("#/"); return; }
-  const { goal, verify } = S.pending;
+  const { goal, verify, clear } = S.pending;
   S.view = { kind: "draft" };
   main.append(topbar(h("span", { class: "title grow", text: "New orchestra" }), h("span", { class: "small faint", text: firstLine(goal, 80) })));
   const body = h("div", { class: "center" }); main.append(body);
@@ -1219,15 +1559,20 @@ async function viewOrchestraDraft(main) {
   try { agents = (await api("/api/orchestra/propose", { body: { goal, model: lead } })).agents; }
   catch (e) { body.replaceChildren(h("div", { class: "stack" }, h("div", { class: "card" }, h("b", { text: "The lead could not design a team." }), h("p", { class: "small bad", text: e.message }),
     h("div", { class: "row" }, h("button", { text: "Back", onclick: () => go("#/") }), h("button", { class: "primary", text: "Try again", onclick: () => route() }))))); return; }
+  if (!document.body.contains(main)) return; // navigated away while the lead was drafting
   body.remove();
+  clear && clear(); S.pending = null; // the goal now lives in the team draft
   orchestraEditor(main, { goal, verify, lead, agents, models });
 }
 
-function orchestraEditor(main, { goal, verify, lead, agents, models }) {
+function orchestraEditor(main, { goal, verify, lead, agents, models, restored }) {
   const history = [];
+  // Every edit is saved, so a reload, a detour or a project switch never
+  // throws away a team the lead was paid to design.
+  const persist = () => pset("orchDraft", { goal, verify, lead, agents: ed.agents, at: Math.floor(Date.now() / 1000) });
   const ed = { agents, selected: agents[0] && agents[0].id,
     push() { history.push(JSON.stringify(ed.agents)); if (history.length > 100) history.shift(); },
-    onChange() { canvas.paint(); count.textContent = `${ed.agents.length} agent${ed.agents.length > 1 ? "s" : ""}`; },
+    onChange() { canvas.paint(); count.textContent = `${ed.agents.length} agent${ed.agents.length > 1 ? "s" : ""}`; persist(); },
     onEdit: (id) => editAgent(ed, id, models) };
   const canvas = treeCanvas(ed);
   const count = h("span", { class: "small muted" });
@@ -1235,17 +1580,21 @@ function orchestraEditor(main, { goal, verify, lead, agents, models }) {
   const hud = h("div", { class: "hud" },
     h("button", { text: "＋ Agent", title: "Add a subordinate to the selected agent", onclick: () => canvas.addAgent(ed.selected || ed.agents[0].id) }),
     h("button", { text: "↶ Undo", onclick: undo }), h("button", { text: "⤢ Fit", onclick: () => canvas.fit() }),
-    h("button", { class: "ghost", text: "Lead: " + fmtRef(lead), onclick: guard(async () => { const m = await pickModel({ title: "Lead model" }); if (m) { lead = m; hud.lastChild.textContent = "Lead: " + fmtRef(m); } }) }));
+    h("button", { class: "ghost", text: "Lead: " + fmtRef(lead), onclick: guard(async () => { const m = await pickModel({ title: "Lead model" }); if (m) { lead = m; hud.lastChild.textContent = "Lead: " + fmtRef(m); persist(); } }) }));
   const reserve = h("div", { class: "reserve" }, h("h6", { text: "Reserve · drag onto an agent" }),
     TEMPLATES.map((t) => h("div", { class: "tpl", title: t[2], onpointerdown: (e) => canvas.dragTemplate(e, t) }, h("b", { text: t[0] }), h("div", { class: "small faint", text: t[1] }))));
   const deploy = h("div", { class: "deploy" }, count,
     h("span", { class: "small faint", text: "· drag to reassign · double-click to edit" }),
-    h("button", { class: "ghost", text: "Cancel", onclick: () => go("#/") }),
+    h("button", { class: "ghost danger", title: "Throw this team away", text: "Discard", onclick: async () => {
+      if (!(await confirmBox({ title: "Discard this team?", text: "The team layout and your edits are removed. The goal is put back into the composer.", ok: "Discard", danger: true }))) return;
+      pset("orchDraft", null); S.prefill = { goal, verify }; go("#/");
+    } }),
+    h("button", { class: "ghost", title: "Keep the draft and come back to it from the home screen", text: "Later", onclick: () => go("#/") }),
     h("button", { class: "accent", text: "Approve & deploy", onclick: guard(async (e) => {
       e.target.disabled = true;
       try {
         const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "orchestra", model: lead, agents: ed.agents } });
-        S.pending = null; go(`#/o/${run.id}`);
+        S.pending = null; pset("orchDraft", null); markSeen(run); go(`#/o/${run.id}`);
       } finally { e.target.disabled = false; }
     }) }));
   canvas.append(hud, reserve, deploy);
@@ -1261,7 +1610,7 @@ function orchestraEditor(main, { goal, verify, lead, agents, models }) {
     else if (e.key === "a" && ed.selected) canvas.addAgent(ed.selected);
   };
   document.addEventListener("keydown", keys);
-  setTimeout(() => toast("Review the team. Drag agents to reassign them, double-click to edit, or drag from the reserve."), 300);
+  setTimeout(() => toast(restored ? "Your team draft, as you left it." : "Review the team. Drag agents to reassign them, double-click to edit, or drag from the reserve."), 300);
 }
 
 // ---------- orchestra: live run ----------
@@ -1301,18 +1650,20 @@ async function viewOrchestraRun(main, id) {
     if (!a) return;
     const mine = steps.filter((s) => (s.meta && (s.meta.agent === a.id || s.meta.target === a.id)) || (!s.meta.agent && !a.parent && s.kind !== "act"));
     const subs = run.spec.agents.filter((x) => x.parent === a.id);
-    const feed = h("div", { class: "feed" });
+    const feed = h("div", { class: "feed" + (active ? " busy" : "") });
+    const ctx = { run: () => data.run, steps: () => data.steps, edit: (text) => { const t = panel.querySelector("textarea"); if (t) { t.value = text; t.dispatchEvent(new Event("input")); t.focus(); } } };
+    const add = (s, el) => feed.append(withStepTools(el, s, ctx));
     for (const s of mine) {
-      if (s.kind === "inject") feed.append(h("div", { class: "msg-user" }, h("div", { text: s.output })));
-      else if (s.kind === "verify") feed.append(h("div", { class: "sysline" }, h("span", { class: s.meta.ok ? "ok" : "bad", text: s.meta.ok ? "✓ verification passed" : "✗ verification failed" })));
-      else if (s.meta.tool === "delegate" && s.meta.target === a.id) feed.append(h("div", { class: "msg-user" }, h("div", {}, h("div", { class: "small faint", text: "Order from " + agentName(s.meta.agent) }), s.meta.instruction)));
-      else if (s.meta.external && s.meta.agent === a.id) feed.append(extBlock(s), h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Report" }), s.meta.summary || s.output));
-      else if (s.meta.tool === "finish" && s.meta.agent === a.id) feed.append(h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Report" }), s.meta.summary || s.output));
-      else if (s.meta.agent === a.id) feed.append(actLine(s));
+      if (s.kind === "inject") add(s, h("div", { class: "msg-user" }, h("div", { text: s.output })));
+      else if (s.kind === "verify") add(s, h("div", { class: "sysline" }, h("span", { class: s.meta.ok ? "ok" : "bad", text: s.meta.ok ? "✓ verification passed" : "✗ verification failed" })));
+      else if (s.meta.tool === "delegate" && s.meta.target === a.id) add(s, h("div", { class: "msg-user" }, h("div", {}, h("div", { class: "small faint", text: "Order from " + agentName(s.meta.agent) }), s.meta.instruction)));
+      else if (s.meta.external && s.meta.agent === a.id) add(s, h("div", {}, extBlock(s), h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Report" }), s.meta.summary || s.output)));
+      else if (s.meta.tool === "finish" && s.meta.agent === a.id) add(s, h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Report" }), s.meta.summary || s.output));
+      else if (s.meta.agent === a.id) add(s, actLine(s));
     }
     if (!mine.length) feed.append(h("div", { class: "small faint", style: { padding: "20px 0" }, text: ed.status[a.id] && ed.status[a.id].active ? "Starting…" : "Nothing yet. Agents act after all of their subordinates have reported." }));
     const st = ed.status[a.id] || {};
-    const c = composer({ placeholder: `Message ${a.name}…`, onSend: guard(async (text, _v, clear) => {
+    const c = composer({ placeholder: `Message ${a.name}…`, draft: `${id}:${a.id}`, onSend: guard(async (text, _v, clear) => {
       await api(`/api/runs/${id}/inject`, { body: { text, agent: a.id } }); clear();
       if (!data.active) await api(`/api/runs/${id}/resume`, { body: {} });
       refresh();
@@ -1333,8 +1684,10 @@ async function viewOrchestraRun(main, id) {
   }
 
   async function refresh() {
-    data = await api(`/api/runs/${id}`);
+    data = S.detail = await api(`/api/runs/${id}`);
+    if (!S.view || S.view.id !== id) return;
     const { run, steps, active } = data;
+    if (!document.hidden) markSeen(run);
     agentNames = Object.fromEntries(run.spec.agents.map((a) => [a.id, a.name]));
     ed.agents = run.spec.agents; ed.status = statusOf(steps, active);
     ed.leadExternal = !!(run.spec.model && run.spec.model.provider === "acp");
@@ -1347,7 +1700,7 @@ async function viewOrchestraRun(main, id) {
       active && h("button", { class: "ghost", text: "⏸ Pause", onclick: guard(async () => { await api(`/api/runs/${id}/pause`, { body: {} }); toast("Pausing after the current step"); }) }),
       runMenu(run, active)));
     if (active) head.append(h("div", { class: "row small muted", style: { padding: "0 16px 8px", gap: "8px" } }, h("span", { class: "dots" }, h("i"), h("i"), h("i")), h("span", { class: "live-line", text: S.lastLive || "working…" })));
-    if (run.error && !active) head.append(h("div", { class: "banner enter", text: run.error }));
+    if (run.error && !active) head.append(errorBanner(run, active));
     cskel.remove();
     canvas.paint();
     const pk = [ed.selected, steps.length, active].join("|");
@@ -1382,6 +1735,8 @@ async function viewModels(main) {
   const parseRef = (v) => { v = v.trim(); if (!v) return null; const i = v.indexOf(":"); return i < 0 ? null : { provider: v.slice(0, i), model: v.slice(i + 1) }; };
 
   const skills = h("div");
+  let saveRow;
+  S.settingsDirty = false;
   const paintSkills = (list, errors) => skills.replaceChildren(...list.map((s) => h("label", { class: "row", style: { color: "var(--text)", fontSize: "13.5px", alignItems: "flex-start", gap: "10px" } },
     h("input", { type: "checkbox", style: { width: "auto", marginTop: "4px" }, checked: s.enabled, onchange: guard(async (e) => { try { await api("/api/skills/toggle", { body: { name: s.name, on: e.target.checked } }); } catch (x) { e.target.checked = !e.target.checked; throw x; } }) }),
     h("span", {}, h("b", { text: s.name }), " ", h("span", { class: "pill", text: s.type.replace("_", " ") }), h("div", { class: "small muted", text: s.description })))),
@@ -1429,7 +1784,7 @@ async function viewModels(main) {
     const rows = [];
     const row = (title, detail, ok, remove) => rows.push(h("div", {}, h("b", { text: title }), h("div", { class: "small " + (ok ? "muted" : "warn"), text: detail })),
       h("span", { class: "pill " + (ok ? "done" : ""), text: ok ? "connected" : "check" }),
-      remove ? h("button", { class: "ghost", text: "Remove", onclick: guard(async () => { if (!confirm(`Remove ${title}?`)) return; await api("/api/models/remove", { body: remove }); S.models = null; route(); }) }) : h("span"));
+      remove ? h("button", { class: "ghost", text: "Remove", onclick: guard(async () => { if (!(await confirmBox({ title: `Remove ${title}?`, text: "Its models disappear from the pickers. Agents already set to use them will fail until you pick another model.", ok: "Remove", danger: true }))) return; await api("/api/models/remove", { body: remove }); S.models = null; route(); }) }) : h("span"));
     const nOllama = count((m) => m.provider === "ollama");
     row("Ollama", `${cfg.ollama_url} · ${nOllama ? nOllama + " models" : "not reachable or no models"}`, nOllama > 0, null);
     if (cfg.llamacpp_url) row("llama.cpp", cfg.llamacpp_url, count((m) => m.provider === "llamacpp") > 0, null);
@@ -1465,7 +1820,8 @@ async function viewModels(main) {
       h("label", { class: "row", style: { color: "var(--text)", marginTop: "14px" } }, allow, "Allow agents to run shell commands")),
     h("div", { class: "card" }, h("div", { class: "row" }, h("h3", { class: "grow", text: "Skills" }),
       h("button", { class: "ghost", text: "Reload", onclick: guard(async () => { const r = await api("/api/skills/reload", { body: {} }); paintSkills(r.skills, r.errors); }) })), skills),
-    h("div", { class: "row" }, h("span", { class: "grow" }),
+    saveRow = h("div", { class: "row", style: { position: "sticky", bottom: "12px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: "14px", padding: "8px 8px 8px 14px", boxShadow: "var(--shadow)" } },
+      h("span", { class: "grow small muted", text: "Changes here are saved when you press Save." }),
       h("button", { class: "primary", text: "Save settings", onclick: guard(async () => {
         const fresh = (await api("/api/state")).workspace.config; // keep models added since the page opened
         const next = { ...fresh, monthly_cap_usd: Number(cap.value), ollama_num_ctx: Number(numCtx.value),
@@ -1473,8 +1829,69 @@ async function viewModels(main) {
         limits.querySelectorAll("input[data-k]").forEach((i) => { next.limits[i.dataset.k] = Number(i.value); });
         next.external_agents = extAgents.filter((a) => a.command.trim());
         await api("/api/config", { method: "PUT", body: next }); S.models = null; toast("Saved");
+        setDirty(false);
       }) })));
+  // Unsaved edits are flagged, and leaving the page asks first.
+  const setDirty = (v) => {
+    S.settingsDirty = v;
+    saveRow.firstChild.textContent = v ? "● Unsaved changes" : "Changes here are saved when you press Save.";
+    saveRow.firstChild.className = "grow small " + (v ? "warn" : "muted");
+  };
+  inner.addEventListener("input", (e) => { if (!skills.contains(e.target)) setDirty(true); });
+  inner.addEventListener("change", (e) => { if (!skills.contains(e.target)) setDirty(true); });
+  S.view.leave = () => !S.settingsDirty || confirm("Leave without saving your settings changes?");
 }
+
+// ---------- command palette (Ctrl/⌘ K): jump to any conversation, project or action ----------
+function palette() {
+  if ($(".pal")) return;
+  const ws = S.state && S.state.workspace; if (!ws) return;
+  const od = pget("orchDraft", null);
+  const actions = [
+    { g: "Actions", ic: "＋", t: "New chat", k: "", run: () => go("#/") },
+    od && { g: "Actions", ic: "⎇", t: "Continue the unfinished team: " + firstLine(od.goal, 60), run: () => go("#/o/new") },
+    { g: "Actions", ic: "⚙", t: "Models & settings", run: () => go("#/models") },
+    { g: "Actions", ic: "⇅", t: "Switch project…", run: switchProject },
+    { g: "Actions", ic: "⟨", t: "Toggle sidebar", run: () => toggleSide() },
+  ].filter(Boolean);
+  const seen = seenMap();
+  const runs = [...(S.runs || [])].sort((a, b) => (b.status === "running") - (a.status === "running") || isUnread(b, seen) - isUnread(a, seen) || b.updated_at - a.updated_at)
+    .map((r) => ({ g: "Conversations", dot: runState(r), ic: r.spec.mode === "orchestra" ? "⎇" : "›", t: r.goal, k: `${STATE_LABEL[runState(r)]} · ${ago(r.updated_at)}`, extra: r.branch, run: () => go(runHash(r)) }));
+  const projects = recents().filter((p) => p !== ws.root).map((p) => ({ g: "Projects", ic: "▣", t: baseName(p), k: p, run: guard(async () => { if (!(await openProject(p, h("div")))) switchProject(); }) }));
+  const all = [...actions, ...runs, ...projects];
+  const q = h("input", { placeholder: "Jump to a conversation, project or action…" });
+  const res = h("div", { class: "res" });
+  let items = [], on = 0;
+  const paint = () => {
+    const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    items = all.filter((it) => { const hay = (it.t + " " + (it.k || "") + " " + (it.extra || "")).toLowerCase(); return words.every((w) => hay.includes(w)); });
+    if (!words.length) items = [...actions, ...runs.slice(0, 8), ...projects];
+    on = Math.min(on, Math.max(0, items.length - 1));
+    const kids = []; let g = null;
+    items.slice(0, 60).forEach((it, i) => {
+      if (it.g !== g) { g = it.g; kids.push(h("div", { class: "grp", text: g })); }
+      kids.push(h("div", { class: "it" + (i === on ? " on" : ""), onmousemove: () => { if (on !== i) { on = i; paint(); } }, onclick: () => pick(i) },
+        it.dot ? h("span", { class: "sdot " + it.dot, style: { width: "7px", height: "7px", borderRadius: "50%", flex: "none" } }) : null,
+        h("span", { class: "faint", style: { width: "14px", textAlign: "center" }, text: it.ic }), h("span", { class: "t", text: it.t }), it.k && h("span", { class: "k", text: it.k })));
+    });
+    res.replaceChildren(...(kids.length ? kids : [h("div", { class: "it faint", text: "Nothing matches." })]));
+    res.querySelector(".it.on")?.scrollIntoView({ block: "nearest" });
+  };
+  const pick = (i) => { const it = items[i]; if (!it) return; close(); it.run(); };
+  q.addEventListener("input", () => { on = 0; paint(); });
+  q.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); on = Math.min(items.length - 1, on + 1); paint(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); on = Math.max(0, on - 1); paint(); }
+    else if (e.key === "Enter") { e.preventDefault(); pick(on); }
+  });
+  const close = modal(h("div", {}, q, res, h("div", { class: "hint" }, h("span", { text: "↑↓ move" }), h("span", { text: "↵ open" }), h("span", { text: "esc close" }), h("span", { class: "grow" }), h("span", { text: baseName(ws.root) }))), { cls: "pal" });
+  paint(); setTimeout(() => q.focus());
+}
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") { e.preventDefault(); palette(); }
+});
+// Coming back to the tab counts as looking at the open conversation.
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.detail && S.view && S.view.id === S.detail.run.id) markSeen(S.detail.run); });
 
 // ---------- live events ----------
 let refetchT = null;
@@ -1485,11 +1902,30 @@ function connectEvents() {
     const ev = JSON.parse(msg.data);
     const runId = ev.run ? ev.run.id : ev.step ? ev.step.run_id : ev.run_id;
     if (ev.kind === "log") { if (S.view && S.view.id === runId) setLive(ev.message); return; }
-    if (ev.kind === "run" && S.runs) { const i = S.runs.findIndex((r) => r.id === ev.run.id); if (i >= 0) S.runs[i] = ev.run; }
+    if (ev.kind === "run" && S.runs) {
+      const i = S.runs.findIndex((r) => r.id === ev.run.id);
+      if (i >= 0) { const before = S.runs[i]; S.runs[i] = ev.run; announce(before, ev.run); }
+    }
     if (S.view && S.view.id === runId && S.view.refresh) { clearTimeout(refetchT); refetchT = setTimeout(() => S.view.refresh().catch(() => {}), 120); }
     if (ev.kind === "run" || ev.kind === "deleted") refreshSide();
   };
   S.es.onerror = () => { S.es.close(); S.es = null; setTimeout(connectEvents, 2000); };
+}
+// A task you are not looking at finished or stopped: say so, with a way to
+// jump there. Desktop notification too, if the tab is in the background.
+function announce(before, run) {
+  if (before.status !== "running" || run.status === "running") return;
+  const watching = S.view && S.view.id === run.id && !document.hidden;
+  if (watching) return;
+  const st = runState(run);
+  const msg = (st === "done" ? "✓ Finished: " : st === "error" ? "⚠ Stopped: " : "⏸ Paused: ") + firstLine(run.goal, 60);
+  if (!(S.view && S.view.id === run.id)) toast(msg, false, { label: "Open", run: () => go(runHash(run)) });
+  if (document.hidden && store.get("notify", false) && "Notification" in window && Notification.permission === "granted") {
+    try {
+      const n = new Notification(msg, { body: (run.error ? firstLine(run.error, 140) + "\n" : "") + baseName(wsKey()), tag: run.id });
+      n.onclick = () => { window.focus(); go(runHash(run)); n.close(); };
+    } catch {}
+  }
 }
 let sideT = null;
 function refreshSide() {
@@ -1497,7 +1933,8 @@ function refreshSide() {
   sideT = setTimeout(async () => {
     try {
       await loadState(); await loadRuns();
-      const side = $(".side"); if (side) side.replaceWith(sideEl());
+      replaceSide();
+      if (S.view && S.view.kind === "home") S.view.refresh();
     } catch {}
   }, 250);
 }

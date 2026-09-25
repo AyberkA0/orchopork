@@ -191,9 +191,20 @@ impl GitRepo {
     /// sit in a cached prompt prefix.
     pub async fn ls_files_at(&self, commit: &str) -> Result<Vec<String>> {
         validate_commit(commit)?;
+        // A commit's tree never changes, and every turn of a run asks for
+        // the same one: list it once per process (big repos list slowly).
+        static CACHE: std::sync::Mutex<Vec<(String, std::sync::Arc<Vec<String>>)>> = std::sync::Mutex::new(Vec::new());
+        if let Some((_, v)) = CACHE.lock().unwrap().iter().find(|(c, _)| c == commit) {
+            return Ok(v.as_ref().clone());
+        }
         let out = self.run(&["ls-tree", "-r", "--name-only", commit]).await?;
         let mut files: Vec<String> = out.lines().map(str::to_string).collect();
         files.sort();
+        let mut cache = CACHE.lock().unwrap();
+        if cache.len() >= 16 {
+            cache.remove(0);
+        }
+        cache.push((commit.to_string(), std::sync::Arc::new(files.clone())));
         Ok(files)
     }
 

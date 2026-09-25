@@ -218,8 +218,9 @@ pub(super) struct InstallReq {
 }
 
 /// Installs a preset agent's CLI with its fixed npm command.
-pub(super) async fn install_agent(Json(req): Json<InstallReq>) -> ApiResult {
+pub(super) async fn install_agent(State(s): State<Shared>, Json(req): Json<InstallReq>) -> ApiResult {
     let log = crate::acp::install(&req.id).await?;
+    s.models_changed(); // the agent's launcher is on PATH now
     let tail: Vec<&str> = log.lines().rev().take(6).collect();
     Ok(Json(json!({ "ok": true, "log": tail.into_iter().rev().collect::<Vec<_>>().join("\n") })))
 }

@@ -41,6 +41,10 @@ pub struct AppState {
     /// Discovered ACP session options per agent id (discovery spawns the
     /// agent, so it is done once per server run unless refreshed).
     agent_options: tokio::sync::Mutex<std::collections::HashMap<String, Value>>,
+    /// The last `/api/models` answer: (when, fingerprint of what it depends
+    /// on, body). Pickers ask for it often; rescanning every provider each
+    /// time is what made them slow.
+    models_cache: Mutex<Option<(std::time::Instant, String, Value)>>,
     engine: RwLock<Option<Engine>>,
     wizard: Mutex<Wizard>,
     /// Pre-filled in the workspace picker (the `--workspace` argument).
@@ -56,6 +60,7 @@ impl AppState {
     pub async fn new(default_root: PathBuf) -> Result<Shared> {
         let state = Arc::new(Self {
             cloud_models: Default::default(),
+            models_cache: Mutex::new(None),
             agent_options: Default::default(),
             engine: RwLock::new(None),
             wizard: Mutex::new(Wizard::default()),
@@ -76,9 +81,15 @@ impl AppState {
     /// provider's API lists that looks like a chat model.
     async fn cloud_models(&self, ws: &Workspace, id: ProviderId) -> Vec<String> {
         let mut out: Vec<String> = pricing::suggested_models(id).into_iter().map(String::from).collect();
-        let mut cache = self.cloud_models.lock().await;
-        let fresh =
-            cache.get(&id).filter(|(t, _)| t.elapsed() < std::time::Duration::from_secs(600)).map(|(_, v)| v.clone());
+        // The lock is not held across the network call, so one slow provider
+        // never blocks the others.
+        let fresh = self
+            .cloud_models
+            .lock()
+            .await
+            .get(&id)
+            .filter(|(t, _)| t.elapsed() < std::time::Duration::from_secs(600))
+            .map(|(_, v)| v.clone());
         let live = match fresh {
             Some(v) => v,
             None => {
@@ -98,7 +109,7 @@ impl AppState {
                         _ => true,
                     })
                     .collect();
-                cache.insert(id, (std::time::Instant::now(), v.clone()));
+                self.cloud_models.lock().await.insert(id, (std::time::Instant::now(), v.clone()));
                 v
             }
         };
@@ -108,6 +119,11 @@ impl AppState {
             }
         }
         out
+    }
+
+    /// Forget the cached model list (after models were added or removed).
+    fn models_changed(&self) {
+        *self.models_cache.lock().unwrap() = None;
     }
 
     fn engine(&self) -> Result<Engine> {
@@ -467,6 +483,7 @@ struct OpenWorkspaceReq {
 /// One-step replacement for the wizard: bind a directory as the workspace.
 /// A non-repository is refused with `needs_git_init` unless `git_init`.
 async fn open_workspace(State(s): State<Shared>, Json(req): Json<OpenWorkspaceReq>) -> ApiResult {
+    s.models_changed();
     let path = crate::fsutil::canonical(&expand_home(&req.path))
         .map_err(|e| Error::InvalidRequest(format!("{}: {e}", req.path.trim())))?;
     if !path.is_dir() {
@@ -491,50 +508,98 @@ async fn open_workspace(State(s): State<Shared>, Json(req): Json<OpenWorkspaceRe
 
 /// Every model the user can pick right now: live local models plus the
 /// known models of cloud providers that have a key.
+/// How long a model list is reused. Short enough that a model pulled in a
+/// terminal shows up quickly; long enough that opening pickers is instant.
+const MODELS_TTL: std::time::Duration = std::time::Duration::from_secs(20);
+
 async fn available_models(State(s): State<Shared>) -> ApiResult {
     let engine = s.engine()?;
     let ws = engine.workspace();
-    let mut out = Vec::new();
-    let mut notes = Vec::new();
     let cfg = ws.config();
-    for id in ws.gateway.configured() {
-        if id == ProviderId::Compat {
-            let router = ws.gateway.provider(id)?;
-            let models = router.list_models().await.unwrap_or_default();
-            for e in &cfg.endpoints {
-                let mine: Vec<&String> = models.iter().filter(|m| m.starts_with(&format!("{}/", e.id))).collect();
-                if mine.is_empty() {
-                    notes.push(format!("{}: no models listed (is it reachable?)", e.name));
+    // Anything the answer depends on: a different workspace, config or set
+    // of configured providers makes the cached answer stale.
+    let fingerprint = format!(
+        "{}|{:?}|{}",
+        ws.root.display(),
+        ws.gateway.configured(),
+        serde_json::to_string(&cfg).unwrap_or_default()
+    );
+    if let Some((_, _, v)) =
+        s.models_cache.lock().unwrap().as_ref().filter(|(t, f, _)| t.elapsed() < MODELS_TTL && *f == fingerprint)
+    {
+        return Ok(Json(v.clone()));
+    }
+
+    // Every provider is asked at the same time: the slowest one sets the
+    // wait, not the sum of all of them.
+    let ids = ws.gateway.configured();
+    let mut set = tokio::task::JoinSet::new();
+    for (i, id) in ids.iter().copied().enumerate() {
+        let (s, engine, cfg) = (s.clone(), engine.clone(), cfg.clone());
+        set.spawn(async move {
+            let ws = engine.workspace();
+            let mut out = Vec::new();
+            let mut notes = Vec::new();
+            if id == ProviderId::Compat {
+                let models = match ws.gateway.provider(id) {
+                    Ok(router) => router.list_models().await.unwrap_or_default(),
+                    Err(_) => vec![],
+                };
+                for e in &cfg.endpoints {
+                    let mine: Vec<&String> = models.iter().filter(|m| m.starts_with(&format!("{}/", e.id))).collect();
+                    if mine.is_empty() {
+                        notes.push(format!("{}: no models listed (is it reachable?)", e.name));
+                    }
+                    out.extend(mine.into_iter().map(
+                        |m| json!({ "provider": id, "model": m, "local": e.local, "efforts": [], "endpoint": e.name }),
+                    ));
                 }
-                out.extend(mine.into_iter().map(
-                    |m| json!({ "provider": id, "model": m, "local": e.local, "efforts": [], "endpoint": e.name }),
-                ));
+            } else if id.is_local() {
+                match ws.gateway.provider(id) {
+                    Ok(provider) => {
+                        match tokio::time::timeout(std::time::Duration::from_secs(4), provider.list_models()).await {
+                            Ok(Ok(models)) => out.extend(
+                                models
+                                    .into_iter()
+                                    .map(|m| json!({ "provider": id, "model": m, "local": true, "efforts": [] })),
+                            ),
+                            Ok(Err(e)) => notes.push(e.to_string()),
+                            Err(_) => notes.push(format!("{}: timed out", id.as_str())),
+                        }
+                    }
+                    Err(e) => notes.push(e.to_string()),
+                }
+            } else {
+                for m in s.cloud_models(ws, id).await {
+                    let efforts = pricing::effort_levels(id, &m);
+                    out.push(json!({ "provider": id, "model": m, "local": false, "efforts": efforts }));
+                }
             }
-        } else if id.is_local() {
-            let provider = ws.gateway.provider(id)?;
-            match tokio::time::timeout(std::time::Duration::from_secs(4), provider.list_models()).await {
-                Ok(Ok(models)) => out.extend(
-                    models.into_iter().map(|m| json!({ "provider": id, "model": m, "local": true, "efforts": [] })),
-                ),
-                Ok(Err(e)) => notes.push(e.to_string()),
-                Err(_) => notes.push(format!("{}: timed out", id.as_str())),
-            }
-        } else {
-            for m in s.cloud_models(ws, id).await {
-                let efforts = pricing::effort_levels(id, &m);
-                out.push(json!({ "provider": id, "model": m, "local": false, "efforts": efforts }));
-            }
+            (i, out, notes)
+        });
+    }
+    let mut parts = Vec::new();
+    while let Some(r) = set.join_next().await {
+        if let Ok(p) = r {
+            parts.push(p);
         }
+    }
+    parts.sort_by_key(|(i, ..)| *i); // same order as before, whoever answered first
+    let (mut out, mut notes) = (Vec::new(), Vec::new());
+    for (_, o, n) in parts {
+        out.extend(o);
+        notes.extend(n);
     }
     // External agents: offered when their launcher is on PATH.
     let mut agents = Vec::new();
-    for a in ws.config().external_agents {
+    for a in &cfg.external_agents {
         let available = crate::acp::resolve_command(&a.command).is_some();
         agents.push(json!({ "provider": "acp", "model": a.id, "name": a.name, "available": available,
             "command": format!("{} {}", a.command, a.args.join(" ")) }));
     }
-    let default = ws.config().routing.actor;
-    Ok(Json(json!({ "models": out, "agents": agents, "notes": notes, "default": default })))
+    let body = json!({ "models": out, "agents": agents, "notes": notes, "default": cfg.routing.actor });
+    *s.models_cache.lock().unwrap() = Some((std::time::Instant::now(), fingerprint, body.clone()));
+    Ok(Json(body))
 }
 
 /// Tests a cloud API key, then stores it and lists the models it unlocks.
@@ -556,6 +621,7 @@ async fn add_cloud_key(s: &Shared, provider: ProviderId, api_key: String) -> Api
         .map_err(|e| Error::Provider(format!("the key was rejected: {e}")))?;
     ws.set_provider_key(provider, &key)?;
     s.cloud_models.lock().await.remove(&provider);
+    s.models_changed();
     Ok(Json(json!({ "added": provider.as_str(), "models": s.cloud_models(ws, provider).await })))
 }
 
@@ -617,6 +683,7 @@ fn slug(name: &str, taken: &[String]) -> String {
 }
 
 async fn add_model(State(s): State<Shared>, Json(req): Json<AddModelReq>) -> ApiResult {
+    s.models_changed();
     let engine = s.engine()?;
     let ws = engine.workspace();
     let timeout = std::time::Duration::from_secs(15);
@@ -694,6 +761,7 @@ enum RemoveModelReq {
 }
 
 async fn remove_model(State(s): State<Shared>, Json(req): Json<RemoveModelReq>) -> ApiResult {
+    s.models_changed();
     let engine = s.engine()?;
     let ws = engine.workspace();
     match req {
@@ -731,7 +799,19 @@ async fn ollama_pull(State(s): State<Shared>, Json(req): Json<PullReq>) -> Resul
     if !resp.status().is_success() {
         return Err(Error::Provider(format!("ollama pull: HTTP {}", resp.status())).into());
     }
-    let body = axum::body::Body::from_stream(resp.bytes_stream());
+    // The model list changes once the download is over (or aborted).
+    struct Refresh(Shared);
+    impl Drop for Refresh {
+        fn drop(&mut self) {
+            self.0.models_changed();
+        }
+    }
+    let refresh = Refresh(s.clone());
+    let stream = tokio_stream::StreamExt::map(resp.bytes_stream(), move |chunk| {
+        let _keep = &refresh;
+        chunk
+    });
+    let body = axum::body::Body::from_stream(stream);
     Ok(([(header::CONTENT_TYPE, "application/x-ndjson")], body).into_response())
 }
 
@@ -745,9 +825,8 @@ struct ProbeReq {
 /// What an external agent lets you choose (model, effort, …), as it
 /// advertises it over ACP.
 async fn agent_options(State(s): State<Shared>, Json(req): Json<ProbeReq>) -> ApiResult {
-    let mut cache = s.agent_options.lock().await;
     if !req.refresh
-        && let Some(v) = cache.get(&req.id)
+        && let Some(v) = s.agent_options.lock().await.get(&req.id)
     {
         return Ok(Json(v.clone()));
     }
@@ -759,9 +838,11 @@ async fn agent_options(State(s): State<Shared>, Json(req): Json<ProbeReq>) -> Ap
         .into_iter()
         .find(|a| a.id == req.id)
         .ok_or_else(|| Error::NotFound(format!("external agent {}", req.id)))?;
+    // Discovery starts the agent: no lock is held meanwhile, so asking
+    // two different agents at once does not queue one behind the other.
     let options = crate::acp::discover(&agent, &ws.root).await?;
     let v = json!({ "options": options });
-    cache.insert(req.id, v.clone());
+    s.agent_options.lock().await.insert(req.id, v.clone());
     Ok(Json(v))
 }
 
@@ -793,6 +874,7 @@ async fn propose_team(State(s): State<Shared>, Json(req): Json<ProposeReq>) -> A
 // ---- settings ---------------------------------------------------------------------
 
 async fn put_config(State(s): State<Shared>, Json(mut cfg): Json<Config>) -> ApiResult {
+    s.models_changed();
     let engine = s.engine()?;
     let ws = engine.workspace();
     cfg.onboarded = ws.config().onboarded;
@@ -809,6 +891,7 @@ struct ProviderKeyReq {
 }
 
 async fn set_provider_key(State(s): State<Shared>, Json(req): Json<ProviderKeyReq>) -> ApiResult {
+    s.models_changed();
     let engine = s.engine()?;
     let ws = engine.workspace();
     ws.set_provider_key(req.provider, &req.api_key)?;
@@ -890,10 +973,26 @@ async fn create_run(State(s): State<Shared>, Json(req): Json<CreateRunReq>) -> A
     Ok(Json(json!({ "run": run })))
 }
 
-async fn get_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult {
+#[derive(Deserialize)]
+struct RunDetailQuery {
+    /// Only steps after this one: a viewer that already has the earlier
+    /// steps fetches just what is new instead of the whole history.
+    after: Option<i64>,
+}
+
+async fn get_run(
+    State(s): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    axum::extract::Query(q): axum::extract::Query<RunDetailQuery>,
+) -> ApiResult {
     let engine = s.engine()?;
-    let (run, steps) = engine.run_detail(&id).await?;
-    Ok(Json(json!({ "run": run, "steps": steps, "active": engine.is_active(&id) })))
+    let (run, steps) = match q.after {
+        Some(seq) => engine.run_detail_after(&id, seq).await?,
+        None => engine.run_detail(&id).await?,
+    };
+    // `step_count` lets an incremental viewer notice a rewind (fewer steps
+    // than it holds) and refetch everything.
+    Ok(Json(json!({ "run": run, "steps": steps, "active": engine.is_active(&id), "partial": q.after.is_some() })))
 }
 
 async fn delete_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult {

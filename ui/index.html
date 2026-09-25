@@ -180,6 +180,18 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .addcard:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
 .addcard b { font-size: 13.5px; }
 .conn { display: grid; grid-template-columns: 1fr auto auto; gap: 6px 10px; align-items: center; }
+.fp { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; text-align: left; }
+.fp .crumbs { display: flex; flex-wrap: wrap; gap: 2px; padding: 8px 10px; background: var(--bg2); border-bottom: 1px solid var(--line); font: 12px var(--mono); }
+.fp .crumbs span { cursor: pointer; padding: 2px 4px; border-radius: 6px; } .fp .crumbs span:hover { background: var(--glow); }
+.fp .dirs { max-height: 280px; overflow: auto; }
+.fp .foot { display: flex; gap: 8px; align-items: center; padding: 10px; border-top: 1px solid var(--line); background: var(--bg2); }
+.recent { display: grid; gap: 6px; text-align: left; }
+.recent .mitem { border: 1px solid var(--line); border-radius: 10px; }
+.projbtn { width: 100%; text-align: left; display: flex; gap: 8px; align-items: center; margin-top: 10px; padding: 8px 10px; }
+.projbtn .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice { border: 1px solid var(--warn); border-radius: 12px; padding: 12px; margin-top: 10px; text-align: left; font-size: 13px; }
+.found { display: grid; gap: 6px; }
+.found .mitem { border: 1px solid var(--line); border-radius: 10px; cursor: default; }
 .mitem.off { opacity: .5; cursor: default; } .mitem.off:hover { background: none; }
 .agents-grid { display: grid; grid-template-columns: 150px 1fr auto auto auto; gap: 8px; align-items: center; margin-top: 10px; }
 .msg-user.pending div { opacity: .55; }
@@ -299,6 +311,7 @@ async function route() {
     h("main", { class: "main" }, h("div", { class: "hero" }, sk("sk-title"), h("div", { style: { width: "min(760px,100%)" } }, sk("sk-block"))))));
   try { await loadState(); } catch (e) { $("#root").replaceChildren(h("div", { class: "center" }, h("div", { class: "card", text: "Cannot reach orchopork: " + e.message }))); return; }
   if (!S.state.workspace) return viewOpen();
+  remember(S.state.workspace.root);
   shell(viewFor(location.hash));
   loadRuns().then(() => { const side = $(".side"); if (side) side.replaceWith(sideEl()); }).catch(() => {});
   loadModels().catch(() => {}); // warm the model picker
@@ -319,7 +332,9 @@ function sideEl() {
     h("div", { class: "top" },
       h("div", { class: "row" }, h("div", { class: "brand" }, h("i"), "orchopork"), h("span", { class: "grow" }),
         h("button", { class: "ghost", title: "Hide sidebar", text: "⟨", onclick: () => toggleSide() })),
-      h("button", { style: { width: "100%", marginTop: "12px", textAlign: "left" }, onclick: () => go("#/"), text: "＋  New chat" })),
+      h("button", { class: "ghost projbtn", title: ws.root + " — switch project", onclick: switchProject }, h("span", { text: "▣" }), h("span", { class: "n grow", text: baseName(ws.root) }), h("span", { class: "faint", text: "⇅" })),
+      ws.vcs && !ws.vcs.is_repo && h("div", { class: "small warn", style: { padding: "6px 4px 0" } }, "Not a git repository yet. ", h("a", { href: "#", text: "Initialize", onclick: guard(async (e) => { e.preventDefault(); await api("/api/workspace", { body: { path: ws.root, git_init: true } }); await loadState(); refreshSide(); toast("Repository initialized"); }) })),
+      h("button", { style: { width: "100%", marginTop: "10px", textAlign: "left" }, onclick: () => go("#/"), text: "＋  New chat" })),
     h("div", { class: "hist" },
       orch.length > 0 && [h("h6", { text: "Orchestras" }), orch.map(item)],
       chats.length > 0 && [h("h6", { text: "Chats" }), chats.map(item)],
@@ -329,7 +344,7 @@ function sideEl() {
       h("div", { class: "row small" }, h("span", { class: "muted", text: `${money(b.spent_usd)} of ${money(b.cap_usd)}` }), h("span", { class: "grow" }), h("span", { class: "faint", text: "this month" })),
       h("div", { class: "meter" }, h("div", { style: { width: pct + "%" } })),
       h("div", { class: "row" }, h("button", { class: "ghost", style: { padding: "6px 8px" }, onclick: () => go("#/models"), text: "⚙  Models & settings" })),
-      h("div", { class: "small faint mono", title: ws.root, style: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, text: ws.root })));
+      h("div", { class: "small faint mono", title: ws.root, style: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }, text: ws.root, onclick: switchProject })));
 }
 // The shell (sidebar + frame) persists across navigation; only the main
 // area is swapped, with a short entrance animation.
@@ -348,29 +363,95 @@ function toggleSide() {
 }
 const topbar = (...kids) => h("div", { class: "topbar" }, h("button", { class: "ghost menu-btn", text: "☰", style: { display: S.sideOpen ? "none" : "" }, onclick: toggleSide }), ...kids);
 
-// ---------- open a project (replaces the old wizard) ----------
-function viewOpen() {
-  const input = h("input", { value: S.state.default_root || "", class: "mono" });
-  const go_ = guard(async (btn, init) => {
-    btn.disabled = true;
-    try {
-      const r = await api("/api/workspace", { body: { path: input.value, git_init: !!init } });
-      if (r.needs_git_init) {
-        if (confirm(`${r.path} is not a git repository.\n\norchopork runs every task on its own git branch. Initialize a repository here?`)) return go_(btn, true);
-        return;
-      }
-      route();
-    } finally { btn.disabled = false; }
+// ---------- projects: pick, create, switch ----------
+const baseName = (p) => (p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p;
+const recents = () => store.get("recent", []);
+function remember(path) { store.set("recent", [path, ...recents().filter((p) => p !== path)].slice(0, 8)); }
+
+// Opens `path` as the project. A folder that is not its own git repo
+// (including one nested inside another repo) gets an inline explanation
+// and a one-click "initialize" instead of silently using the outer repo.
+async function openProject(path, noticeBox, init) {
+  const r = await api("/api/workspace", { body: { path, git_init: !!init } });
+  if (r.needs_git_init) {
+    noticeBox.replaceChildren(h("div", { class: "notice enter" },
+      r.enclosing_repo
+        ? [h("b", { text: `${baseName(r.path)} is inside another repository` }), h("p", { class: "small muted", text: `Without its own repository, tasks here would branch ${r.enclosing_repo} instead of this folder.` })]
+        : [h("b", { text: `${baseName(r.path)} is not a git repository yet` }), h("p", { class: "small muted", text: "Every task runs on its own git branch, so the folder needs a repository. Your files are not changed." })],
+      h("div", { class: "row" }, h("span", { class: "grow" }), h("button", { class: "primary", text: "Initialize repository & open", onclick: guard(async (e) => { e.target.disabled = true; try { if (await openProject(r.path, noticeBox, true)) noticeBox.dispatchEvent(new Event("opened")); } finally { e.target.disabled = false; } }) }))));
+    return false;
+  }
+  remember(r.path); S.models = null; S.runs = null; S.state = null;
+  location.hash = "#/"; await route();
+  toast(`Opened ${baseName(r.path)}`);
+  return true;
+}
+
+function folderPicker(start, noticeBox, onOpened) {
+  const box = h("div", { class: "fp" });
+  let cur = null;
+  const load = guard(async (path) => {
+    box.replaceChildren(h("div", { style: { padding: "10px" } }, Array.from({ length: 5 }, () => sk("sk-row"))));
+    const d = await api("/api/fs/browse?path=" + encodeURIComponent(path || ""));
+    cur = d; noticeBox.replaceChildren();
+    const sep = d.path.includes("\\") ? "\\" : "/";
+    const parts = d.path.split(/[\\/]/).filter(Boolean);
+    const crumbs = h("div", { class: "crumbs" }, d.path.startsWith("/") && h("span", { text: "/", onclick: () => load("/") }),
+      parts.map((p, i) => { const full = (d.path.startsWith("/") ? "/" : "") + parts.slice(0, i + 1).join(sep) + (i === 0 && /:$/.test(p) ? sep : ""); return [h("span", { text: p, onclick: () => load(full) }), i < parts.length - 1 && h("i", { class: "faint", text: sep })]; }),
+      h("span", { class: "grow" }), d.home && h("span", { title: "Home", text: "⌂", onclick: () => load(d.home) }));
+    const dirs = h("div", { class: "dirs" },
+      d.parent && h("div", { class: "mitem", onclick: () => load(d.parent) }, h("span", { text: "↰" }), h("span", { class: "muted", text: "Up" })),
+      d.dirs.map((x) => h("div", { class: "mitem", title: x.path, onclick: () => load(x.path), ondblclick: () => go_(x.path) },
+        h("span", { text: "▸" }), h("span", { class: "grow", text: x.name }),
+        x.project ? h("span", { class: "pill done", text: "project" }) : x.repo && h("span", { class: "pill", text: "git" }))),
+      !d.dirs.length && h("div", { class: "mitem muted", style: { cursor: "default" }, text: "No sub-folders." }));
+    const nameIn = h("input", { placeholder: "new-folder-name", style: { display: "none" } });
+    const mk = h("button", { class: "ghost", text: "＋ New folder", onclick: guard(async () => {
+      if (nameIn.style.display === "none") { nameIn.style.display = ""; nameIn.focus(); return; }
+      if (!nameIn.value.trim()) return;
+      const r = await api("/api/fs/mkdir", { body: { parent: d.path, name: nameIn.value } });
+      go_(r.path);
+    }) });
+    nameIn.addEventListener("keydown", (e) => { if (e.key === "Enter") mk.click(); });
+    const openBtn = h("button", { class: "primary", text: `Open ${baseName(d.path)}`, onclick: () => go_(d.path) });
+    box.replaceChildren(crumbs, dirs, h("div", { class: "foot" }, mk, h("div", { class: "grow" }, nameIn), openBtn));
   });
-  const btn = h("button", { class: "primary", text: "Open", onclick: () => go_(btn) });
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") go_(btn); });
-  $("#root").replaceChildren(h("div", { class: "center", style: { minHeight: "100vh" } }, h("div", { class: "stack", style: { textAlign: "center" } },
+  const go_ = guard(async (path) => { if (await openProject(path, noticeBox)) onOpened && onOpened(); });
+  load(start);
+  box.current = () => cur && cur.path;
+  return box;
+}
+
+function projectChooser(onDone) {
+  const notice = h("div");
+  const current = S.state && S.state.workspace && S.state.workspace.root;
+  const rec = recents().filter((p) => p !== current);
+  const start = current ? current.replace(/[\\/][^\\/]+[\\/]?$/, "") : (rec[0] ? rec[0].replace(/[\\/][^\\/]+[\\/]?$/, "") : S.state.default_root);
+  const picker = folderPicker(start, notice, onDone);
+  notice.addEventListener("opened", () => onDone && onDone());
+  const open = (p) => guard(async () => { if (await openProject(p, notice)) onDone && onDone(); })();
+  return h("div", { class: "stack", style: { gap: "12px", width: "100%" } },
+    rec.length > 0 && [h("div", { class: "mgroup", style: { background: "none", border: 0, padding: 0, position: "static" }, text: "Recent" }),
+      h("div", { class: "recent" }, rec.map((p) => h("div", { class: "mitem", title: p, onclick: () => open(p) }, h("b", { text: baseName(p) }), h("span", { class: "grow small faint mono", style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, text: p }), h("span", { class: "faint", text: "→" }))))],
+    h("div", { class: "mgroup", style: { background: "none", border: 0, padding: 0, position: "static" }, text: "Browse" }),
+    picker, notice,
+    h("p", { class: "small faint", style: { margin: 0 }, text: "Double-click a folder to open it. Your checkout is never modified: every task runs on its own branch in a separate worktree." }));
+}
+
+function switchProject() {
+  let close;
+  const busy = S.detail && S.detail.active;
+  close = modal(h("div", {}, h("h2", { text: "Switch project" }),
+    busy && h("p", { class: "small warn", text: "A task is running here; pause it before switching." }),
+    projectChooser(() => close())), { wide: true });
+}
+
+function viewOpen() {
+  $("#root").replaceChildren(h("div", { class: "center", style: { minHeight: "100vh", padding: "24px 16px" } }, h("div", { class: "stack", style: { textAlign: "center", width: "min(640px, 100%)" } },
     h("div", { class: "orb", style: { margin: "0 auto 8px" } }),
     h("h1", { style: { margin: 0, fontSize: "28px", letterSpacing: "-.02em" }, text: "orchopork" }),
-    h("p", { class: "muted", style: { margin: "0 0 10px" }, text: "Local-first AI agents, from a single helper to a whole chain of command. Pick the project folder to work in." }),
-    h("div", { class: "row" }, h("div", { class: "grow" }, input), btn),
-    h("p", { class: "small faint", text: "Your checkout is never modified: every task runs on its own branch in a separate worktree." }))));
-  input.focus();
+    h("p", { class: "muted", style: { margin: "0 0 10px" }, text: "Pick the project folder to work in — or create a new one." }),
+    projectChooser())));
 }
 
 // ---------- home ----------
@@ -451,14 +532,20 @@ async function pickModel({ title, subtitle }) {
           h("span", { class: "ext-badge", text: "ACP" }), h("span", { class: "grow", text: m.name }),
           h("span", { class: "pill", text: m.available ? "your login" : "not installed" }))
       : h("div", { class: "mitem" + (sel && mref(sel) === mref(m) ? " sel" : ""), onclick: () => { sel = m; paint(); retune(); }, ondblclick: () => { sel = m; done(); } },
-          h("span", { class: "p", text: m.provider }), h("span", { class: "grow mono", text: m.model }), h("span", { class: "pill", text: m.local ? "local · free" : "cloud" }));
+          h("span", { class: "grow mono", text: m.endpoint ? m.model.replace(/^[^/]+\//, "") : m.model }), m.efforts && m.efforts.length > 0 && h("span", { class: "pill", text: "effort" }), m.local && h("span", { class: "pill", text: "free" }));
     const paint = () => {
       const f = q.value.toLowerCase();
       const match = (m) => (m.name || "").toLowerCase().includes(f) || mref(m).toLowerCase().includes(f);
       const ag = agents.filter(match), ms = data.models.filter(match);
       const kids = [];
-      if (ag.length) kids.push(h("div", { class: "mgroup", text: "Agents on this computer" }), ...ag.map(row));
-      if (ms.length) kids.push(h("div", { class: "mgroup", text: "Models" }), ...ms.map(row));
+      const ready = ag.filter((a) => a.available), missing = ag.filter((a) => !a.available);
+      if (ready.length) kids.push(h("div", { class: "mgroup", text: "Agents · your login" }), ...ready.map(row));
+      const PNAME = { ollama: "Ollama · local", llamacpp: "llama.cpp · local", claude: "Claude", gemini: "Gemini", deepseek: "DeepSeek" };
+      const byP = new Map();
+      for (const m of ms) { const k = m.endpoint || m.provider; if (!byP.has(k)) byP.set(k, []); byP.get(k).push(m); }
+      for (const [k, list] of byP) kids.push(h("div", { class: "mgroup", text: PNAME[k] || k + (list[0].local ? " · local" : "") }), ...list.map(row));
+      if (missing.length && !f) kids.push(h("div", { class: "mgroup", text: "Not set up yet" }), ...missing.map((a) => h("div", { class: "mitem", onclick: () => { close(); openAddModel().then(() => pickModel({ title, subtitle }).then(resolve)); } },
+        h("span", { class: "ext-badge", text: "ACP" }), h("span", { class: "grow muted", text: a.name }), h("span", { class: "small", style: { color: "var(--accent)" }, text: "Set up →" }))));
       list.replaceChildren(...(kids.length ? kids : [h("div", { class: "mitem muted", text: "Nothing matches." })]));
     };
     q.addEventListener("input", paint);
@@ -558,16 +645,13 @@ const ENDPOINT_PRESETS = [
   { name: "Together", base_url: "https://api.together.xyz/v1", key: "https://api.together.ai/settings/api-keys", blurb: "Open models, hosted" },
   { name: "xAI", base_url: "https://api.x.ai/v1", key: "https://console.x.ai", blurb: "Grok models" },
 ];
-const LOCAL_PRESETS = [
-  { name: "LM Studio", base_url: "http://127.0.0.1:1234/v1", local: true, blurb: "Local server on port 1234" },
-  { name: "vLLM", base_url: "http://127.0.0.1:8000/v1", local: true, blurb: "Local server on port 8000" },
-];
-const AGENT_HINTS = {
-  "claude-code": "Install Claude Code (npm i -g @anthropic-ai/claude-code), run `claude` once to sign in. Needs Node.js for npx.",
-  "gemini-cli": "Install Gemini CLI (npm i -g @google/gemini-cli), run `gemini` once to sign in.",
-  codex: "Install Codex (npm i -g @openai/codex), run `codex` once to sign in. Needs Node.js for npx.",
-};
 const POPULAR_OLLAMA = ["qwen2.5-coder:7b", "qwen2.5-coder:14b", "qwen3:8b", "llama3.1:8b", "deepseek-r1:8b", "gpt-oss:20b"];
+
+// What is on this machine (keys in env, local servers, agent CLIs).
+function detectSetup(fresh) {
+  if (!S.detect || fresh) S.detect = api("/api/setup/detect").catch((e) => { S.detect = null; throw e; });
+  return S.detect;
+}
 
 // Opens the "add a model" flow; resolves with a model to use (or null).
 function openAddModel() {
@@ -586,9 +670,9 @@ function openAddModel() {
         h("div", { class: "chips", style: { justifyContent: "flex-start" } }, models.slice(0, 14).map((m) => h("span", { class: "chip", text: m, onclick: () => finish({ provider, model: m, options: {} }) })), models.length > 14 && h("span", { class: "small faint", text: `+${models.length - 14} more` })),
         h("div", { class: "actions" }, h("button", { class: "ghost", text: "Add another", onclick: step1 }), h("button", { class: "primary", text: "Done", onclick: () => finish(models[0] ? { provider, model: models[0], options: {} } : null) }))));
     };
-    const submit = (btn, payload, provider, label) => guard(async () => {
+    const submit = (btn, payload, provider, label, url, alt) => guard(async () => {
       btn.disabled = true; const old = btn.textContent; btn.textContent = "Connecting…";
-      try { const r = await api("/api/models/add", { body: payload }); success(label || r.added, r.models, provider); }
+      try { const r = await api(url || "/api/models/add", { body: alt || payload }); S.detect = null; success(label || r.added, r.models, provider); }
       finally { btn.disabled = false; btn.textContent = old; }
     })();
 
@@ -664,23 +748,44 @@ function openAddModel() {
         h("div", { class: "actions" }, back(), h("span", { class: "grow" }), h("button", { class: "primary", text: "Use installed models", onclick: guard(async (e) => { e.target.disabled = true; try { const r = await api("/api/models/add", { body: { kind: "ollama", url: url.value } }); success("Ollama", r.models, "ollama"); } finally { e.target.disabled = false; } }) }))));
       check();
     }
+    // Preset agents: status, one-click install, sign-in hint, then an
+    // automatic test. Custom agents: name + command.
     function agentForm(preset) {
-      const name = h("input", { value: preset ? preset.name : "", placeholder: "Name" });
-      const cmd = h("input", { class: "mono", value: preset ? preset.command : "", placeholder: "command that starts the agent in ACP mode" });
-      const btn = h("button", { class: "primary", text: preset && preset.exists ? "Test" : "Test & add", onclick: guard(async () => {
-        btn.disabled = true; btn.textContent = "Starting the agent…";
-        try {
-          if (preset && preset.exists) { await api("/api/agents/probe", { body: { id: preset.id } }); success(preset.name, [preset.id], "acp"); }
-          else { const r = await api("/api/models/add", { body: { kind: "acp", name: name.value, command: cmd.value } }); success(name.value, r.models, "acp"); }
-        } finally { btn.disabled = false; btn.textContent = preset && preset.exists ? "Test" : "Test & add"; }
-      }) });
-      body.replaceChildren(h("div", { class: "enter" }, h("h2", { text: preset ? preset.name : "Custom ACP agent" }),
-        preset && AGENT_HINTS[preset.id] && h("p", { class: "small muted", text: AGENT_HINTS[preset.id] }),
-        preset && preset.exists ? h("p", { class: "small " + (preset.available ? "ok" : "warn"), text: preset.available ? "✓ Found on this computer. Test it to be sure you are signed in." : "Not found on PATH yet." }) : [h("label", { text: "Name" }), name],
-        h("label", { text: "Command" }), cmd,
-        h("p", { class: "small faint", text: "It uses your own login for that tool; its cost is not counted against the budget." }),
-        h("div", { class: "actions" }, back(), h("span", { class: "grow" }), btn)));
-      if (preset && preset.exists) cmd.disabled = true;
+      if (!preset) {
+        const name = h("input", { placeholder: "Name" });
+        const cmd = h("input", { class: "mono", placeholder: "command that starts the agent in ACP mode" });
+        const btn = h("button", { class: "primary", text: "Test & add", onclick: () => submit(btn, { kind: "acp", name: name.value, command: cmd.value }, "acp", name.value) });
+        body.replaceChildren(h("div", { class: "enter" }, h("h2", { text: "Custom ACP agent" }), h("label", { text: "Name" }), name, h("label", { text: "Command" }), cmd,
+          h("div", { class: "actions" }, back(), h("span", { class: "grow" }), btn)));
+        return setTimeout(() => name.focus());
+      }
+      const st = h("div"), log = h("pre", { class: "small", style: { display: "none", maxHeight: "140px", overflow: "auto" } });
+      const test = async () => {
+        st.replaceChildren(h("div", { class: "small muted" }, h("span", { class: "dots" }, h("i"), h("i"), h("i")), " Starting the agent and checking your sign-in…"));
+        try { await api("/api/agents/probe", { body: { id: preset.id } }); S.detect = null; success(preset.name, [preset.id], "acp"); }
+        catch (e) { paint(e.message); }
+      };
+      const paint = async (err) => {
+        const d = (await detectSetup(true)).agents.find((x) => x.id === preset.id) || {};
+        const steps = [];
+        const step = (done, title, extra) => steps.push(h("div", { class: "mitem", style: { cursor: "default" } }, h("span", { class: done ? "ok" : "faint", text: done ? "✓" : "○" }), h("div", { class: "grow" }, h("div", { text: title }), extra)));
+        if (d.install) step(d.node, "Node.js", !d.node && h("a", { class: "small", href: "https://nodejs.org", target: "_blank", rel: "noopener", text: "Install Node.js (LTS) ↗, then come back" }));
+        if (d.install) step(d.cli_installed, `Install ${preset.name}`, !d.cli_installed && h("div", { class: "row small" }, h("code", { text: d.install }), h("span", { class: "grow" }),
+          d.node && h("button", { class: "accent", text: "Install for me", onclick: guard(async (e) => {
+            e.target.disabled = true; e.target.textContent = "Installing… (can take a minute)";
+            try { const r = await api("/api/agents/install", { body: { id: preset.id } }); log.style.display = ""; log.textContent = r.log; await paint(); if ((await detectSetup()).agents.find((x) => x.id === preset.id)?.ready) test(); }
+            finally { e.target.disabled = false; e.target.textContent = "Install for me"; }
+          }) })));
+        if (d.login) step(false, "Sign in once", h("div", { class: "small muted" }, d.key_env_set ? "An API key was found in your environment — it will be used. " : "", "Run ", h("code", { text: d.login }), " in a terminal and follow the prompts. ",
+          h("button", { class: "ghost small", text: "Copy", onclick: () => { navigator.clipboard.writeText(d.login).then(() => toast("Copied")); } })));
+        st.replaceChildren(h("div", { class: "found" }, steps), err ? h("div", { class: "small bad", style: { marginTop: "8px", whiteSpace: "pre-wrap" }, text: err }) : null);
+      };
+      body.replaceChildren(h("div", { class: "enter" }, h("h2", { text: preset.name }),
+        h("p", { class: "small muted", text: "Uses your own login for that tool; its cost is not counted against the budget." }),
+        st, log,
+        h("div", { class: "actions" }, back(), h("span", { class: "grow" }), h("button", { class: "primary", text: "Test connection", onclick: guard(test) }))));
+      st.replaceChildren(sk("sk-row"), sk("sk-row"));
+      paint();
     }
     async function step1() {
       const data = S.models || { models: [], agents: [] };
@@ -688,22 +793,31 @@ function openAddModel() {
       const prov = Object.fromEntries((S.state.workspace.providers || []).map((p) => [p.id, p]));
       const has = (p) => data.models.some((m) => m.provider === p);
       const group = (title, cards) => [h("div", { class: "mgroup", style: { position: "static", background: "none", border: 0, padding: "14px 0 6px" }, text: title }), h("div", { class: "addgrid" }, cards)];
+      const found = h("div", {}, h("div", { class: "found" }, sk("sk-row"), sk("sk-row")));
       body.replaceChildren(h("div", { class: "enter" },
-        h("h2", { text: "Add a model" }), h("p", { class: "small muted", style: { margin: 0 }, text: "Pick where it runs. Everything is tested before it is saved." }),
-        group("On this computer · free", [
-          card("Ollama", "Download and run open models locally", has("ollama") ? "connected" : "recommended", ollamaForm),
-          ...LOCAL_PRESETS.map((p) => card(p.name, p.blurb, null, () => endpointForm(p))),
-          card("llama.cpp", "llama-server (OpenAI-compatible)", prov.llamacpp && prov.llamacpp.configured ? "connected" : null, () => endpointForm({ name: "llama.cpp", base_url: "http://127.0.0.1:8080/v1", local: true })),
-        ]),
-        group("Agents you already use", (data.agents || []).map((a) => card(a.name, a.available ? "Found on this computer" : "Not installed yet", a.available ? "ready" : null,
-          () => agentForm({ id: a.model, name: a.name, command: a.command, exists: true, available: a.available }))).concat([card("Other ACP agent", "Any agent that speaks ACP", null, () => agentForm(null))])),
+        h("h2", { text: "Add a model" }), h("p", { class: "small muted", style: { margin: 0 }, text: "One click for anything already on this computer. Everything is tested before it is saved." }),
+        h("div", { class: "mgroup", style: { position: "static", background: "none", border: 0, padding: "14px 0 6px" }, text: "Found on this computer" }), found,
+        group("Agents (Claude Code, Codex, Gemini CLI…)", (data.agents || []).map((a) => card(a.name, a.available ? "Installed" : "Guided install", a.available ? "ready" : null,
+          () => agentForm({ id: a.model, name: a.name }))).concat([card("Other ACP agent", "Any agent that speaks ACP", null, () => agentForm(null))])),
         group("Cloud · API key", [
-          card("Claude", "Anthropic: Haiku, Sonnet, Opus, Fable", prov.claude && prov.claude.configured ? "connected" : null, () => keyForm("claude", "Claude")),
+          card("Claude", "Haiku, Sonnet, Opus, Fable", prov.claude && prov.claude.configured ? "connected" : null, () => keyForm("claude", "Claude")),
           card("Gemini", "Google Gemini", prov.gemini && prov.gemini.configured ? "connected" : null, () => keyForm("gemini", "Gemini")),
-          card("DeepSeek", "DeepSeek chat & reasoner", prov.deepseek && prov.deepseek.configured ? "connected" : null, () => keyForm("deepseek", "DeepSeek")),
+          card("DeepSeek", "Chat & reasoner", prov.deepseek && prov.deepseek.configured ? "connected" : null, () => keyForm("deepseek", "DeepSeek")),
           ...ENDPOINT_PRESETS.map((p) => card(p.name, p.blurb, null, () => endpointForm(p))),
-          card("Other endpoint", "Any OpenAI-compatible API", null, () => endpointForm({})),
+        ]),
+        group("Local · free", [
+          card("Ollama", "Download and run open models", has("ollama") ? "connected" : null, ollamaForm),
+          card("Other server", "LM Studio, llama.cpp, vLLM or any OpenAI-compatible URL", null, () => endpointForm({ local: true })),
         ])));
+      const d = await detectSetup(true).catch(() => null);
+      if (!d) { found.replaceChildren(h("div", { class: "small faint", text: "Could not scan this computer." })); return; }
+      const items = [];
+      const item = (title, detail, label, onclick) => items.push(h("div", { class: "mitem" }, h("div", { class: "grow" }, h("b", { text: title }), h("div", { class: "small muted", text: detail })),
+        h("button", { class: "accent", text: label, onclick })));
+      for (const k of d.keys) item(`${k.provider[0].toUpperCase() + k.provider.slice(1)} API key`, `from $${k.env}`, "Connect", (e) => submit(e.target, null, k.provider, k.provider, "/api/setup/import-key", { provider: k.provider }));
+      if (d.ollama.running && !has("ollama")) item("Ollama", `${d.ollama.models.length} models at ${d.ollama.url}`, "Use", (e) => submit(e.target, { kind: "ollama", url: d.ollama.url }, "ollama", "Ollama"));
+      for (const sv of d.servers) item(sv.name, sv.base_url, "Connect", (e) => submit(e.target, { kind: "endpoint", name: sv.name, base_url: sv.base_url, local: true, api_key: "" }, "compat", sv.name));
+      found.replaceChildren(items.length ? h("div", { class: "found" }, items) : h("div", { class: "small faint", text: d.ollama.running ? "Everything found here is already connected." : "Nothing new found. Pick an option below." }));
     }
     close = modal(body, { wide: true });
     const orig = close; close = () => { orig(); };
@@ -1297,7 +1411,7 @@ async function viewModels(main) {
       out];
   })));
   paintAgents();
-  const agentsCard = h("div", { class: "card" }, h("h3", { text: "Agents on this computer (ACP)" }),
+  const agentsCard = h("details", { class: "card" }, h("summary", { style: { cursor: "pointer" } }, h("b", { text: "Agent launch commands (advanced)" })),
     h("p", { class: "small muted", style: { margin: 0 }, text: "Claude Code, Gemini CLI, Codex and any other ACP agent can do whole tasks — alone or as members of an orchestra. They use your own login for that tool; their cost is not counted against the budget." }),
     agentsBox,
     h("div", { class: "row", style: { marginTop: "10px" } }, h("button", { class: "ghost", text: "＋ Add agent", onclick: () => {
@@ -1321,6 +1435,9 @@ async function viewModels(main) {
     if (cfg.llamacpp_url) row("llama.cpp", cfg.llamacpp_url, count((m) => m.provider === "llamacpp") > 0, null);
     for (const p of ["claude", "gemini", "deepseek"]) if (pv[p] && pv[p].configured) row(p[0].toUpperCase() + p.slice(1), `${count((m) => m.provider === p)} models · API key stored`, true, { kind: "cloud", provider: p });
     for (const e of cfg.endpoints || []) row(e.name, `${e.base_url}${e.local ? " · local" : ""} · ${count((m) => m.provider === "compat" && m.model.startsWith(e.id + "/"))} models`, count((m) => m.model.startsWith(e.id + "/")) > 0, { kind: "endpoint", id: e.id });
+    for (const a of data.agents || []) rows.push(h("div", {}, h("b", { text: a.name }), h("div", { class: "small muted", text: a.available ? "ACP agent · uses your login" : "not installed" })),
+      h("span", { class: "pill " + (a.available ? "done" : ""), text: a.available ? "ready" : "—" }),
+      a.available ? h("span") : h("button", { class: "ghost", text: "Set up", onclick: async () => { await openAddModel(); S.models = null; route(); } }));
     connBox.replaceChildren(...rows);
     connBox.classList.add("enter");
     notesBox.replaceChildren(data.notes.length > 0 ? h("div", { class: "small warn", style: { marginTop: "8px" }, text: data.notes.join(" · ") }) : "");

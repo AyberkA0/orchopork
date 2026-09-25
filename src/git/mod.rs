@@ -15,6 +15,11 @@ use crate::error::{Error, Result};
 /// versioned: otherwise checkpoints would commit the checkpoint database.
 pub const STATE_DIR: &str = ".orchopork";
 
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let c = |p: &Path| crate::fsutil::canonical(p).unwrap_or_else(|_| p.to_path_buf());
+    c(a) == c(b)
+}
+
 #[derive(Debug, Clone)]
 pub struct GitRepo {
     root: PathBuf,
@@ -61,8 +66,23 @@ impl GitRepo {
         Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
     }
 
+    /// True only when the root is itself the top of a repository. A folder
+    /// nested inside some other repo is *not* a repo of its own: runs there
+    /// would branch the outer project instead of this folder.
     pub async fn is_repo(&self) -> bool {
-        self.run(&["rev-parse", "--git-dir"]).await.is_ok()
+        match self.toplevel().await {
+            Some(top) => same_dir(&top, &self.root),
+            None => false,
+        }
+    }
+
+    /// The enclosing repository when the root sits inside another repo.
+    pub async fn enclosing_repo(&self) -> Option<PathBuf> {
+        self.toplevel().await.filter(|t| !same_dir(t, &self.root))
+    }
+
+    async fn toplevel(&self) -> Option<PathBuf> {
+        self.run(&["rev-parse", "--show-toplevel"]).await.ok().filter(|s| !s.is_empty()).map(PathBuf::from)
     }
 
     /// `git init` if needed, then exclude the state dir. Only called when the
@@ -291,5 +311,21 @@ mod tests {
         repo.worktree_remove(&wt_path, "orchopork/r1").await.unwrap();
         assert!(!wt_path.exists());
         assert!(repo.run(&["branch", "--list", "orchopork/r1"]).await.unwrap().is_empty());
+    }
+
+    /// A folder inside another repo is not a repo of its own: runs there
+    /// must not branch the outer project.
+    #[tokio::test]
+    async fn nested_folder_is_not_its_own_repo() {
+        let d = tempfile::tempdir().unwrap();
+        GitRepo::new(d.path()).init().await.unwrap();
+        let sub = d.path().join("orchotest");
+        std::fs::create_dir(&sub).unwrap();
+        let inner = GitRepo::new(&sub);
+        assert!(!inner.is_repo().await);
+        assert!(inner.enclosing_repo().await.is_some());
+        inner.init().await.unwrap();
+        assert!(inner.is_repo().await);
+        assert!(inner.enclosing_repo().await.is_none());
     }
 }

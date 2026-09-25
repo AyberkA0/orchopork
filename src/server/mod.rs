@@ -3,6 +3,7 @@
 //! this API can run shell commands through the agent, so a web page must
 //! never be able to reach it).
 
+mod setup;
 pub mod wizard;
 
 use std::collections::BTreeMap;
@@ -149,6 +150,11 @@ pub fn router(state: Shared) -> Router {
         .route("/api/wizard/back", post(wizard_back))
         .route("/api/config", axum::routing::put(put_config))
         .route("/api/workspace", post(open_workspace))
+        .route("/api/fs/browse", get(setup::browse))
+        .route("/api/fs/mkdir", post(setup::mkdir))
+        .route("/api/setup/detect", get(setup::detect))
+        .route("/api/setup/import-key", post(setup::import_env_key))
+        .route("/api/agents/install", post(setup::install_agent))
         .route("/api/models", get(available_models))
         .route("/api/agents/probe", post(probe_agent))
         .route("/api/agents/options", post(agent_options))
@@ -469,7 +475,8 @@ async fn open_workspace(State(s): State<Shared>, Json(req): Json<OpenWorkspaceRe
     let repo = crate::git::GitRepo::new(&path);
     if !repo.is_repo().await {
         if !req.git_init {
-            return Ok(Json(json!({ "needs_git_init": true, "path": path })));
+            let inside = repo.enclosing_repo().await;
+            return Ok(Json(json!({ "needs_git_init": true, "path": path, "enclosing_repo": inside })));
         }
         repo.init().await?;
     }
@@ -528,6 +535,28 @@ async fn available_models(State(s): State<Shared>) -> ApiResult {
     }
     let default = ws.config().routing.actor;
     Ok(Json(json!({ "models": out, "agents": agents, "notes": notes, "default": default })))
+}
+
+/// Tests a cloud API key, then stores it and lists the models it unlocks.
+async fn add_cloud_key(s: &Shared, provider: ProviderId, api_key: String) -> ApiResult {
+    let engine = s.engine()?;
+    let ws = engine.workspace();
+    let key = api_key.trim().to_string();
+    if key.is_empty() || provider.is_local() || matches!(provider, ProviderId::Acp | ProviderId::Compat) {
+        return Err(Error::InvalidRequest("paste an API key for Claude, DeepSeek or Gemini".into()).into());
+    }
+    let probe: Box<dyn crate::providers::Provider> = match provider {
+        ProviderId::Claude => Box::new(crate::providers::ClaudeProvider::new(key.clone())),
+        ProviderId::DeepSeek => Box::new(OpenAiCompatProvider::deepseek(key.clone())),
+        _ => Box::new(OpenAiCompatProvider::gemini(key.clone())),
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(15), probe.list_models())
+        .await
+        .map_err(|_| Error::Provider("no answer within 15 s".into()))?
+        .map_err(|e| Error::Provider(format!("the key was rejected: {e}")))?;
+    ws.set_provider_key(provider, &key)?;
+    s.cloud_models.lock().await.remove(&provider);
+    Ok(Json(json!({ "added": provider.as_str(), "models": s.cloud_models(ws, provider).await })))
 }
 
 /// One-step "add a model": tests the connection first and only saves what
@@ -595,21 +624,7 @@ async fn add_model(State(s): State<Shared>, Json(req): Json<AddModelReq>) -> Api
         r.map_err(|_| Error::Provider("no answer within 15 s".into()))?
     };
     let (label, models) = match req {
-        AddModelReq::Cloud { provider, api_key } => {
-            let key = api_key.trim().to_string();
-            if key.is_empty() || provider.is_local() || matches!(provider, ProviderId::Acp | ProviderId::Compat) {
-                return Err(Error::InvalidRequest("paste an API key for Claude, DeepSeek or Gemini".into()).into());
-            }
-            let probe: Box<dyn crate::providers::Provider> = match provider {
-                ProviderId::Claude => Box::new(crate::providers::ClaudeProvider::new(key.clone())),
-                ProviderId::DeepSeek => Box::new(OpenAiCompatProvider::deepseek(key.clone())),
-                _ => Box::new(OpenAiCompatProvider::gemini(key.clone())),
-            };
-            listed(tokio::time::timeout(timeout, probe.list_models()).await)?;
-            ws.set_provider_key(provider, &key)?;
-            s.cloud_models.lock().await.remove(&provider);
-            (provider.as_str().to_string(), s.cloud_models(ws, provider).await)
-        }
+        AddModelReq::Cloud { provider, api_key } => return add_cloud_key(&s, provider, api_key).await,
         AddModelReq::Endpoint { name, base_url, api_key, local, price_in, price_out } => {
             let base = base_url.trim().trim_end_matches('/').to_string();
             if !(base.starts_with("http://") || base.starts_with("https://")) {

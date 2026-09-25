@@ -55,6 +55,63 @@ pub fn default_agents() -> Vec<ExternalAgent> {
     ]
 }
 
+/// How to get a preset agent working: the CLI it wraps, the fixed
+/// command that installs it, and how to sign in once.
+pub struct Setup {
+    pub cli: &'static str,
+    pub install: &'static [&'static str],
+    pub login: &'static str,
+    /// Env var that works instead of an interactive login.
+    pub key_env: &'static str,
+}
+
+pub fn setup_for(id: &str) -> Option<Setup> {
+    Some(match id {
+        "claude-code" => Setup {
+            cli: "claude",
+            install: &["npm", "install", "-g", "@anthropic-ai/claude-code"],
+            login: "claude",
+            key_env: "ANTHROPIC_API_KEY",
+        },
+        "gemini-cli" => Setup {
+            cli: "gemini",
+            install: &["npm", "install", "-g", "@google/gemini-cli"],
+            login: "gemini",
+            key_env: "GEMINI_API_KEY",
+        },
+        "codex" => Setup {
+            cli: "codex",
+            install: &["npm", "install", "-g", "@openai/codex"],
+            login: "codex login",
+            key_env: "OPENAI_API_KEY",
+        },
+        _ => return None,
+    })
+}
+
+/// Runs a preset's fixed install command (never user-supplied text).
+pub async fn install(id: &str) -> Result<String> {
+    let setup = setup_for(id).ok_or_else(|| Error::InvalidRequest(format!("no installer for {id}")))?;
+    let agent = ExternalAgent {
+        id: id.into(),
+        name: id.into(),
+        command: setup.install[0].into(),
+        args: setup.install[1..].iter().map(|s| s.to_string()).collect(),
+    };
+    let child = spawn(&agent, &std::env::temp_dir())
+        .map_err(|_| Error::Provider("npm was not found: install Node.js from nodejs.org first".into()))?;
+    let out = tokio::time::timeout(Duration::from_secs(600), child.wait_with_output())
+        .await
+        .map_err(|_| Error::Provider("install took longer than 10 minutes".into()))??;
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if !out.status.success() {
+        let tail: String =
+            text.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+        return Err(Error::Provider(format!("install failed:\n{tail}")));
+    }
+    Ok(text)
+}
+
 /// What the agent may do without asking a human.
 #[derive(Debug, Clone, Copy)]
 pub struct Policy {

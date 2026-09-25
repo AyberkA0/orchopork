@@ -275,8 +275,7 @@ async fn wizard_workspace(State(s): State<Shared>, Json(req): Json<WorkspaceReq>
     if s.wizard.lock().unwrap().step != wizard::Step::Permissions {
         return Err(Error::Wizard("not at the workspace step".into()).into());
     }
-    let path = tokio::fs::canonicalize(expand_home(&req.path))
-        .await
+    let path = crate::fsutil::canonical(&expand_home(&req.path))
         .map_err(|e| Error::InvalidRequest(format!("{}: {e}", req.path.trim())))?;
     if !path.is_dir() {
         return Err(Error::InvalidRequest(format!("{} is not a directory", path.display())).into());
@@ -407,8 +406,7 @@ struct OpenWorkspaceReq {
 /// One-step replacement for the wizard: bind a directory as the workspace.
 /// A non-repository is refused with `needs_git_init` unless `git_init`.
 async fn open_workspace(State(s): State<Shared>, Json(req): Json<OpenWorkspaceReq>) -> ApiResult {
-    let path = tokio::fs::canonicalize(expand_home(&req.path))
-        .await
+    let path = crate::fsutil::canonical(&expand_home(&req.path))
         .map_err(|e| Error::InvalidRequest(format!("{}: {e}", req.path.trim())))?;
     if !path.is_dir() {
         return Err(Error::InvalidRequest(format!("{} is not a directory", path.display())).into());

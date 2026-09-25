@@ -185,6 +185,16 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .msg-user.pending div { opacity: .55; }
 .live-line { transition: opacity .2s; }
 
+/* skeletons: panels open instantly and shimmer until their data lands */
+.sk { display: block; border-radius: 8px; background: linear-gradient(90deg, var(--bg2) 25%, var(--line) 37%, var(--bg2) 63%); background-size: 400% 100%; animation: shimmer 1.3s ease-in-out infinite; }
+.sk-line { height: 12px; margin: 8px 0; } .sk-line.w40 { width: 40%; } .sk-line.w60 { width: 60%; } .sk-line.w80 { width: 80%; }
+.sk-bubble { height: 44px; width: 55%; border-radius: 16px; margin: 18px 0 18px auto; }
+.sk-block { height: 64px; margin: 12px 0; border-radius: 12px; }
+.sk-row { height: 38px; margin: 6px 0; border-radius: 10px; }
+.sk-title { height: 16px; width: 45%; }
+@keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
+
 /* motion */
 @media (prefers-reduced-motion: no-preference) {
   .shell { transition: grid-template-columns .3s cubic-bezier(.2,.8,.2,1); }
@@ -257,11 +267,13 @@ function toast(msg, err) {
   const t = h("div", { class: "toast" + (err ? " err" : ""), text: msg }); box.append(t);
   setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 220); }, err ? 6000 : 2600);
 }
+const sk = (cls) => h("span", { class: "sk " + cls, "aria-hidden": "true" });
+const skLines = (n, widths = ["w80", "w60", "w40"]) => Array.from({ length: n }, (_, i) => sk("sk-line " + widths[i % widths.length]));
 const guard = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message, true); } };
 function autosize(t) { const f = () => { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 280) + "px"; }; t.addEventListener("input", f); setTimeout(f); }
 
 // ---------- app state ----------
-const S = { state: null, runs: [], models: null, view: null, detail: null, pending: null, es: null, sideOpen: store.get("side", true) };
+const S = { state: null, runs: null, models: null, view: null, detail: null, pending: null, es: null, sideOpen: store.get("side", true) };
 
 async function loadState() { S.state = await api("/api/state"); }
 async function loadRuns() { if (S.state.workspace) S.runs = (await api("/api/runs")).runs; }
@@ -269,16 +281,27 @@ async function loadModels(force) { if (!S.models || force) S.models = await api(
 
 // ---------- router ----------
 window.addEventListener("hashchange", route);
+function viewFor(hash) {
+  const [, a, b] = hash.slice(1).split("/");
+  if (a === "models") return viewModels;
+  if (a === "o" && b === "new") return viewOrchestraDraft;
+  if (a === "o" && b) return (m) => viewOrchestraRun(m, b);
+  if (a === "c" && b) return (m) => viewChat(m, b);
+  return viewHome;
+}
+// Paint first, load after: with a workspace already known the view opens
+// immediately and the sidebar/state refresh in the background; on first
+// load a skeleton app shows while the state arrives.
 async function route() {
+  if (S.state && S.state.workspace) { shell(viewFor(location.hash)); refreshSide(); return; }
+  if (!S.state) $("#root").replaceChildren(h("div", { class: "shell" + (S.sideOpen ? "" : " collapsed") },
+    h("aside", { class: "side" }, h("div", { class: "top" }, sk("sk-title"), sk("sk-row")), h("div", { class: "hist" }, Array.from({ length: 6 }, () => sk("sk-row")))),
+    h("main", { class: "main" }, h("div", { class: "hero" }, sk("sk-title"), h("div", { style: { width: "min(760px,100%)" } }, sk("sk-block"))))));
   try { await loadState(); } catch (e) { $("#root").replaceChildren(h("div", { class: "center" }, h("div", { class: "card", text: "Cannot reach orchopork: " + e.message }))); return; }
   if (!S.state.workspace) return viewOpen();
-  await loadRuns();
-  const [, a, b] = location.hash.slice(1).split("/");
-  if (a === "models") return shell(viewModels);
-  if (a === "o" && b === "new") return shell(viewOrchestraDraft);
-  if (a === "o" && b) return shell((m) => viewOrchestraRun(m, b));
-  if (a === "c" && b) return shell((m) => viewChat(m, b));
-  return shell(viewHome);
+  shell(viewFor(location.hash));
+  loadRuns().then(() => { const side = $(".side"); if (side) side.replaceWith(sideEl()); }).catch(() => {});
+  loadModels().catch(() => {}); // warm the model picker
 }
 const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
 
@@ -290,7 +313,8 @@ function sideEl() {
   const item = (r) => h("div", { class: "hitem" + (r.id === cur ? " sel" : ""), title: r.goal, onclick: () => go(`#/${r.spec.mode === "orchestra" ? "o" : "c"}/${r.id}`) },
     h("span", { class: "ic", text: r.spec.mode === "orchestra" ? "⎇" : "›" }), h("span", { class: "t", text: r.goal }),
     r.status === "running" && h("span", { class: "dot pulse", style: { color: "var(--accent)" } }));
-  const orch = S.runs.filter((r) => r.spec.mode === "orchestra"), chats = S.runs.filter((r) => r.spec.mode !== "orchestra");
+  const runs = S.runs || [];
+  const orch = runs.filter((r) => r.spec.mode === "orchestra"), chats = runs.filter((r) => r.spec.mode !== "orchestra");
   return h("aside", { class: "side" },
     h("div", { class: "top" },
       h("div", { class: "row" }, h("div", { class: "brand" }, h("i"), "orchopork"), h("span", { class: "grow" }),
@@ -299,7 +323,8 @@ function sideEl() {
     h("div", { class: "hist" },
       orch.length > 0 && [h("h6", { text: "Orchestras" }), orch.map(item)],
       chats.length > 0 && [h("h6", { text: "Chats" }), chats.map(item)],
-      !S.runs.length && h("div", { class: "small faint", style: { padding: "12px 8px" }, text: "Your conversations will appear here." })),
+      S.runs === null && h("div", { style: { padding: "8px 6px" } }, Array.from({ length: 5 }, () => sk("sk-row"))),
+      S.runs && !S.runs.length && h("div", { class: "small faint", style: { padding: "12px 8px" }, text: "Your conversations will appear here." })),
     h("div", { class: "foot" },
       h("div", { class: "row small" }, h("span", { class: "muted", text: `${money(b.spent_usd)} of ${money(b.cap_usd)}` }), h("span", { class: "grow" }), h("span", { class: "faint", text: "this month" })),
       h("div", { class: "meter" }, h("div", { style: { width: pct + "%" } })),
@@ -405,10 +430,16 @@ function askMode(goal, verify) {
 }
 
 async function pickModel({ title, subtitle }) {
-  let data;
-  try { data = await loadModels(true); } catch (e) { toast(e.message, true); return null; }
-  const agents = (data.agents || []).map((a) => ({ ...a, local: false, external: true }));
-  const all = [...agents.filter((a) => a.available), ...data.models];
+  // Open with what we already know (or shimmer), refresh in the background.
+  let data = S.models;
+  const pending = loadModels(true);
+  if (!data) {
+    const close = modal(h("div", {}, h("h2", { text: title }), sk("sk-row"), h("div", { class: "mlist", style: { padding: "6px 10px" } }, Array.from({ length: 6 }, () => sk("sk-row")))));
+    try { data = await pending; } catch (e) { close(); toast(e.message, true); return null; }
+    close();
+  }
+  let agents = (data.agents || []).map((a) => ({ ...a, local: false, external: true }));
+  let all = [...agents.filter((a) => a.available), ...data.models];
   return new Promise((resolve) => {
     const last = store.get("model", null) || data.default;
     let sel = all.find((m) => mref(m) === mref(last)) || all[0] || null;
@@ -459,6 +490,14 @@ async function pickModel({ title, subtitle }) {
         h("span", { class: "grow" }),
         !empty && h("button", { class: "primary", text: "Continue", onclick: done }))));
     paint(); retune(); if (!empty) setTimeout(() => q.focus());
+    // Fresh list arrived (cache was shown first): update rows in place.
+    pending.then((fresh) => {
+      if (fresh === data || !document.body.contains(list)) return;
+      data = fresh; agents = (data.agents || []).map((a) => ({ ...a, local: false, external: true }));
+      all = [...agents.filter((a) => a.available), ...data.models];
+      if (!sel && all[0]) { sel = all[0]; retune(); }
+      paint();
+    }).catch(() => {});
   });
 }
 
@@ -644,7 +683,8 @@ function openAddModel() {
       if (preset && preset.exists) cmd.disabled = true;
     }
     async function step1() {
-      const data = await loadModels(true).catch(() => ({ models: [], agents: [] }));
+      const data = S.models || { models: [], agents: [] };
+      if (!S.models) loadModels().then(() => { if (document.body.contains(body) && body.querySelector(".addgrid")) step1(); }).catch(() => {});
       const prov = Object.fromEntries((S.state.workspace.providers || []).map((p) => [p.id, p]));
       const has = (p) => data.models.some((m) => m.provider === p);
       const group = (title, cards) => [h("div", { class: "mgroup", style: { position: "static", background: "none", border: 0, padding: "14px 0 6px" }, text: title }), h("div", { class: "addgrid" }, cards)];
@@ -739,6 +779,9 @@ async function viewChat(main, id) {
   const banner = h("div"), thread = h("div", { class: "thread" });
   scroll.append(banner, thread);
   main.append(head, scroll, dock);
+  head.append(topbar(h("span", { class: "grow" }, sk("sk-title"))));
+  const skel = h("div", { class: "thread-skel" }, sk("sk-bubble"), skLines(3), sk("sk-block"), skLines(2));
+  thread.append(skel);
   const seen = new Map(); let lastActive = null, headKey = "", first = true, goalShown = false;
 
   const send = guard(async (text, _v, clear) => {
@@ -769,7 +812,7 @@ async function viewChat(main, id) {
         runMenu(run, active)));
       banner.replaceChildren(run.error && !active ? h("div", { class: "banner enter", text: run.error }) : "");
     }
-    if (!goalShown) { thread.append(h("div", { class: "msg-user" }, h("div", { text: run.goal }))); goalShown = true; }
+    if (!goalShown) { skel.remove(); thread.append(h("div", { class: "msg-user" }, h("div", { text: run.goal }))); goalShown = true; }
     // A rewind removed steps: rebuild from scratch.
     const maxSeq = steps.length ? steps[steps.length - 1].seq : -1;
     if ([...seen.keys()].some((q) => q > maxSeq)) { seen.forEach((el) => el && el.remove()); seen.clear(); }
@@ -1116,6 +1159,12 @@ async function viewOrchestraRun(main, id) {
   const canvas = treeCanvas(ed);
   const panel = h("div", { class: "panel" });
   wrap.append(canvas, panel);
+  head.append(topbar(h("span", { class: "grow" }, sk("sk-title"))));
+  const cskel = h("div", { style: { position: "absolute", left: "50%", top: "60px", transform: "translateX(-50%)", width: "min(520px, 90%)" } },
+    h("div", { style: { width: "230px", margin: "0 auto" } }, sk("sk-block")),
+    h("div", { class: "row", style: { gap: "26px", marginTop: "40px" } }, h("div", { class: "grow" }, sk("sk-block")), h("div", { class: "grow" }, sk("sk-block"))));
+  canvas.append(cskel);
+  panel.append(h("div", { class: "ph" }, sk("sk-title"), skLines(2)), h("div", { class: "feed" }, skLines(3), sk("sk-block"), skLines(2)));
   let data;
 
   function statusOf(steps, active) {
@@ -1185,6 +1234,7 @@ async function viewOrchestraRun(main, id) {
       runMenu(run, active)));
     if (active) head.append(h("div", { class: "row small muted", style: { padding: "0 16px 8px", gap: "8px" } }, h("span", { class: "dots" }, h("i"), h("i"), h("i")), h("span", { class: "live-line", text: S.lastLive || "working…" })));
     if (run.error && !active) head.append(h("div", { class: "banner enter", text: run.error }));
+    cskel.remove();
     canvas.paint();
     const pk = [ed.selected, steps.length, active].join("|");
     if (pk !== panelKey) { panelKey = pk; paintPanel(); }
@@ -1225,14 +1275,18 @@ async function viewModels(main) {
   paintSkills(ws.skills, ws.skill_errors);
 
   // External agents (ACP): name + launch command, availability and a live handshake test.
-  const avail = Object.fromEntries(((await loadModels(true).catch(() => ({}))).agents || []).map((a) => [a.model, a.available]));
+  // Availability fills in when the (possibly slow) model scan returns.
+  let avail = Object.fromEntries(((S.models && S.models.agents) || []).map((a) => [a.model, a.available]));
+  const modelsReady = loadModels(true).catch(() => ({ models: [], agents: [], notes: [] }));
   let extAgents = structuredClone(cfg.external_agents || []);
   const agentsBox = h("div");
   const paintAgents = () => agentsBox.replaceChildren(h("div", { class: "agents-grid" }, extAgents.map((a, i) => {
     const name = h("input", { value: a.name, oninput: (e) => (a.name = e.target.value) });
     const cmd = h("input", { class: "mono", value: [a.command, ...a.args].join(" "), title: "Command that starts the agent in ACP mode",
       oninput: (e) => { const parts = e.target.value.trim().split(/\s+/); a.command = parts[0] || ""; a.args = parts.slice(1); } });
-    const out = h("span", { class: "small " + (avail[a.id] ? "ok" : "faint"), text: avail[a.id] ? "✓ found" : avail[a.id] === false ? "not installed" : "unsaved" });
+    const known = a.id in avail;
+    const out = h("span", { class: "small " + (avail[a.id] ? "ok" : "faint"), text: avail[a.id] ? "✓ found" : avail[a.id] === false ? "not installed" : S.models ? "unsaved" : "checking…" });
+    void known;
     return [name, cmd,
       h("button", { text: "Test", title: "Start it and run the ACP handshake (save first)", onclick: guard(async (e) => {
         e.target.disabled = true; out.textContent = "starting…"; out.className = "small muted";
@@ -1251,22 +1305,36 @@ async function viewModels(main) {
     } })));
 
   // Connections: everything that provides models, with one "Add a model" entry point.
-  const data = await loadModels(true).catch(() => ({ models: [], agents: [], notes: [] }));
-  const count = (pred) => data.models.filter(pred).length;
-  const rows = [];
-  const row = (title, detail, ok, remove) => rows.push(h("div", {}, h("b", { text: title }), h("div", { class: "small " + (ok ? "muted" : "warn"), text: detail })),
-    h("span", { class: "pill " + (ok ? "done" : ""), text: ok ? "connected" : "check" }),
-    remove ? h("button", { class: "ghost", text: "Remove", onclick: guard(async () => { if (!confirm(`Remove ${title}?`)) return; await api("/api/models/remove", { body: remove }); S.models = null; route(); }) }) : h("span"));
-  const nOllama = count((m) => m.provider === "ollama");
-  row("Ollama", `${cfg.ollama_url} · ${nOllama ? nOllama + " models" : "not reachable or no models"}`, nOllama > 0, null);
-  if (cfg.llamacpp_url) row("llama.cpp", cfg.llamacpp_url, count((m) => m.provider === "llamacpp") > 0, null);
-  for (const p of ["claude", "gemini", "deepseek"]) if (pv[p] && pv[p].configured) row(p[0].toUpperCase() + p.slice(1), `${count((m) => m.provider === p)} models · API key stored`, true, { kind: "cloud", provider: p });
-  for (const e of cfg.endpoints || []) row(e.name, `${e.base_url}${e.local ? " · local" : ""} · ${count((m) => m.provider === "compat" && m.model.startsWith(e.id + "/"))} models`, count((m) => m.model.startsWith(e.id + "/")) > 0, { kind: "endpoint", id: e.id });
+  const connBox = h("div", { class: "conn", style: { marginTop: "12px" } }), notesBox = h("div");
+  connBox.append(...Array.from({ length: 3 }, () => [h("div", {}, sk("sk-line w40"), sk("sk-line w60")), sk("sk-line"), h("span")]).flat());
+  const fillConn = (data) => {
+    // Fresh state (not the cached one the page opened with): models added
+    // elsewhere must show up here.
+    const cfg = S.state.workspace.config, pv = Object.fromEntries(S.state.workspace.providers.map((p) => [p.id, p]));
+    const count = (pred) => data.models.filter(pred).length;
+    const rows = [];
+    const row = (title, detail, ok, remove) => rows.push(h("div", {}, h("b", { text: title }), h("div", { class: "small " + (ok ? "muted" : "warn"), text: detail })),
+      h("span", { class: "pill " + (ok ? "done" : ""), text: ok ? "connected" : "check" }),
+      remove ? h("button", { class: "ghost", text: "Remove", onclick: guard(async () => { if (!confirm(`Remove ${title}?`)) return; await api("/api/models/remove", { body: remove }); S.models = null; route(); }) }) : h("span"));
+    const nOllama = count((m) => m.provider === "ollama");
+    row("Ollama", `${cfg.ollama_url} · ${nOllama ? nOllama + " models" : "not reachable or no models"}`, nOllama > 0, null);
+    if (cfg.llamacpp_url) row("llama.cpp", cfg.llamacpp_url, count((m) => m.provider === "llamacpp") > 0, null);
+    for (const p of ["claude", "gemini", "deepseek"]) if (pv[p] && pv[p].configured) row(p[0].toUpperCase() + p.slice(1), `${count((m) => m.provider === p)} models · API key stored`, true, { kind: "cloud", provider: p });
+    for (const e of cfg.endpoints || []) row(e.name, `${e.base_url}${e.local ? " · local" : ""} · ${count((m) => m.provider === "compat" && m.model.startsWith(e.id + "/"))} models`, count((m) => m.model.startsWith(e.id + "/")) > 0, { kind: "endpoint", id: e.id });
+    connBox.replaceChildren(...rows);
+    connBox.classList.add("enter");
+    notesBox.replaceChildren(data.notes.length > 0 ? h("div", { class: "small warn", style: { marginTop: "8px" }, text: data.notes.join(" · ") }) : "");
+  };
+  Promise.all([modelsReady, loadState().catch(() => {})]).then(([data]) => {
+    if (!document.body.contains(connBox)) return;
+    fillConn(data);
+    avail = Object.fromEntries((data.agents || []).map((a) => [a.model, a.available]));
+    paintAgents();
+  });
   const connCard = h("div", { class: "card" },
     h("div", { class: "row" }, h("h3", { class: "grow", style: { margin: 0 }, text: "Models" }),
       h("button", { class: "accent", text: "＋ Add a model", onclick: async () => { await openAddModel(); S.models = null; route(); } })),
-    h("div", { class: "conn", style: { marginTop: "12px" } }, rows),
-    data.notes.length > 0 && h("div", { class: "small warn", style: { marginTop: "8px" }, text: data.notes.join(" · ") }));
+    connBox, notesBox);
 
   inner.append(
     connCard,
@@ -1300,7 +1368,7 @@ function connectEvents() {
     const ev = JSON.parse(msg.data);
     const runId = ev.run ? ev.run.id : ev.step ? ev.step.run_id : ev.run_id;
     if (ev.kind === "log") { if (S.view && S.view.id === runId) setLive(ev.message); return; }
-    if (ev.kind === "run") { const i = S.runs.findIndex((r) => r.id === ev.run.id); if (i >= 0) S.runs[i] = ev.run; }
+    if (ev.kind === "run" && S.runs) { const i = S.runs.findIndex((r) => r.id === ev.run.id); if (i >= 0) S.runs[i] = ev.run; }
     if (S.view && S.view.id === runId && S.view.refresh) { clearTimeout(refetchT); refetchT = setTimeout(() => S.view.refresh().catch(() => {}), 120); }
     if (ev.kind === "run" || ev.kind === "deleted") refreshSide();
   };

@@ -58,7 +58,7 @@ impl Checkpointer {
     pub async fn commit(&self, thread_id: &str, node: &str, delta: &Value, step_cost_usd: f64) -> Result<Snapshot> {
         let prev = self.head(thread_id).await?;
         let seq = prev.as_ref().map_or(0, |p| p.seq + 1);
-        let commit = self.repo.commit_all(&format!("colopork: {thread_id} #{seq} {node}")).await?;
+        let commit = self.repo.commit_all(&format!("orchopork: {thread_id} #{seq} {node}")).await?;
         let now = now_unix();
         let snap = Snapshot {
             id: Uuid::new_v4().to_string(),
@@ -109,7 +109,7 @@ impl Checkpointer {
     /// The DB transaction stays open across the git reset: if git fails the
     /// deletes roll back, so SQLite and the worktree never disagree. Before
     /// resetting, the current tree (including uncommitted edits) is committed
-    /// and pinned under `refs/colopork/rewound/*`, so a rewind is recoverable.
+    /// and pinned under `refs/orchopork/rewound/*`, so a rewind is recoverable.
     pub async fn rewind(&self, thread_id: &str, target: RewindTarget) -> Result<Snapshot> {
         let head = self.head(thread_id).await?.ok_or_else(|| Error::NotFound(format!("thread {thread_id}")))?;
         let dest: Snapshot = match target {
@@ -131,9 +131,9 @@ impl Checkpointer {
             }
         };
 
-        let safety = self.repo.commit_all("colopork: pre-rewind safety").await?;
+        let safety = self.repo.commit_all("orchopork: pre-rewind safety").await?;
         self.repo
-            .update_ref(&format!("refs/colopork/rewound/{}-{}", now_unix(), head.seq), &safety)
+            .update_ref(&format!("refs/orchopork/rewound/{}-{}", now_unix(), head.seq), &safety)
             .await?;
 
         let mut tx = self.store.pool.begin().await?;
@@ -162,7 +162,7 @@ mod tests {
         let ws = tempfile::tempdir().unwrap();
         let repo = GitRepo::new(ws.path());
         repo.init().await.unwrap();
-        let store = Store::open(&ws.path().join(".colopork/state.db")).await.unwrap();
+        let store = Store::open(&ws.path().join(".orchopork/state.db")).await.unwrap();
         let cp = Checkpointer::new(store.clone(), repo.clone());
 
         let mut ids = vec![];
@@ -172,7 +172,7 @@ mod tests {
         }
         assert!((ids[2].accumulated_cost_usd - 0.60).abs() < 1e-9);
         // The state DB itself must not be versioned.
-        assert!(repo.run(&["ls-files", ".colopork"]).await.unwrap().is_empty());
+        assert!(repo.run(&["ls-files", ".orchopork"]).await.unwrap().is_empty());
 
         // Uncommitted junk must survive as a recoverable ref, not vanish.
         tokio::fs::write(ws.path().join("a.txt"), "dirty").await.unwrap();
@@ -184,7 +184,7 @@ mod tests {
         assert_eq!((d.seq, read(ws.path()).await.as_str()), (0, "v1"));
         assert_eq!(cp.head("t1").await.unwrap().unwrap().id, ids[0].id);
 
-        let refs = repo.run(&["for-each-ref", "refs/colopork/rewound"]).await.unwrap();
+        let refs = repo.run(&["for-each-ref", "refs/orchopork/rewound"]).await.unwrap();
         assert_eq!(refs.lines().count(), 2);
 
         // Money spent is not un-spent by rewinding.

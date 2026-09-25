@@ -1,4 +1,4 @@
-//! colopork: hybrid local/cloud agent orchestration engine.
+//! orchopork: hybrid local/cloud agent orchestration engine.
 
 pub mod error;
 pub mod git;

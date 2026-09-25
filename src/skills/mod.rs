@@ -1,5 +1,5 @@
 //! Skill engine: declarative tone/persona/tool modules loaded from
-//! `.colopork/skills/`, toggled and hot-reloaded at runtime.
+//! `.orchopork/skills/`, toggled and hot-reloaded at runtime.
 
 pub mod compose;
 pub mod loader;
@@ -149,10 +149,10 @@ mod tests {
     fn bundled_skills_load_and_compose_in_priority_order() {
         let (_t, r) = registry();
         assert_eq!(r.list().len(), 4);
-        let p = r.compose("You are colopork.").unwrap();
+        let p = r.compose("You are orchopork.").unwrap();
         let a = p.system.find("anti-sycophancy-terse").unwrap();
         let b = p.system.find("markdown-memory-sync").unwrap();
-        assert!(p.system.starts_with("You are colopork.") && a < b);
+        assert!(p.system.starts_with("You are orchopork.") && a < b);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 [package]
-name = "colopork"
+name = "orchopork"
 version = "0.1.0"
 edition = "2024"
 description = "Lean hybrid local/cloud LLM agent orchestration engine"

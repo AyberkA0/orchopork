@@ -149,7 +149,7 @@ async fn reload_skills(State(s): State<Shared>) -> Result<Json<serde_json::Value
 async fn app_gate(State(s): State<Shared>) -> Response {
     let w = s.wizard.lock().unwrap();
     if w.can_access(Step::Dashboard) {
-        (StatusCode::OK, "colopork dashboard").into_response() // SPA index goes here
+        (StatusCode::OK, "orchopork dashboard").into_response() // SPA index goes here
     } else {
         Redirect::to(w.step.path()).into_response()
     }

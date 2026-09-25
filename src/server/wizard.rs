@@ -166,7 +166,7 @@ const TOOLCHAINS: &[(&str, bool)] = &[("git", true), ("cargo", false), ("python"
 /// probe toolchains with `--version`. Only `git` is required.
 pub async fn check_permissions(workspace: &Path) -> PermissionReport {
     let readable = tokio::fs::read_dir(workspace).await.is_ok();
-    let probe = workspace.join(format!(".colopork-probe-{}", std::process::id()));
+    let probe = workspace.join(format!(".orchopork-probe-{}", std::process::id()));
     let writable = tokio::fs::write(&probe, b"x").await.is_ok();
     let _ = tokio::fs::remove_file(&probe).await;
 

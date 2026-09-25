@@ -7,9 +7,9 @@ use tokio::process::Command;
 
 use crate::error::{Error, Result};
 
-/// Directory holding colopork's own state (DB, skills). Never versioned:
+/// Directory holding orchopork's own state (DB, skills). Never versioned:
 /// otherwise checkpoints would commit the checkpoint database itself.
-pub const STATE_DIR: &str = ".colopork";
+pub const STATE_DIR: &str = ".orchopork";
 
 #[derive(Debug, Clone)]
 pub struct GitRepo {
@@ -31,9 +31,9 @@ impl GitRepo {
             .arg(&self.root)
             .args([
                 "-c",
-                "user.name=colopork",
+                "user.name=orchopork",
                 "-c",
-                "user.email=colopork@localhost",
+                "user.email=orchopork@localhost",
                 "-c",
                 "commit.gpgsign=false",
             ])
@@ -56,7 +56,7 @@ impl GitRepo {
         self.run(&["rev-parse", "--git-dir"]).await.is_ok()
     }
 
-    /// Idempotent: init if needed and exclude `.colopork/` from versioning.
+    /// Idempotent: init if needed and exclude `.orchopork/` from versioning.
     pub async fn init(&self) -> Result<()> {
         if !self.is_repo().await {
             self.run(&["init"]).await?;
@@ -95,7 +95,7 @@ impl GitRepo {
 
     pub async fn update_ref(&self, name: &str, commit: &str) -> Result<()> {
         validate_commit(commit)?;
-        if !name.starts_with("refs/colopork/") || name.contains("..") || name.contains(' ') {
+        if !name.starts_with("refs/orchopork/") || name.contains("..") || name.contains(' ') {
             return Err(Error::Git(format!("refusing ref name {name:?}")));
         }
         self.run(&["update-ref", name, commit]).await.map(drop)

@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use colopork::git::STATE_DIR;
-use colopork::server::{self, AppState, wizard::Wizard};
-use colopork::skills::SkillRegistry;
+use orchopork::git::STATE_DIR;
+use orchopork::server::{self, AppState, wizard::Wizard};
+use orchopork::skills::SkillRegistry;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState { wizard: Mutex::new(Wizard::default()), skills });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:7878").await?;
-    tracing::info!("colopork on http://{}", listener.local_addr()?);
+    tracing::info!("orchopork on http://{}", listener.local_addr()?);
     axum::serve(listener, server::router(state)).await?;
     Ok(())
 }

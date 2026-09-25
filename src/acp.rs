@@ -12,6 +12,7 @@
 //! `session/request_permission` by policy, `fs/read_text_file` and
 //! `fs/write_text_file` only inside the worktree.
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -76,6 +77,9 @@ pub struct Outcome {
     pub stop_reason: String,
     pub tool_calls: Vec<ToolCall>,
     pub cancelled: bool,
+    /// Options applied to the session, by display name
+    /// (e.g. "Model" → "Opus 5.5", "Effort" → "High").
+    pub settings: BTreeMap<String, String>,
 }
 
 /// Human-readable progress, streamed to the UI while a turn runs.
@@ -381,11 +385,42 @@ impl<'a> Conn<'a> {
     }
 }
 
-/// Runs one prompt turn with `agent` in `cwd`.
+/// The session's selectable options: ACP `configOptions`, plus the older
+/// `models` field presented as a `model` option.
+fn config_options(session: &Value) -> Vec<Value> {
+    let mut opts: Vec<Value> = session["configOptions"].as_array().cloned().unwrap_or_default();
+    if !opts.iter().any(|o| o["id"] == "model")
+        && let Some(models) = session["models"]["availableModels"].as_array()
+    {
+        opts.push(json!({
+            "id": "model", "name": "Model", "category": "model", "type": "select", "legacy": true,
+            "currentValue": session["models"]["currentModelId"],
+            "options": models.iter().map(|m| json!({ "value": m["modelId"], "name": m["name"], "description": m["description"] })).collect::<Vec<_>>(),
+        }));
+    }
+    opts
+}
+
+/// Flattens a select's options (they may be grouped).
+fn choices(opt: &Value) -> Vec<Value> {
+    let mut out = Vec::new();
+    for o in opt["options"].as_array().into_iter().flatten() {
+        match o["options"].as_array() {
+            Some(group) => out.extend(group.iter().cloned()),
+            None => out.push(o.clone()),
+        }
+    }
+    out
+}
+
+/// Runs one prompt turn with `agent` in `cwd`, first applying `options`
+/// (e.g. `model=opus`, `effort=high`) as session config options.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     agent: &ExternalAgent,
     cwd: &Path,
     prompt: &str,
+    options: &BTreeMap<String, String>,
     policy: Policy,
     timeout: Duration,
     cancel: &AtomicBool,
@@ -410,6 +445,42 @@ pub async fn run(
         .ok_or_else(|| Error::Provider(format!("{}: session/new returned no sessionId", agent.name)))?
         .to_string();
     c.session = Some(sid.clone());
+    let available = config_options(&session);
+    let mut settings = BTreeMap::new();
+    for (key, value) in options.iter().filter(|(_, v)| !v.is_empty() && v.as_str() != "default") {
+        let Some(opt) = available.iter().find(|o| o["id"] == key.as_str()) else {
+            let ids: Vec<&str> = available.iter().filter_map(|o| o["id"].as_str()).collect();
+            return Err(Error::Provider(format!(
+                "{} has no option {key:?} (it offers: {})",
+                agent.name,
+                if ids.is_empty() { "none".to_string() } else { ids.join(", ") }
+            )));
+        };
+        let choice = choices(opt).into_iter().find(|c| c["value"] == value.as_str());
+        let Some(choice) = choice else {
+            let vals: Vec<String> =
+                choices(opt).iter().filter_map(|c| c["value"].as_str().map(str::to_string)).collect();
+            return Err(Error::Provider(format!(
+                "{}: {key}={value} is not offered (choose from: {})",
+                agent.name,
+                vals.join(", ")
+            )));
+        };
+        if opt["legacy"] == true {
+            c.request("session/set_model", json!({ "sessionId": sid, "modelId": value }), deadline, cancel, on).await?;
+        } else {
+            c.request(
+                "session/set_config_option",
+                json!({ "sessionId": sid, "configId": key, "value": value }),
+                deadline,
+                cancel,
+                on,
+            )
+            .await?;
+        }
+        let label = opt["name"].as_str().unwrap_or(key).to_string();
+        settings.insert(label, choice["name"].as_str().unwrap_or(value).to_string());
+    }
     let result = c
         .request(
             "session/prompt",
@@ -426,7 +497,31 @@ pub async fn run(
         text: c.text.trim().to_string(),
         stop_reason,
         tool_calls: c.tools,
+        settings,
     })
+}
+
+/// Starts a session only to list what the agent lets you choose (model,
+/// effort, …). Permission modes are left out: orchopork answers
+/// permissions itself.
+pub async fn discover(agent: &ExternalAgent, cwd: &Path) -> Result<Vec<Value>> {
+    let never = AtomicBool::new(false);
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut c = Conn::open(agent, cwd, Policy { allow_execute: false })?;
+    let on: &mut (dyn FnMut(Update) + Send) = &mut |_| {};
+    c.handshake(deadline, &never, on).await?;
+    let cwd_str = c.root.to_string_lossy().into_owned();
+    let session = c.request("session/new", json!({ "cwd": cwd_str, "mcpServers": [] }), deadline, &never, on).await;
+    let _ = c.child.start_kill();
+    let session = session?;
+    Ok(config_options(&session)
+        .into_iter()
+        .filter(|o| o["category"] != "mode" && o["id"] != "mode" && o["type"] == "select")
+        .map(|o| {
+            json!({ "id": o["id"], "name": o["name"], "category": o["category"], "current": o["currentValue"],
+                    "choices": choices(&o).iter().map(|c| json!({ "value": c["value"], "name": c["name"], "description": c["description"] })).collect::<Vec<_>>() })
+        })
+        .collect())
 }
 
 /// `initialize` only: checks that the agent starts and speaks ACP.
@@ -448,13 +543,19 @@ mod tests {
 import json, sys
 def send(o): sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
 def read(): return json.loads(sys.stdin.readline())
-sid = "s1"; n = 100
+sid = "s1"; n = 100; chosen = {}
 while True:
     m = read()
     if m.get("method") == "initialize":
         send({"jsonrpc": "2.0", "id": m["id"], "result": {"protocolVersion": 1, "agentCapabilities": {}}})
     elif m.get("method") == "session/new":
-        send({"jsonrpc": "2.0", "id": m["id"], "result": {"sessionId": sid}})
+        send({"jsonrpc": "2.0", "id": m["id"], "result": {"sessionId": sid, "configOptions": [
+            {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "default", "options": [{"value": "default", "name": "Manual"}]},
+            {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": "default", "options": [{"value": "default", "name": "Default"}, {"value": "opus", "name": "Opus 5.5"}]},
+            {"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": "default", "options": [{"value": "high", "name": "High"}]}]}})
+    elif m.get("method") == "session/set_config_option":
+        chosen[m["params"]["configId"]] = m["params"]["value"]
+        send({"jsonrpc": "2.0", "id": m["id"], "result": {"configOptions": []}})
     elif m.get("method") == "session/prompt":
         pid = m["id"]
         send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Run tests", "kind": "execute", "status": "pending"}}})
@@ -464,7 +565,7 @@ while True:
         w = read()
         send({"jsonrpc": "2.0", "id": n + 2, "method": "fs/write_text_file", "params": {"sessionId": sid, "path": "/etc/nope", "content": "x"}})
         bad = read()
-        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Done: " + ("blocked" if "error" in bad else "leak")}}}})
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Done: " + ("blocked" if "error" in bad else "leak") + " " + json.dumps(chosen, sort_keys=True)}}}})
         send({"jsonrpc": "2.0", "id": pid, "result": {"stopReason": "end_turn"}})
 "#;
 
@@ -480,22 +581,44 @@ while True:
         };
         let never = AtomicBool::new(false);
         let mut seen = Vec::new();
+        let opts: BTreeMap<String, String> =
+            [("model".to_string(), "opus".to_string()), ("effort".to_string(), "high".to_string())].into();
         for allow in [true, false] {
-            let out =
-                run(&agent, d.path(), "hi", Policy { allow_execute: allow }, Duration::from_secs(20), &never, |u| {
+            let out = run(
+                &agent,
+                d.path(),
+                "hi",
+                &opts,
+                Policy { allow_execute: allow },
+                Duration::from_secs(20),
+                &never,
+                |u| {
                     if let Update::Tool(t) = u {
                         seen.push(t.title.clone());
                     }
-                })
-                .await
-                .unwrap();
-            assert_eq!(out.text, "Done: blocked", "writes outside the tree must be refused");
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                out.text, r#"Done: blocked {"effort": "high", "model": "opus"}"#,
+                "writes outside the tree must be refused"
+            );
+            assert_eq!(out.settings.get("Model").map(String::as_str), Some("Opus 5.5"));
             assert_eq!(out.tool_calls.len(), 1);
             let written = std::fs::read_to_string(d.path().join("out.txt")).unwrap();
             assert_eq!(written, if allow { "yes" } else { "no" });
         }
         assert_eq!(seen, ["Run tests", "Run tests"]);
         assert!(probe(&agent, d.path()).await.is_ok());
+        let found = discover(&agent, d.path()).await.unwrap();
+        let ids: Vec<&str> = found.iter().filter_map(|o| o["id"].as_str()).collect();
+        assert_eq!(ids, ["model", "effort"], "permission modes are not offered");
+        let bad: BTreeMap<String, String> = [("model".to_string(), "gpt".to_string())].into();
+        let err =
+            run(&agent, d.path(), "hi", &bad, Policy { allow_execute: false }, Duration::from_secs(20), &never, |_| {})
+                .await;
+        assert!(err.unwrap_err().to_string().contains("not offered"));
     }
 
     #[tokio::test]
@@ -507,10 +630,18 @@ while True:
             args: vec![],
         };
         let never = AtomicBool::new(false);
-        let err =
-            run(&agent, Path::new("."), "hi", Policy { allow_execute: false }, Duration::from_secs(5), &never, |_| {})
-                .await
-                .unwrap_err();
+        let err = run(
+            &agent,
+            Path::new("."),
+            "hi",
+            &BTreeMap::new(),
+            Policy { allow_execute: false },
+            Duration::from_secs(5),
+            &never,
+            |_| {},
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("not found on PATH"));
     }
 }

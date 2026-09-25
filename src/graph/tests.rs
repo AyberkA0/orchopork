@@ -44,11 +44,11 @@ const FINISH: &str = r#"Done. {"tool": "finish", "args": {"summary": "wrote hell
 const WRITE: &str = r#"Creating the file. {"tool": "write_file", "args": {"path": "hello.txt", "content": "hello\n"}}"#;
 
 fn local(model: &str) -> ModelRef {
-    ModelRef { provider: ProviderId::Ollama, model: model.into() }
+    ModelRef::new(ProviderId::Ollama, model)
 }
 
 fn cloud() -> ModelRef {
-    ModelRef { provider: ProviderId::Claude, model: "claude-haiku-4-5".into() }
+    ModelRef::new(ProviderId::Claude, "claude-haiku-4-5")
 }
 
 async fn setup(f: impl FnOnce(&mut Config)) -> (tempfile::TempDir, Engine) {
@@ -346,7 +346,7 @@ async fn solo_chat_with_an_external_acp_agent() {
     let scripts = tempfile::tempdir().unwrap();
     let agent = fake_acp(scripts.path(), "ext");
     let (_d, engine) = setup(|c| c.external_agents = vec![agent]).await;
-    let model = ModelRef { provider: ProviderId::Acp, model: "ext".into() };
+    let model = ModelRef::new(ProviderId::Acp, "ext");
     let spec = RunSpec { mode: RunMode::Solo, model: Some(model), agents: vec![] };
     let run = engine.create_run("write a file", Some("test -f ext.txt"), spec).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
@@ -368,7 +368,7 @@ async fn orchestra_mixes_internal_commanders_and_external_agents() {
     let lead = Scripted::new(ProviderId::Ollama, &[r#"{"tool": "finish", "args": {"summary": "team done"}}"#]);
     register(&engine, &lead);
     let mut coder = agent("coder", Some("lead"), "write coder.txt");
-    coder.model = Some(ModelRef { provider: ProviderId::Acp, model: "coder".into() });
+    coder.model = Some(ModelRef::new(ProviderId::Acp, "coder"));
     let spec = RunSpec {
         mode: RunMode::Orchestra,
         model: Some(local("lead")),

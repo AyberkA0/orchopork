@@ -62,6 +62,13 @@ Presets (editable in **Models & settings → Agents on this computer**):
 | Gemini CLI  | `gemini --acp`                                 |
 | Codex       | `npx -y @agentclientprotocol/codex-acp`        |
 
+**Choosing model family, version and effort.** When you pick an agent (in the model picker or an agent's edit
+dialog), orchopork asks it what it offers over ACP and shows those choices, e.g. for Claude Code: *Model* (Sonnet 5,
+Opus 5.5, Fable 5.1, Haiku 4.5) and *Effort* (low → max). They are applied as ACP session config options at the start
+of every turn and shown on the run. API models get the same treatment: Claude models (except Haiku 4.5) take an
+effort level (`output_config.effort`), and Gemini takes low/medium/high (`reasoning_effort`). From the CLI or config
+use a query suffix: `acp:claude-code?model=opus&effort=high`, `claude:claude-opus-5-5?effort=xhigh`.
+
 Sign in to each tool once in a terminal (e.g. `claude` → `/login`). The **Test** button runs the ACP handshake.
 From the CLI: `orchopork init --actor acp:claude-code`.
 

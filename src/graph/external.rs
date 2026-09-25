@@ -56,7 +56,7 @@ pub fn tool_lines(out: &Outcome) -> String {
 pub fn meta(model: &ModelRef, out: &Outcome) -> serde_json::Value {
     json!({
         "model": model.to_string(),
-        "external": { "stop_reason": out.stop_reason, "tool_calls": out.tool_calls },
+        "external": { "stop_reason": out.stop_reason, "tool_calls": out.tool_calls, "settings": out.settings },
         "ok": !out.cancelled,
         "tool": if out.cancelled { "external" } else { "finish" },
     })
@@ -84,6 +84,7 @@ impl Inner {
             &agent,
             Path::new(&run.worktree),
             &prompt,
+            &model.options,
             Policy { allow_execute: cfg.limits.allow_commands },
             Duration::from_secs(cfg.limits.external_timeout_secs.max(30)),
             &flag,

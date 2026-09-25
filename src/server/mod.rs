@@ -35,6 +35,9 @@ use wizard::{Event, VcsStatus, Wizard};
 const INDEX_HTML: &str = include_str!("../../ui/index.html");
 
 pub struct AppState {
+    /// Discovered ACP session options per agent id (discovery spawns the
+    /// agent, so it is done once per server run unless refreshed).
+    agent_options: tokio::sync::Mutex<std::collections::HashMap<String, Value>>,
     engine: RwLock<Option<Engine>>,
     wizard: Mutex<Wizard>,
     /// Pre-filled in the workspace picker (the `--workspace` argument).
@@ -49,6 +52,7 @@ impl AppState {
     /// nothing on disk until the user picks a directory.
     pub async fn new(default_root: PathBuf) -> Result<Shared> {
         let state = Arc::new(Self {
+            agent_options: Default::default(),
             engine: RwLock::new(None),
             wizard: Mutex::new(Wizard::default()),
             default_root: default_root.clone(),
@@ -106,6 +110,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/workspace", post(open_workspace))
         .route("/api/models", get(available_models))
         .route("/api/agents/probe", post(probe_agent))
+        .route("/api/agents/options", post(agent_options))
         .route("/api/orchestra/propose", post(propose_team))
         .route("/api/providers/keys", post(set_provider_key))
         .route("/api/providers/{id}/models", get(provider_models))
@@ -440,18 +445,16 @@ async fn available_models(State(s): State<Shared>) -> ApiResult {
         if id.is_local() {
             let provider = ws.gateway.provider(id)?;
             match tokio::time::timeout(std::time::Duration::from_secs(4), provider.list_models()).await {
-                Ok(Ok(models)) => {
-                    out.extend(models.into_iter().map(|m| json!({ "provider": id, "model": m, "local": true })))
-                }
+                Ok(Ok(models)) => out.extend(
+                    models.into_iter().map(|m| json!({ "provider": id, "model": m, "local": true, "efforts": [] })),
+                ),
                 Ok(Err(e)) => notes.push(e.to_string()),
                 Err(_) => notes.push(format!("{}: timed out", id.as_str())),
             }
         } else {
-            out.extend(
-                pricing::suggested_models(id)
-                    .into_iter()
-                    .map(|m| json!({ "provider": id, "model": m, "local": false })),
-            );
+            out.extend(pricing::suggested_models(id).into_iter().map(
+                |m| json!({ "provider": id, "model": m, "local": false, "efforts": pricing::effort_levels(id, m) }),
+            ));
         }
     }
     // External agents: offered when their launcher is on PATH.
@@ -468,6 +471,31 @@ async fn available_models(State(s): State<Shared>) -> ApiResult {
 #[derive(Deserialize)]
 struct ProbeReq {
     id: String,
+    #[serde(default)]
+    refresh: bool,
+}
+
+/// What an external agent lets you choose (model, effort, …), as it
+/// advertises it over ACP.
+async fn agent_options(State(s): State<Shared>, Json(req): Json<ProbeReq>) -> ApiResult {
+    let mut cache = s.agent_options.lock().await;
+    if !req.refresh
+        && let Some(v) = cache.get(&req.id)
+    {
+        return Ok(Json(v.clone()));
+    }
+    let engine = s.engine()?;
+    let ws = engine.workspace();
+    let agent = ws
+        .config()
+        .external_agents
+        .into_iter()
+        .find(|a| a.id == req.id)
+        .ok_or_else(|| Error::NotFound(format!("external agent {}", req.id)))?;
+    let options = crate::acp::discover(&agent, &ws.root).await?;
+    let v = json!({ "options": options });
+    cache.insert(req.id, v.clone());
+    Ok(Json(v))
 }
 
 /// Starts an external agent and runs the ACP handshake only.

@@ -72,6 +72,7 @@ impl Engine {
             system: DESIGNER.into(),
             messages: vec![Message::user(input)],
             max_tokens: ws.config().limits.max_output_tokens,
+            effort: None,
         };
         let out = ws.gateway.complete(lead, &req, "team-design").await?;
         Ok(parse_team(&out.text, goal))

@@ -1,86 +1,115 @@
-//! The single place a workspace is turned into a running set of
-//! components (secrets, skills, provider gateway, checkpointer).
+//! The single place a workspace directory is turned into running
+//! components (config, secrets, skills, store, provider gateway). The
+//! server, the CLI and library embedders all go through `Workspace::open`.
 //!
-//! `main.rs` (server), the CLI, and any embedder using orchopork as a
-//! library all call `open()` — there is no second, slightly-different
-//! wiring path. A provider registered here, a skill loaded here, a secret
-//! read here is registered/loaded/read identically no matter which of the
-//! three ever ends up calling it.
+//! Opening a workspace creates `.orchopork/` but never runs `git init` on
+//! its own: that only happens when the user asks for it (setup wizard or
+//! `orchopork init --git-init`).
 
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
-use crate::error::Result;
+use crate::config::Config;
+use crate::error::{Error, Result};
 use crate::git::{GitRepo, STATE_DIR};
-use crate::graph::Executor;
 use crate::providers::{ClaudeProvider, Gateway, OllamaProvider, OpenAiCompatProvider, ProviderId};
 use crate::secrets::SecretStore;
 use crate::skills::SkillRegistry;
-use crate::storage::{Checkpointer, Store};
+use crate::storage::Store;
 
-pub struct Config {
-    pub monthly_cap_usd: f64,
-    pub ollama_url: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            monthly_cap_usd: std::env::var("ORCHOPORK_MONTHLY_CAP_USD")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(40.0),
-            ollama_url: std::env::var("ORCHOPORK_OLLAMA_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".into()),
-        }
-    }
-}
-
-/// Everything a workspace needs to run: secrets, skills, the provider
-/// gateway (Ollama always registered; cloud providers registered when a
-/// key is already on disk), the checkpointer, and an `Executor` built from
-/// the same `Arc`s the standalone skill/provider endpoints and CLI
-/// commands read and mutate.
 pub struct Workspace {
-    pub gateway: Arc<Gateway>,
-    pub skills: Arc<SkillRegistry>,
+    pub root: PathBuf,
+    pub state_dir: PathBuf,
+    config: RwLock<Config>,
     pub secrets: SecretStore,
-    pub checkpointer: Checkpointer,
-    pub executor: Executor,
+    pub skills: Arc<SkillRegistry>,
+    pub store: Store,
+    pub gateway: Arc<Gateway>,
+    pub repo: GitRepo,
 }
 
-/// Opens (creating on first use) `<root>/.orchopork/`: the skill directory,
-/// the enabled-skills file, the secrets file, and the SQLite state DB. Also
-/// idempotently `git init`s the workspace so checkpointing works from the
-/// first step.
-pub async fn open(root: &Path, cfg: &Config) -> Result<Workspace> {
-    let state_dir = root.join(STATE_DIR);
-    let skills = Arc::new(SkillRegistry::open(state_dir.join("skills"), state_dir.join("skills.enabled.yaml"))?);
-    let secrets = SecretStore::open(state_dir.join("secrets.yaml"))?;
-
-    let store = Store::open(&state_dir.join("state.db")).await?;
-    let repo = GitRepo::new(root);
-    repo.init().await?;
-    let checkpointer = Checkpointer::new(store.clone(), repo);
-
-    let gateway = Arc::new(Gateway::new(store, cfg.monthly_cap_usd));
-    gateway.register(Box::new(OllamaProvider::new(cfg.ollama_url.clone())));
-    for id in [ProviderId::Claude, ProviderId::DeepSeek, ProviderId::Gemini] {
-        if let Some(key) = secrets.get(id) {
-            register_cloud(&gateway, id, key);
-        }
+impl Workspace {
+    /// Whether `root` has been through setup (a config file exists).
+    pub fn is_initialized(root: &Path) -> bool {
+        root.join(STATE_DIR).join("config.yaml").is_file()
     }
 
-    let executor = Executor::new(gateway.clone(), skills.clone(), checkpointer.clone());
-    Ok(Workspace { gateway, skills, secrets, checkpointer, executor })
-}
+    /// Opens (creating on first use) `<root>/.orchopork/`.
+    pub async fn open(root: &Path) -> Result<Arc<Self>> {
+        let root = tokio::fs::canonicalize(root)
+            .await
+            .map_err(|e| Error::InvalidRequest(format!("workspace {}: {e}", root.display())))?;
+        if !root.is_dir() {
+            return Err(Error::InvalidRequest(format!("workspace {} is not a directory", root.display())));
+        }
+        let state_dir = root.join(STATE_DIR);
+        tokio::fs::create_dir_all(&state_dir).await?;
 
-/// Shared by `open` (loading a persisted key) and the `/api/providers/keys`
-/// handler (a key set live): the same match arm either way.
-pub fn register_cloud(gateway: &Gateway, id: ProviderId, api_key: String) {
-    match id {
-        ProviderId::Claude => gateway.register(Box::new(ClaudeProvider::new(api_key))),
-        ProviderId::DeepSeek => gateway.register(Box::new(OpenAiCompatProvider::deepseek(api_key))),
-        ProviderId::Gemini => gateway.register(Box::new(OpenAiCompatProvider::gemini(api_key))),
-        ProviderId::Ollama => {}
+        let config_path = state_dir.join("config.yaml");
+        let config = Config::load(&config_path)?;
+        if !config_path.exists() {
+            config.save(&config_path)?;
+        }
+        let secrets = SecretStore::open(state_dir.join("secrets.yaml"))?;
+        let skills = Arc::new(SkillRegistry::open(state_dir.join("skills"), state_dir.join("skills.enabled.yaml"))?);
+        let store = Store::open(&state_dir.join("state.db")).await?;
+        let gateway = Arc::new(Gateway::new(store.clone(), config.monthly_cap_usd));
+        let repo = GitRepo::new(&root);
+        if repo.is_repo().await {
+            repo.ensure_state_dir_excluded().await?;
+        }
+
+        let ws = Arc::new(Self { root, state_dir, config: RwLock::new(config), secrets, skills, store, gateway, repo });
+        ws.register_providers();
+        Ok(ws)
+    }
+
+    pub fn config(&self) -> Config {
+        self.config.read().unwrap().clone()
+    }
+
+    /// Validates, persists and applies a new config (providers are
+    /// re-registered so URL or cap changes take effect immediately).
+    pub fn update_config(&self, f: impl FnOnce(&mut Config)) -> Result<Config> {
+        let mut next = self.config();
+        f(&mut next);
+        next.save(&self.state_dir.join("config.yaml"))?;
+        *self.config.write().unwrap() = next.clone();
+        self.register_providers();
+        Ok(next)
+    }
+
+    /// Stores (or with an empty key, removes) a provider API key and
+    /// re-registers providers.
+    pub fn set_provider_key(&self, provider: ProviderId, key: &str) -> Result<()> {
+        if provider.is_local() {
+            return Err(Error::InvalidRequest(format!("{} is local and needs no API key", provider.as_str())));
+        }
+        self.secrets.set(provider.as_str(), key)?;
+        self.register_providers();
+        Ok(())
+    }
+
+    /// Rebuilds the gateway's provider set from config + secrets. Ollama is
+    /// always registered (reachability is checked when it is used), cloud
+    /// providers only with a key.
+    pub fn register_providers(&self) {
+        let cfg = self.config();
+        let gw = &self.gateway;
+        gw.set_cap(cfg.monthly_cap_usd);
+        gw.unregister_all();
+        gw.register(Box::new(OllamaProvider::new(cfg.ollama_url.clone(), cfg.ollama_num_ctx)));
+        if let Some(url) = cfg.llamacpp_url.as_deref().filter(|u| !u.trim().is_empty()) {
+            gw.register(Box::new(OpenAiCompatProvider::llamacpp(url.trim())));
+        }
+        if let Some(k) = self.secrets.provider_key(ProviderId::Claude) {
+            gw.register(Box::new(ClaudeProvider::new(k)));
+        }
+        if let Some(k) = self.secrets.provider_key(ProviderId::DeepSeek) {
+            gw.register(Box::new(OpenAiCompatProvider::deepseek(k)));
+        }
+        if let Some(k) = self.secrets.provider_key(ProviderId::Gemini) {
+            gw.register(Box::new(OpenAiCompatProvider::gemini(k)));
+        }
     }
 }

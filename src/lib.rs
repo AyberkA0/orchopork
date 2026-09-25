@@ -1,7 +1,15 @@
-//! orchopork: hybrid local/cloud agent orchestration engine.
+//! orchopork: a lean hybrid local/cloud agent orchestration engine.
+//!
+//! - [`bootstrap::Workspace`] opens a workspace's state (`.orchopork/`).
+//! - [`graph::Engine`] runs goals autonomously in isolated git worktrees.
+//! - [`providers::Gateway`] routes LLM calls and enforces the monthly budget.
+//! - [`skills`] are declarative prompt modifiers, tools and validators.
+//! - [`server`] is the local HTTP API + embedded dashboard.
 
 pub mod bootstrap;
+pub mod config;
 pub mod error;
+pub mod fsutil;
 pub mod git;
 pub mod graph;
 pub mod providers;

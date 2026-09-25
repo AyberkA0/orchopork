@@ -28,4 +28,9 @@ pub enum Error {
     Budget(String),
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    /// The operation is valid but not in the current state (e.g. rewinding
+    /// a run that is still executing, or a workspace locked by another
+    /// orchopork process).
+    #[error("conflict: {0}")]
+    Conflict(String),
 }

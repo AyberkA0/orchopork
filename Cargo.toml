@@ -1,0 +1,38 @@
+[package]
+name = "colopork"
+version = "0.1.0"
+edition = "2024"
+description = "Lean hybrid local/cloud LLM agent orchestration engine"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["macros"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "derive"] }
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Wired in as their modules land:
+# include_dir = "0.7"     # embed the SPA bundle
+# tokio-stream = "0.1"    # SSE trace streaming
+
+# Git is driven through hardened `tokio::process::Command` calls (see src/git),
+# which avoids a libgit2/C-toolchain requirement on Windows. Swap in `git2`
+# behind the same `GitRepo` API if in-process access is ever needed.
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

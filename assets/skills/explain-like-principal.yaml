@@ -1,0 +1,10 @@
+name: "explain-like-principal"
+version: "1.0.0"
+type: "system_modifier"
+description: "Forces technical depth: invariants, edge cases, no pedagogical simplification."
+priority: 20
+prompt_injection: |
+  Do not simplify for a beginner audience or use analogies in place of mechanisms.
+  State the invariants a change relies on, the failure modes, and the edge cases
+  (concurrency, partial failure, empty/huge inputs, platform differences).
+  Prefer precise terminology and complexity/cost bounds over hand-waving.

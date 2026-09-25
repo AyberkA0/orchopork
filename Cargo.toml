@@ -21,9 +21,9 @@ thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# Wired in as their modules land:
-# include_dir = "0.7"     # embed the SPA bundle
-# tokio-stream = "0.1"    # SSE trace streaming
+tokio-stream = { version = "0.1", features = ["sync"] }
+# The SPA is one embedded file (ui/index.html via include_str!), so no
+# bundler or an include_dir-style multi-file embed is needed.
 
 # Git is driven through hardened `tokio::process::Command` calls (see src/git),
 # which avoids a libgit2/C-toolchain requirement on Windows. Swap in `git2`

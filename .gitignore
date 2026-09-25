@@ -1,1 +1,21 @@
+# Build artifacts
 /target
+**/*.rs.bk
+*.pdb
+
+# Per-workspace runtime state (skills, secrets, SQLite DB). Never versioned:
+# see git/mod.rs, which also excludes it from any workspace orchopork manages.
+/.orchopork/
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env files that may carry secrets
+.env
+.env.local

@@ -12,6 +12,10 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("markdown-memory-sync.yaml", include_str!("../../assets/skills/markdown-memory-sync.yaml")),
 ];
 
+/// Enabled on a workspace's first run. Kept short on purpose: every enabled
+/// modifier costs context on every call, which small local models feel.
+pub const DEFAULT_ENABLED: &[&str] = &["anti-sycophancy-terse", "test-driven-loop"];
+
 #[derive(Debug, Default)]
 pub struct LoadReport {
     pub skills: BTreeMap<String, Skill>,
@@ -77,11 +81,34 @@ pub fn parse_skill(path: &Path, text: &str) -> Result<Skill> {
     Ok(skill)
 }
 
+/// Splits `---\n<yaml>\n---\n<body>`. The closing fence must be a line of
+/// exactly `---`; the body is returned untouched (a body starting with a
+/// `- bullet` keeps its dash).
 fn split_front_matter(text: &str) -> Option<(String, String)> {
     let text = text.replace("\r\n", "\n");
     let rest = text.strip_prefix("---\n")?;
-    let end = rest.find("\n---")?;
-    let front = rest[..end].to_string();
-    let body = rest[end + 4..].trim_start_matches(['\n', '-']).to_string();
-    Some((front, body))
+    let mut offset = 0;
+    for line in rest.split_inclusive('\n') {
+        if line.trim_end_matches('\n') == "---" {
+            let front = rest[..offset].to_string();
+            let body = rest[offset + line.len()..].to_string();
+            return Some((front, body));
+        }
+        offset += line.len();
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn front_matter_split_keeps_leading_bullets_and_ignores_longer_rules() {
+        let (front, body) = split_front_matter("---\nname: a\n----x: 1\n---\n- first\n- second\n").unwrap();
+        assert_eq!(front, "name: a\n----x: 1\n");
+        assert_eq!(body, "- first\n- second\n");
+        assert!(split_front_matter("no front matter").is_none());
+        assert!(split_front_matter("---\nname: a\n").is_none());
+    }
 }

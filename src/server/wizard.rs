@@ -1,14 +1,18 @@
 //! Onboarding state machine: Welcome -> Permissions -> Vcs -> Skills -> Dashboard.
 //!
 //! `Wizard::apply` is pure (no IO) so the transition rules are unit-testable.
-//! Environment probing happens in `check_permissions`, and its result is fed
-//! in as an event. Secrets (PATs, API keys) are never stored here: the state
-//! is serialized to the browser, so it only records *that* something is set.
+//! Probing happens in the handlers and is fed in as events. Secrets are
+//! never stored here: this state is serialized to the browser.
+//!
+//! Completion is persisted as `config.onboarded` in the chosen workspace,
+//! so restarting the server in an onboarded workspace goes straight to the
+//! dashboard.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::RemoteAuth;
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -74,43 +78,42 @@ impl PermissionReport {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RemoteAuth {
-    None,
-    Pat,
-    Ssh,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VcsChoice {
-    pub repo_ready: bool,
+pub struct VcsStatus {
+    pub is_repo: bool,
+    pub has_commits: bool,
+    pub branch: Option<String>,
+    pub origin: Option<String>,
     pub remote_auth: RemoteAuth,
+    pub has_github_token: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "event", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum Event {
     Initialize,
-    PermissionsChecked { report: PermissionReport },
-    VcsConfigured { choice: VcsChoice },
-    SkillsConfirmed { enabled_skills: Vec<String>, providers: Vec<String> },
+    PermissionsChecked {
+        report: PermissionReport,
+    },
+    VcsConfigured {
+        status: VcsStatus,
+    },
+    SkillsConfirmed,
+    /// The chosen workspace was already set up: skip to the dashboard.
+    Resume,
     Back,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Wizard {
     pub step: Step,
+    pub path: &'static str,
     pub permissions: Option<PermissionReport>,
-    pub vcs: Option<VcsChoice>,
-    pub enabled_skills: Vec<String>,
-    /// Providers configured in step 4 (e.g. "ollama", "claude"); no keys.
-    pub providers: Vec<String>,
+    pub vcs: Option<VcsStatus>,
 }
 
 impl Default for Wizard {
     fn default() -> Self {
-        Self { step: Step::Welcome, permissions: None, vcs: None, enabled_skills: vec![], providers: vec![] }
+        Self { step: Step::Welcome, path: Step::Welcome.path(), permissions: None, vcs: None }
     }
 }
 
@@ -120,34 +123,36 @@ impl Wizard {
         match (self.step, ev) {
             (Step::Welcome, Event::Initialize) => {}
             (Step::Permissions, Event::PermissionsChecked { report }) => {
-                if !report.ok() {
-                    // Keep the report so the UI can show what failed.
-                    self.permissions = Some(report);
-                    return bad("workspace or required toolchains failed verification");
-                }
+                let ok = report.ok();
+                // Keep a failing report too, so the UI can show what failed.
                 self.permissions = Some(report);
-            }
-            (Step::Vcs, Event::VcsConfigured { choice }) => {
-                if !choice.repo_ready {
-                    return bad("workspace must be a git repository (initialize it first)");
+                if !ok {
+                    return bad("the workspace is not readable/writable or a required tool is missing");
                 }
-                self.vcs = Some(choice);
             }
-            (Step::Skills, Event::SkillsConfirmed { enabled_skills, providers }) => {
-                if providers.is_empty() {
-                    return bad("configure at least one provider (local or cloud)");
+            (Step::Vcs, Event::VcsConfigured { status }) => {
+                let ready = status.is_repo;
+                self.vcs = Some(status);
+                if !ready {
+                    return bad("the workspace must be a git repository (tick \"initialize\" to create one)");
                 }
-                self.enabled_skills = enabled_skills;
-                self.providers = providers;
             }
+            (Step::Skills, Event::SkillsConfirmed) => {}
+            (_, Event::Resume) => return Ok(self.goto(Step::Dashboard)),
             (_, Event::Back) => {
-                self.step = self.step.prev().ok_or_else(|| Error::Wizard("already at first step".into()))?;
-                return Ok(self.step);
+                let prev = self.step.prev().ok_or_else(|| Error::Wizard("already at the first step".into()))?;
+                return Ok(self.goto(prev));
             }
-            (step, _) => return Err(Error::Wizard(format!("event not valid in step {step:?}"))),
+            (step, ev) => return Err(Error::Wizard(format!("{ev:?} is not valid in step {step:?}"))),
         }
-        self.step = self.step.next().expect("terminal step handled above");
-        Ok(self.step)
+        let next = self.step.next().expect("terminal step handled above");
+        Ok(self.goto(next))
+    }
+
+    fn goto(&mut self, s: Step) -> Step {
+        self.step = s;
+        self.path = s.path();
+        s
     }
 
     /// Route guard: a page is reachable only if every earlier step is done.
@@ -160,10 +165,16 @@ impl Wizard {
     }
 }
 
-const TOOLCHAINS: &[(&str, bool)] = &[("git", true), ("cargo", false), ("python", false), ("node", false)];
+/// (display name, binaries to try, required). Only git is required.
+const TOOLCHAINS: &[(&str, &[&str], bool)] = &[
+    ("git", &["git"], true),
+    ("cargo", &["cargo"], false),
+    ("python", &["python3", "python"], false),
+    ("node", &["node"], false),
+];
 
 /// Verify the workspace directory (read + write via a real probe file) and
-/// probe toolchains with `--version`. Only `git` is required.
+/// probe toolchains with `--version`.
 pub async fn check_permissions(workspace: &Path) -> PermissionReport {
     let readable = tokio::fs::read_dir(workspace).await.is_ok();
     let probe = workspace.join(format!(".orchopork-probe-{}", std::process::id()));
@@ -171,14 +182,23 @@ pub async fn check_permissions(workspace: &Path) -> PermissionReport {
     let _ = tokio::fs::remove_file(&probe).await;
 
     let mut toolchains = Vec::new();
-    for (name, required) in TOOLCHAINS {
-        let out = tokio::process::Command::new(name).arg("--version").stdin(std::process::Stdio::null()).output().await;
-        let version = match out {
-            Ok(o) if o.status.success() => {
-                Some(String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").trim().to_string())
+    for (name, bins, required) in TOOLCHAINS {
+        let mut version = None;
+        for bin in *bins {
+            let out = tokio::process::Command::new(bin)
+                .arg("--version")
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output()
+                .await;
+            if let Ok(o) = out
+                && o.status.success()
+            {
+                let text = if o.stdout.is_empty() { o.stderr } else { o.stdout };
+                version = Some(String::from_utf8_lossy(&text).lines().next().unwrap_or("").trim().to_string());
+                break;
             }
-            _ => None,
-        };
+        }
         toolchains.push(Toolchain { name: (*name).into(), required: *required, version });
     }
     PermissionReport { workspace: workspace.to_path_buf(), readable, writable, toolchains }
@@ -197,18 +217,29 @@ mod tests {
         }
     }
 
+    fn vcs(is_repo: bool) -> VcsStatus {
+        VcsStatus {
+            is_repo,
+            has_commits: false,
+            branch: None,
+            origin: None,
+            remote_auth: RemoteAuth::None,
+            has_github_token: false,
+        }
+    }
+
     #[test]
     fn happy_path_reaches_dashboard_and_gates_routes() {
         let mut w = Wizard::default();
         assert!(!w.can_access(Step::Permissions));
         w.apply(Event::Initialize).unwrap();
         w.apply(Event::PermissionsChecked { report: report(true) }).unwrap();
-        w.apply(Event::VcsConfigured { choice: VcsChoice { repo_ready: true, remote_auth: RemoteAuth::None } })
-            .unwrap();
+        assert!(w.apply(Event::VcsConfigured { status: vcs(false) }).is_err());
+        w.apply(Event::VcsConfigured { status: vcs(true) }).unwrap();
         assert!(!w.can_access(Step::Dashboard));
-        let s = w.apply(Event::SkillsConfirmed { enabled_skills: vec![], providers: vec!["ollama".into()] }).unwrap();
-        assert_eq!(s, Step::Dashboard);
+        assert_eq!(w.apply(Event::SkillsConfirmed).unwrap(), Step::Dashboard);
         assert!(w.is_complete() && w.can_access(Step::Welcome));
+        assert_eq!(w.path, "/app");
     }
 
     #[test]
@@ -218,6 +249,14 @@ mod tests {
         w.apply(Event::Initialize).unwrap();
         assert!(w.apply(Event::PermissionsChecked { report: report(false) }).is_err());
         assert_eq!(w.step, Step::Permissions);
+        assert!(w.permissions.is_some(), "failing report is kept for the UI");
         assert_eq!(w.apply(Event::Back).unwrap(), Step::Welcome);
+    }
+
+    #[test]
+    fn resume_skips_to_the_dashboard() {
+        let mut w = Wizard::default();
+        w.apply(Event::Initialize).unwrap();
+        assert_eq!(w.apply(Event::Resume).unwrap(), Step::Dashboard);
     }
 }

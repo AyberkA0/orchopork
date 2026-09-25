@@ -1,196 +1,333 @@
+//! Runs and their steps. Every step row points at the git commit that
+//! captured the run's worktree right after that step, and carries the full
+//! `RunState` the loop needs to continue from it — so resuming, restarting
+//! after a crash, and rewinding are all just "load step N".
+
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use uuid::Uuid;
+use sqlx::Row;
+use sqlx::sqlite::SqliteRow;
 
 use super::{Store, now_unix};
 use crate::error::{Error, Result};
-use crate::git::GitRepo;
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Snapshot {
+macro_rules! text_enum {
+    ($name:ident { $($variant:ident => $s:literal),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum $name { $($variant),+ }
+
+        impl $name {
+            pub fn as_str(self) -> &'static str {
+                match self { $($name::$variant => $s),+ }
+            }
+            pub fn parse(s: &str) -> Result<Self> {
+                match s {
+                    $($s => Ok($name::$variant),)+
+                    _ => Err(Error::InvalidRequest(format!(concat!("unknown ", stringify!($name), " {:?}"), s))),
+                }
+            }
+        }
+    };
+}
+
+text_enum!(RunStatus { Running => "running", Paused => "paused", Done => "done" });
+text_enum!(Phase { Plan => "plan", Act => "act", Verify => "verify", Review => "review", Done => "done" });
+text_enum!(StepKind { Plan => "plan", Act => "act", Verify => "verify", Review => "review", Inject => "inject" });
+
+/// Loop state after a step. Stored with every step, so the state at any
+/// checkpoint is exact rather than re-derived.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunState {
+    pub phase: Phase,
+    /// Consecutive failed actor turns.
+    pub failures: u32,
+    /// Review rounds that ended in "revise".
+    pub reviews: u32,
+    /// Route the next actor turn to the escalation model.
+    pub escalate: bool,
+}
+
+impl Default for RunState {
+    fn default() -> Self {
+        Self { phase: Phase::Plan, failures: 0, reviews: 0, escalate: false }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Run {
     pub id: String,
-    pub thread_id: String,
-    pub parent_id: Option<String>,
+    pub goal: String,
+    pub status: RunStatus,
+    pub branch: String,
+    pub worktree: String,
+    pub base_commit: String,
+    pub verify_command: Option<String>,
+    /// Why the run last stopped, when it was not a clean finish.
+    pub error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// Everything this run has spent, including calls whose output was
+    /// later rewound away.
+    pub cost_usd: f64,
+    pub step_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Step {
+    pub run_id: String,
     pub seq: i64,
-    pub node: String,
-    /// JSON-encoded context delta produced by this transition.
-    pub context_delta: String,
+    pub kind: StepKind,
+    /// Model reply, command summary, or injected text.
+    pub output: String,
+    /// Tool result / verification output fed back to the model.
+    pub observation: Option<String>,
+    /// Free-form details: model, tokens, tool name, ok flag, escalation.
+    pub meta: serde_json::Value,
+    pub state: RunState,
     pub git_commit: String,
-    pub accumulated_cost_usd: f64,
+    pub cost_usd: f64,
     pub created_at: i64,
 }
 
-pub enum RewindTarget {
-    Snapshot(String),
-    Steps(u32),
+const RUN_COLUMNS: &str = "r.id, r.goal, r.status, r.branch, r.worktree, r.base_commit, r.verify_command, r.error,
+    r.created_at, r.updated_at,
+    (SELECT COALESCE(SUM(s.cost_usd), 0.0) FROM spend s WHERE s.run_id = r.id) AS cost_usd,
+    (SELECT COUNT(*) FROM steps t WHERE t.run_id = r.id) AS step_count";
+
+fn run_from_row(row: &SqliteRow) -> Result<Run> {
+    Ok(Run {
+        id: row.try_get("id")?,
+        goal: row.try_get("goal")?,
+        status: RunStatus::parse(row.try_get("status")?)?,
+        branch: row.try_get("branch")?,
+        worktree: row.try_get("worktree")?,
+        base_commit: row.try_get("base_commit")?,
+        verify_command: row.try_get("verify_command")?,
+        error: row.try_get("error")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+        cost_usd: row.try_get("cost_usd")?,
+        step_count: row.try_get("step_count")?,
+    })
 }
 
-/// Couples every graph transition to exactly one git commit and one SQLite row.
-#[derive(Clone)]
-pub struct Checkpointer {
-    store: Store,
-    repo: GitRepo,
+fn step_from_row(row: &SqliteRow) -> Result<Step> {
+    let meta: String = row.try_get("meta")?;
+    let state: String = row.try_get("state")?;
+    Ok(Step {
+        run_id: row.try_get("run_id")?,
+        seq: row.try_get("seq")?,
+        kind: StepKind::parse(row.try_get("kind")?)?,
+        output: row.try_get("output")?,
+        observation: row.try_get("observation")?,
+        meta: serde_json::from_str(&meta)?,
+        state: serde_json::from_str(&state)?,
+        git_commit: row.try_get("git_commit")?,
+        cost_usd: row.try_get("cost_usd")?,
+        created_at: row.try_get("created_at")?,
+    })
 }
 
-impl Checkpointer {
-    pub fn new(store: Store, repo: GitRepo) -> Self {
-        Self { store, repo }
-    }
+/// What a caller provides to append a step; `seq` and timestamps are
+/// assigned by the store.
+pub struct NewStep<'a> {
+    pub kind: StepKind,
+    pub output: &'a str,
+    pub observation: Option<&'a str>,
+    pub meta: serde_json::Value,
+    pub state: &'a RunState,
+    pub git_commit: &'a str,
+    pub cost_usd: f64,
+}
 
-    pub async fn head(&self, thread_id: &str) -> Result<Option<Snapshot>> {
-        Ok(sqlx::query_as("SELECT * FROM snapshots WHERE thread_id = ? ORDER BY seq DESC LIMIT 1")
-            .bind(thread_id)
-            .fetch_optional(&self.store.pool)
-            .await?)
-    }
-
-    pub async fn history(&self, thread_id: &str) -> Result<Vec<Snapshot>> {
-        Ok(sqlx::query_as("SELECT * FROM snapshots WHERE thread_id = ? ORDER BY seq")
-            .bind(thread_id)
-            .fetch_all(&self.store.pool)
-            .await?)
-    }
-
-    /// Commit the working tree, then record the snapshot + spend atomically.
-    ///
-    /// Ordering: git first, DB second. A crash in between leaves an orphan
-    /// commit (harmless, reachable via reflog) but never a snapshot pointing
-    /// at a commit that does not exist.
-    pub async fn commit(&self, thread_id: &str, node: &str, delta: &Value, step_cost_usd: f64) -> Result<Snapshot> {
-        let prev = self.head(thread_id).await?;
-        let seq = prev.as_ref().map_or(0, |p| p.seq + 1);
-        let commit = self.repo.commit_all(&format!("orchopork: {thread_id} #{seq} {node}")).await?;
+impl Store {
+    pub async fn insert_run(
+        &self,
+        id: &str,
+        goal: &str,
+        branch: &str,
+        worktree: &str,
+        base_commit: &str,
+        verify_command: Option<&str>,
+    ) -> Result<Run> {
         let now = now_unix();
-        let snap = Snapshot {
-            id: Uuid::new_v4().to_string(),
-            thread_id: thread_id.into(),
-            parent_id: prev.as_ref().map(|p| p.id.clone()),
-            seq,
-            node: node.into(),
-            context_delta: serde_json::to_string(delta)?,
-            git_commit: commit,
-            accumulated_cost_usd: prev.map_or(0.0, |p| p.accumulated_cost_usd) + step_cost_usd,
-            created_at: now,
-        };
+        sqlx::query(
+            "INSERT INTO runs (id, goal, status, branch, worktree, base_commit, verify_command, error, created_at, updated_at)
+             VALUES (?, ?, 'paused', ?, ?, ?, ?, NULL, ?, ?)",
+        )
+        .bind(id)
+        .bind(goal)
+        .bind(branch)
+        .bind(worktree)
+        .bind(base_commit)
+        .bind(verify_command)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        self.get_run(id).await
+    }
 
-        let mut tx = self.store.pool.begin().await?;
-        sqlx::query("INSERT OR IGNORE INTO threads (id, created_at) VALUES (?, ?)")
-            .bind(thread_id)
-            .bind(now)
-            .execute(&mut *tx)
+    pub async fn get_run(&self, id: &str) -> Result<Run> {
+        let row = sqlx::query(&format!("SELECT {RUN_COLUMNS} FROM runs r WHERE r.id = ?"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("run {id}")))?;
+        run_from_row(&row)
+    }
+
+    pub async fn list_runs(&self) -> Result<Vec<Run>> {
+        let rows = sqlx::query(&format!("SELECT {RUN_COLUMNS} FROM runs r ORDER BY r.created_at DESC, r.id"))
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(run_from_row).collect()
+    }
+
+    pub async fn set_run_status(&self, id: &str, status: RunStatus, error: Option<&str>) -> Result<Run> {
+        let n = sqlx::query("UPDATE runs SET status = ?, error = ?, updated_at = ? WHERE id = ?")
+            .bind(status.as_str())
+            .bind(error)
+            .bind(now_unix())
+            .bind(id)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        if n == 0 {
+            return Err(Error::NotFound(format!("run {id}")));
+        }
+        self.get_run(id).await
+    }
+
+    /// Runs left `running` by a process that exited mid-step. Nothing is
+    /// lost (state lives in steps + git), they just need a resume.
+    pub async fn mark_interrupted_runs(&self) -> Result<u64> {
+        Ok(sqlx::query("UPDATE runs SET status = 'paused', error = ?, updated_at = ? WHERE status = 'running'")
+            .bind("interrupted: orchopork exited while this run was executing; resume to continue")
+            .bind(now_unix())
+            .execute(&self.pool)
+            .await?
+            .rows_affected())
+    }
+
+    pub async fn delete_run(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM steps WHERE run_id = ?").bind(id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM runs WHERE id = ?").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn append_step(&self, run_id: &str, s: NewStep<'_>) -> Result<Step> {
+        let now = now_unix();
+        let mut tx = self.pool.begin().await?;
+        let (seq,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(seq), -1) + 1 FROM steps WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(&mut *tx)
             .await?;
         sqlx::query(
-            "INSERT INTO snapshots (id, thread_id, parent_id, seq, node, context_delta, git_commit, accumulated_cost_usd, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO steps (run_id, seq, kind, output, observation, meta, state, git_commit, cost_usd, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&snap.id)
-        .bind(&snap.thread_id)
-        .bind(&snap.parent_id)
-        .bind(snap.seq)
-        .bind(&snap.node)
-        .bind(&snap.context_delta)
-        .bind(&snap.git_commit)
-        .bind(snap.accumulated_cost_usd)
-        .bind(snap.created_at)
+        .bind(run_id)
+        .bind(seq)
+        .bind(s.kind.as_str())
+        .bind(s.output)
+        .bind(s.observation)
+        .bind(s.meta.to_string())
+        .bind(serde_json::to_string(s.state)?)
+        .bind(s.git_commit)
+        .bind(s.cost_usd)
+        .bind(now)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("INSERT INTO spend_ledger (thread_id, node, cost_usd, created_at) VALUES (?, ?, ?, ?)")
-            .bind(thread_id)
-            .bind(node)
-            .bind(step_cost_usd)
-            .bind(now)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query("UPDATE runs SET updated_at = ? WHERE id = ?").bind(now).bind(run_id).execute(&mut *tx).await?;
         tx.commit().await?;
-        Ok(snap)
+        Ok(Step {
+            run_id: run_id.to_string(),
+            seq,
+            kind: s.kind,
+            output: s.output.to_string(),
+            observation: s.observation.map(str::to_string),
+            meta: s.meta,
+            state: s.state.clone(),
+            git_commit: s.git_commit.to_string(),
+            cost_usd: s.cost_usd,
+            created_at: now,
+        })
     }
 
-    /// `/rewind`: drop snapshots after the target and `git reset --hard` to its commit.
-    ///
-    /// The DB transaction stays open across the git reset: if git fails the
-    /// deletes roll back, so SQLite and the worktree never disagree. Before
-    /// resetting, the current tree (including uncommitted edits) is committed
-    /// and pinned under `refs/orchopork/rewound/*`, so a rewind is recoverable.
-    pub async fn rewind(&self, thread_id: &str, target: RewindTarget) -> Result<Snapshot> {
-        let head = self.head(thread_id).await?.ok_or_else(|| Error::NotFound(format!("thread {thread_id}")))?;
-        let dest: Snapshot = match target {
-            RewindTarget::Snapshot(id) => {
-                sqlx::query_as("SELECT * FROM snapshots WHERE id = ? AND thread_id = ? AND seq <= ?")
-                    .bind(&id)
-                    .bind(thread_id)
-                    .bind(head.seq)
-                    .fetch_optional(&self.store.pool)
-                    .await?
-                    .ok_or_else(|| Error::NotFound(format!("snapshot {id} in thread {thread_id}")))?
-            }
-            RewindTarget::Steps(n) => {
-                let seq = head.seq - i64::from(n);
-                sqlx::query_as("SELECT * FROM snapshots WHERE thread_id = ? AND seq = ?")
-                    .bind(thread_id)
-                    .bind(seq)
-                    .fetch_optional(&self.store.pool)
-                    .await?
-                    .ok_or_else(|| Error::NotFound(format!("cannot rewind {n} steps from seq {}", head.seq)))?
-            }
-        };
+    pub async fn steps(&self, run_id: &str) -> Result<Vec<Step>> {
+        let rows =
+            sqlx::query("SELECT * FROM steps WHERE run_id = ? ORDER BY seq").bind(run_id).fetch_all(&self.pool).await?;
+        rows.iter().map(step_from_row).collect()
+    }
 
-        let safety = self.repo.commit_all("orchopork: pre-rewind safety").await?;
-        self.repo.update_ref(&format!("refs/orchopork/rewound/{}-{}", now_unix(), head.seq), &safety).await?;
+    pub async fn step(&self, run_id: &str, seq: i64) -> Result<Step> {
+        let row = sqlx::query("SELECT * FROM steps WHERE run_id = ? AND seq = ?")
+            .bind(run_id)
+            .bind(seq)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("step {seq} of run {run_id}")))?;
+        step_from_row(&row)
+    }
 
-        let mut tx = self.store.pool.begin().await?;
-        sqlx::query("DELETE FROM snapshots WHERE thread_id = ? AND seq > ?")
-            .bind(thread_id)
-            .bind(dest.seq)
-            .execute(&mut *tx)
+    pub async fn head_step(&self, run_id: &str) -> Result<Option<Step>> {
+        let row = sqlx::query("SELECT * FROM steps WHERE run_id = ? ORDER BY seq DESC LIMIT 1")
+            .bind(run_id)
+            .fetch_optional(&self.pool)
             .await?;
-        self.repo.reset_hard(&dest.git_commit).await?; // Err drops tx => rollback
-        tx.commit().await?;
-        Ok(dest)
+        row.as_ref().map(step_from_row).transpose()
+    }
+
+    pub async fn truncate_steps_after(&self, run_id: &str, seq: i64) -> Result<u64> {
+        Ok(sqlx::query("DELETE FROM steps WHERE run_id = ? AND seq > ?")
+            .bind(run_id)
+            .bind(seq)
+            .execute(&self.pool)
+            .await?
+            .rows_affected())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    async fn read(dir: &std::path::Path) -> String {
-        tokio::fs::read_to_string(dir.join("a.txt")).await.unwrap()
-    }
 
     #[tokio::test]
-    async fn snapshot_commit_then_rewind_restores_db_and_worktree() {
-        let ws = tempfile::tempdir().unwrap();
-        let repo = GitRepo::new(ws.path());
-        repo.init().await.unwrap();
-        let store = Store::open(&ws.path().join(".orchopork/state.db")).await.unwrap();
-        let cp = Checkpointer::new(store.clone(), repo.clone());
-
-        let mut ids = vec![];
-        for (v, cost) in [("v1", 0.10), ("v2", 0.20), ("v3", 0.30)] {
-            tokio::fs::write(ws.path().join("a.txt"), v).await.unwrap();
-            ids.push(cp.commit("t1", "coder", &json!({ "wrote": v }), cost).await.unwrap());
+    async fn steps_append_in_order_and_spend_survives_truncation() {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::open(&d.path().join("s.db")).await.unwrap();
+        store.insert_run("r1", "goal", "orchopork/r1", "/wt", "abcdef1", None).await.unwrap();
+        let st = RunState::default();
+        for i in 0..3 {
+            let s = store
+                .append_step(
+                    "r1",
+                    NewStep {
+                        kind: StepKind::Act,
+                        output: "o",
+                        observation: None,
+                        meta: serde_json::json!({ "i": i }),
+                        state: &st,
+                        git_commit: "abcdef1",
+                        cost_usd: 0.5,
+                    },
+                )
+                .await
+                .unwrap();
+            assert_eq!(s.seq, i);
+            store.record_spend("r1", "claude", "m", 1, 1, 0.5).await.unwrap();
         }
-        assert!((ids[2].accumulated_cost_usd - 0.60).abs() < 1e-9);
-        // The state DB itself must not be versioned.
-        assert!(repo.run(&["ls-files", ".orchopork"]).await.unwrap().is_empty());
+        assert_eq!(store.truncate_steps_after("r1", 0).await.unwrap(), 2);
+        let run = store.get_run("r1").await.unwrap();
+        assert_eq!(run.step_count, 1);
+        assert!((run.cost_usd - 1.5).abs() < 1e-9, "rewinding must not un-spend money");
+        assert_eq!(store.head_step("r1").await.unwrap().unwrap().meta["i"], 0);
 
-        // Uncommitted junk must survive as a recoverable ref, not vanish.
-        tokio::fs::write(ws.path().join("a.txt"), "dirty").await.unwrap();
-        let d = cp.rewind("t1", RewindTarget::Steps(1)).await.unwrap();
-        assert_eq!((d.seq, read(ws.path()).await.as_str()), (1, "v2"));
-        assert_eq!(cp.history("t1").await.unwrap().len(), 2);
-
-        let d = cp.rewind("t1", RewindTarget::Snapshot(ids[0].id.clone())).await.unwrap();
-        assert_eq!((d.seq, read(ws.path()).await.as_str()), (0, "v1"));
-        assert_eq!(cp.head("t1").await.unwrap().unwrap().id, ids[0].id);
-
-        let refs = repo.run(&["for-each-ref", "refs/orchopork/rewound"]).await.unwrap();
-        assert_eq!(refs.lines().count(), 2);
-
-        // Money spent is not un-spent by rewinding.
-        assert!((store.spend_since(0).await.unwrap() - 0.60).abs() < 1e-9);
-        // Rewinding past the start is an error, not a wrap-around.
-        assert!(cp.rewind("t1", RewindTarget::Steps(1)).await.is_err());
+        store.set_run_status("r1", RunStatus::Running, None).await.unwrap();
+        assert_eq!(store.mark_interrupted_runs().await.unwrap(), 1);
+        assert_eq!(store.get_run("r1").await.unwrap().status, RunStatus::Paused);
     }
 }

@@ -40,7 +40,7 @@ pub struct SkillRegistry {
 
 impl SkillRegistry {
     /// Installs bundled skills if absent, loads the directory, and restores
-    /// the enabled set (defaults to all bundled skills on first run).
+    /// the enabled set (`loader::DEFAULT_ENABLED` on first run).
     pub fn open(dir: impl Into<PathBuf>, state_file: impl Into<PathBuf>) -> Result<Self> {
         let reg = Self { dir: dir.into(), state_file: state_file.into(), inner: RwLock::default() };
         loader::install_bundled(&reg.dir)?;
@@ -48,12 +48,8 @@ impl SkillRegistry {
         reg.reload()?;
         if first_run {
             let mut g = reg.inner.write().unwrap();
-            g.enabled = loader::BUNDLED
-                .iter()
-                .filter_map(|(f, _)| f.strip_suffix(".yaml"))
-                .filter(|n| g.skills.contains_key(*n))
-                .map(String::from)
-                .collect();
+            g.enabled =
+                loader::DEFAULT_ENABLED.iter().filter(|n| g.skills.contains_key(**n)).map(|n| n.to_string()).collect();
             drop(g);
             reg.persist()?;
         }
@@ -87,37 +83,38 @@ impl SkillRegistry {
         self.inner.read().unwrap().skills.contains_key(name)
     }
 
+    pub fn dir(&self) -> &std::path::Path {
+        &self.dir
+    }
+
     pub fn set_enabled(&self, name: &str, on: bool) -> Result<()> {
-        {
-            let mut g = self.inner.write().unwrap();
-            if !g.skills.contains_key(name) {
-                return Err(Error::NotFound(format!("skill {name}")));
-            }
-            if on {
-                g.enabled.insert(name.into());
-            } else {
-                g.enabled.remove(name);
-            }
+        let mut next = self.inner.read().unwrap().enabled.clone();
+        if on {
+            next.insert(name.into());
+        } else {
+            next.remove(name);
         }
-        self.persist()
+        self.replace_enabled(next)
     }
 
     pub fn set_enabled_exact(&self, names: &[String]) -> Result<()> {
-        {
-            let mut g = self.inner.write().unwrap();
-            if let Some(bad) = names.iter().find(|n| !g.skills.contains_key(*n)) {
-                return Err(Error::NotFound(format!("skill {bad}")));
-            }
-            g.enabled = names.iter().cloned().collect();
-        }
-        self.persist()
+        self.replace_enabled(names.iter().cloned().collect())
     }
 
-    /// Create/overwrite a custom skill from the UI, then hot-reload.
-    pub fn save_custom(&self, skill: &Skill) -> Result<()> {
-        skill.validate()?;
-        std::fs::write(self.dir.join(format!("{}.yaml", skill.name)), serde_yaml::to_string(skill)?)?;
-        self.reload().map(drop)
+    /// Validates the whole new set (unknown names, declared conflicts,
+    /// duplicate tools) *before* committing it, so an invalid combination
+    /// is rejected at toggle time instead of failing the next run step.
+    fn replace_enabled(&self, next: BTreeSet<String>) -> Result<()> {
+        {
+            let mut g = self.inner.write().unwrap();
+            if let Some(bad) = next.iter().find(|n| !g.skills.contains_key(*n)) {
+                return Err(Error::NotFound(format!("skill {bad}")));
+            }
+            let chosen: Vec<Skill> = next.iter().filter_map(|n| g.skills.get(n).cloned()).collect();
+            compose("", &chosen)?;
+            g.enabled = next;
+        }
+        self.persist()
     }
 
     pub fn enabled_skills(&self) -> Vec<Skill> {
@@ -131,11 +128,7 @@ impl SkillRegistry {
 
     fn persist(&self) -> Result<()> {
         let enabled = self.inner.read().unwrap().enabled.clone();
-        if let Some(p) = self.state_file.parent() {
-            std::fs::create_dir_all(p)?;
-        }
-        std::fs::write(&self.state_file, serde_yaml::to_string(&enabled)?)?;
-        Ok(())
+        crate::fsutil::write_atomic(&self.state_file, serde_yaml::to_string(&enabled)?.as_bytes(), false)
     }
 }
 
@@ -153,6 +146,7 @@ mod tests {
     fn bundled_skills_load_and_compose_in_priority_order() {
         let (_t, r) = registry();
         assert_eq!(r.list().len(), 4);
+        r.set_enabled("markdown-memory-sync", true).unwrap();
         let p = r.compose("You are orchopork.").unwrap();
         let a = p.system.find("anti-sycophancy-terse").unwrap();
         let b = p.system.find("markdown-memory-sync").unwrap();
@@ -191,5 +185,20 @@ mod tests {
             validator: None,
         };
         assert!(compose("", &[mk("a", "b"), mk("b", "a")]).is_err());
+    }
+
+    #[test]
+    fn enabling_a_conflicting_skill_is_rejected_and_state_is_unchanged() {
+        let (t, r) = registry();
+        std::fs::write(
+            t.path().join("skills/chatty.yaml"),
+            "name: chatty\nversion: '1'\ntype: system_modifier\ndescription: d\nprompt_injection: Be warm.\nconflicts_with: [anti-sycophancy-terse]\n",
+        )
+        .unwrap();
+        r.reload().unwrap();
+        let before: Vec<_> = r.enabled_skills().into_iter().map(|s| s.name).collect();
+        assert!(matches!(r.set_enabled("chatty", true), Err(Error::Skill(_))));
+        let after: Vec<_> = r.enabled_skills().into_iter().map(|s| s.name).collect();
+        assert_eq!(before, after);
     }
 }

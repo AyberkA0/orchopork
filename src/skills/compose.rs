@@ -69,15 +69,23 @@ impl ComposedPrompt {
         for (skill, spec) in &self.validators {
             for f in &spec.forbidden_substrings {
                 if hay.contains(&f.to_lowercase()) {
-                    v.push(Violation { skill: skill.clone(), detail: format!("forbidden: {f:?}") });
+                    v.push(Violation { skill: skill.clone(), detail: format!("contains forbidden text {f:?}") });
                 }
             }
             for r in &spec.required_substrings {
                 if !hay.contains(&r.to_lowercase()) {
-                    v.push(Violation { skill: skill.clone(), detail: format!("missing: {r:?}") });
+                    v.push(Violation { skill: skill.clone(), detail: format!("is missing required text {r:?}") });
                 }
             }
         }
         v
+    }
+
+    /// (skill name, command) for every validator that gates `finish`.
+    pub fn verify_commands(&self) -> Vec<(String, String)> {
+        self.validators
+            .iter()
+            .filter_map(|(n, v)| v.command.as_ref().filter(|c| !c.trim().is_empty()).map(|c| (n.clone(), c.clone())))
+            .collect()
     }
 }

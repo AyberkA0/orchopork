@@ -10,11 +10,36 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 
 use crate::error::{Error, Result};
 use crate::providers::{CompletionRequest, CompletionResponse, Gateway, Message, ProviderId, Role};
 use crate::skills::SkillRegistry;
-use crate::storage::{Checkpointer, Snapshot};
+use crate::storage::{Checkpointer, RewindTarget, Snapshot};
+
+/// Broadcast to every live `/api/run/stream` subscriber (dashboard trace
+/// view, a CLI `run watch`, or an embedder's own listener) the moment a
+/// checkpoint lands. Best-effort: a step that nobody is watching is not an
+/// error, so `send` failures (no receivers) are silently dropped.
+const EVENT_CHANNEL_CAPACITY: usize = 256;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExecutionEvent {
+    Step { thread_id: String, outcome: StepOutcome },
+    Inject { thread_id: String, snapshot: Snapshot },
+    Rewind { thread_id: String, snapshot: Snapshot },
+}
+
+impl ExecutionEvent {
+    pub fn thread_id(&self) -> &str {
+        match self {
+            ExecutionEvent::Step { thread_id, .. }
+            | ExecutionEvent::Inject { thread_id, .. }
+            | ExecutionEvent::Rewind { thread_id, .. } => thread_id,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,19 +100,32 @@ pub struct Executor {
     gateway: Arc<Gateway>,
     skills: Arc<SkillRegistry>,
     checkpointer: Checkpointer,
+    events: broadcast::Sender<ExecutionEvent>,
 }
 
 impl Executor {
     pub fn new(gateway: Arc<Gateway>, skills: Arc<SkillRegistry>, checkpointer: Checkpointer) -> Self {
-        Self { gateway, skills, checkpointer }
+        let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        Self { gateway, skills, checkpointer, events }
+    }
+
+    /// A live feed of every step/inject/rewind across all threads in this
+    /// workspace, from the moment of subscription onward. Each subscriber
+    /// gets its own receiver, so the dashboard's trace view, a second
+    /// browser tab, and a CLI watcher can all listen independently.
+    pub fn subscribe(&self) -> broadcast::Receiver<ExecutionEvent> {
+        self.events.subscribe()
     }
 
     pub async fn history(&self, thread_id: &str) -> Result<Vec<Snapshot>> {
         self.checkpointer.history(thread_id).await
     }
 
-    pub async fn rewind(&self, thread_id: &str, target: crate::storage::RewindTarget) -> Result<Snapshot> {
-        self.checkpointer.rewind(thread_id, target).await
+    pub async fn rewind(&self, thread_id: &str, target: RewindTarget) -> Result<Snapshot> {
+        let snapshot = self.checkpointer.rewind(thread_id, target).await?;
+        let _ =
+            self.events.send(ExecutionEvent::Rewind { thread_id: thread_id.to_string(), snapshot: snapshot.clone() });
+        Ok(snapshot)
     }
 
     /// Replays a thread's checkpoint history into the message list a
@@ -107,7 +145,11 @@ impl Executor {
     /// dashboard's "Inject": the next `step` will see it in the transcript.
     pub async fn inject(&self, thread_id: &str, content: &str) -> Result<Snapshot> {
         let delta = Message { role: Role::User, content: content.to_string() };
-        self.checkpointer.commit(thread_id, "user_injection", &serde_json::to_value(&delta)?, 0.0).await
+        let snapshot =
+            self.checkpointer.commit(thread_id, "user_injection", &serde_json::to_value(&delta)?, 0.0).await?;
+        let _ =
+            self.events.send(ExecutionEvent::Inject { thread_id: thread_id.to_string(), snapshot: snapshot.clone() });
+        Ok(snapshot)
     }
 
     /// Runs exactly one node: composes the skill-augmented system prompt,
@@ -137,7 +179,9 @@ impl Executor {
             .checkpointer
             .commit(thread_id, node.as_str(), &serde_json::to_value(&delta)?, response.cost_usd)
             .await?;
-        Ok(StepOutcome { snapshot, response })
+        let outcome = StepOutcome { snapshot, response };
+        let _ = self.events.send(ExecutionEvent::Step { thread_id: thread_id.to_string(), outcome: outcome.clone() });
+        Ok(outcome)
     }
 }
 
@@ -228,5 +272,21 @@ mod tests {
         let err = ex.step("t1", NodeKind::Planner, ProviderId::Ollama, "m").await.unwrap_err();
         assert!(matches!(err, Error::Skill(_)));
         assert!(ex.transcript("t1").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn subscribers_see_step_inject_and_rewind_events() {
+        let ws = tempfile::tempdir().unwrap();
+        let ex = executor(ws.path()).await;
+        let mut rx = ex.subscribe();
+
+        ex.step("t1", NodeKind::Planner, ProviderId::Ollama, "m").await.unwrap();
+        assert!(matches!(rx.recv().await.unwrap(), ExecutionEvent::Step { thread_id, .. } if thread_id == "t1"));
+
+        ex.inject("t1", "note").await.unwrap();
+        assert!(matches!(rx.recv().await.unwrap(), ExecutionEvent::Inject { thread_id, .. } if thread_id == "t1"));
+
+        ex.rewind("t1", RewindTarget::Steps(1)).await.unwrap();
+        assert!(matches!(rx.recv().await.unwrap(), ExecutionEvent::Rewind { thread_id, .. } if thread_id == "t1"));
     }
 }

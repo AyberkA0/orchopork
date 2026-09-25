@@ -5,24 +5,32 @@ pub mod wizard;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use axum::extract::State;
+use std::convert::Infallible;
+
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
+use tokio_stream::{Stream, StreamExt};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::bootstrap;
 use crate::error::Error;
 use crate::git::GitRepo;
-use crate::graph::{Executor, NodeKind, StepOutcome};
+use crate::graph::{ExecutionEvent, Executor, NodeKind, StepOutcome};
 use crate::providers::{Gateway, ProviderId};
 use crate::secrets::SecretStore;
 use crate::skills::SkillRegistry;
 use crate::storage::{RewindTarget, Snapshot};
-use wizard::{Event, RemoteAuth, Step, VcsChoice, Wizard};
+use wizard::{Event, RemoteAuth, VcsChoice, Wizard};
+
+/// Single-file embedded SPA: no bundler, no separate asset pipeline. Client
+/// JS drives all routing (wizard steps, dashboard) off `/api/wizard`.
+const INDEX_HTML: &str = include_str!("../../ui/index.html");
 
 pub struct AppState {
     pub wizard: Mutex<Wizard>,
@@ -56,14 +64,18 @@ pub fn router(state: Shared) -> Router {
         .route("/api/wizard/back", post(back))
         .route("/api/skills", get(list_skills))
         .route("/api/skills/reload", post(reload_skills))
+        .route("/api/skills/toggle", post(toggle_skill))
         .route("/api/providers/budget", get(get_budget))
         .route("/api/providers/keys", post(set_provider_key))
         .route("/api/run/step", post(run_step))
         .route("/api/run/inject", post(run_inject))
         .route("/api/run/history", get(run_history))
         .route("/api/run/rewind", post(run_rewind))
-        .route("/app", get(app_gate))
-        // Static SPA (ServeDir / include_dir) is added as the fallback service.
+        .route("/api/run/stream", get(run_stream))
+        // Client-side-routed SPA: every unmatched GET (any wizard step path,
+        // /app, a deep link) gets the same shell; JS reads /api/wizard to
+        // decide what to render. Registered API routes above take priority.
+        .fallback(get(spa_index))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::new()) // no cross-origin access: same-origin UI only
         .with_state(state)
@@ -252,13 +264,37 @@ async fn run_rewind(State(s): State<Shared>, Json(req): Json<RunRewindReq>) -> R
     Ok(Json(s.executor.rewind(&req.thread_id, target).await?))
 }
 
-/// Dashboard is unlocked only after steps 1-4; otherwise bounce to the
-/// current step's page.
-async fn app_gate(State(s): State<Shared>) -> Response {
-    let w = s.wizard.lock().unwrap();
-    if w.can_access(Step::Dashboard) {
-        (StatusCode::OK, "orchopork dashboard").into_response() // SPA index goes here
-    } else {
-        Redirect::to(w.step.path()).into_response()
-    }
+#[derive(Deserialize)]
+struct SkillToggleReq {
+    name: String,
+    on: bool,
+}
+
+async fn toggle_skill(
+    State(s): State<Shared>,
+    Json(req): Json<SkillToggleReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    s.skills.set_enabled(&req.name, req.on)?;
+    Ok(Json(serde_json::json!({ "skills": s.skills.list() })))
+}
+
+/// Live execution trace for one thread: every `step`/`inject`/`rewind`
+/// from the moment of subscription onward, as `text/event-stream`. Each
+/// browser tab (or `curl -N`) gets its own independent subscription.
+async fn run_stream(
+    State(s): State<Shared>,
+    Query(q): Query<ThreadQuery>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let thread_id = q.thread_id;
+    let stream = tokio_stream::wrappers::BroadcastStream::new(s.executor.subscribe())
+        .filter_map(move |msg| {
+            let ev: ExecutionEvent = msg.ok()?;
+            (ev.thread_id() == thread_id).then(|| SseEvent::default().json_data(&ev).ok()).flatten()
+        })
+        .map(Ok::<_, Infallible>);
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+async fn spa_index() -> Html<&'static str> {
+    Html(INDEX_HTML)
 }

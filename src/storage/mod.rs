@@ -5,8 +5,8 @@ mod checkpoint;
 use std::path::Path;
 use std::str::FromStr;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
 pub use checkpoint::{Checkpointer, RewindTarget, Snapshot};
 
@@ -73,8 +73,51 @@ impl Store {
 }
 
 pub(crate) fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+/// UTC unix timestamp for the first instant of the month containing `now`.
+/// No chrono dependency: Howard Hinnant's `civil_from_days`/`days_from_civil`.
+pub fn month_start_unix(now: i64) -> i64 {
+    let days = now.div_euclid(86_400);
+    let (y, m, _) = civil_from_days(days);
+    days_from_civil(y, m, 1) * 86_400
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64; // [0, 399]
+    let mp = if m > 2 { m - 3 } else { m + 9 } as u64; // [0, 11]
+    let doy = (153 * mp + 2) / 5 + d as u64 - 1; // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    era * 146_097 + doe as i64 - 719_468
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::*;
+
+    #[test]
+    fn month_start_lands_on_the_first_at_midnight_utc() {
+        // 2026-03-17 12:34:56 UTC
+        let now = 1_773_924_896;
+        let start = month_start_unix(now);
+        let (y, m, d) = civil_from_days(start.div_euclid(86_400));
+        assert_eq!((y, m, d), (2026, 3, 1));
+        assert_eq!(start % 86_400, 0);
+    }
 }

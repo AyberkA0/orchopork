@@ -29,25 +29,14 @@ impl GitRepo {
         let out = Command::new("git")
             .arg("-C")
             .arg(&self.root)
-            .args([
-                "-c",
-                "user.name=orchopork",
-                "-c",
-                "user.email=orchopork@localhost",
-                "-c",
-                "commit.gpgsign=false",
-            ])
+            .args(["-c", "user.name=orchopork", "-c", "user.email=orchopork@localhost", "-c", "commit.gpgsign=false"])
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null())
             .output()
             .await?;
         if !out.status.success() {
-            return Err(Error::Git(format!(
-                "git {}: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr).trim()
-            )));
+            return Err(Error::Git(format!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim())));
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }

@@ -93,7 +93,11 @@ impl SkillRegistry {
             if !g.skills.contains_key(name) {
                 return Err(Error::NotFound(format!("skill {name}")));
             }
-            if on { g.enabled.insert(name.into()); } else { g.enabled.remove(name); }
+            if on {
+                g.enabled.insert(name.into());
+            } else {
+                g.enabled.remove(name);
+            }
         }
         self.persist()
     }
@@ -176,9 +180,15 @@ mod tests {
     #[test]
     fn conflicts_are_rejected() {
         let mk = |name: &str, c: &str| Skill {
-            name: name.into(), version: "1".into(), kind: SkillType::SystemModifier,
-            description: String::new(), prompt_injection: "x".into(), priority: 1,
-            conflicts_with: vec![c.into()], tools: vec![], validator: None,
+            name: name.into(),
+            version: "1".into(),
+            kind: SkillType::SystemModifier,
+            description: String::new(),
+            prompt_injection: "x".into(),
+            priority: 1,
+            conflicts_with: vec![c.into()],
+            tools: vec![],
+            validator: None,
         };
         assert!(compose("", &[mk("a", "b"), mk("b", "a")]).is_err());
     }

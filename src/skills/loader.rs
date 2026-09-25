@@ -34,18 +34,14 @@ pub fn install_bundled(dir: &Path) -> Result<()> {
 
 pub fn load_dir(dir: &Path) -> Result<LoadReport> {
     let mut report = LoadReport::default();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.is_file())
-        .collect();
+    let mut files: Vec<PathBuf> =
+        std::fs::read_dir(dir)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_file()).collect();
     files.sort();
     for path in files {
         if !matches!(path.extension().and_then(|e| e.to_str()), Some("yaml" | "yml" | "md")) {
             continue;
         }
-        let parsed = std::fs::read_to_string(&path)
-            .map_err(Error::from)
-            .and_then(|text| parse_skill(&path, &text));
+        let parsed = std::fs::read_to_string(&path).map_err(Error::from).and_then(|text| parse_skill(&path, &text));
         match parsed {
             Ok(skill) => {
                 if report.skills.contains_key(&skill.name) {

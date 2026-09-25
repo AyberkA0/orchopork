@@ -22,4 +22,8 @@ pub enum Error {
     Wizard(String),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("provider: {0}")]
+    Provider(String),
+    #[error("budget: {0}")]
+    Budget(String),
 }

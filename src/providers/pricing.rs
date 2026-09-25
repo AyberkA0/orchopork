@@ -26,7 +26,7 @@ fn fallback(provider: ProviderId) -> (f64, f64) {
         ProviderId::Claude => (10.0, 50.0),
         ProviderId::DeepSeek => (0.6, 2.5),
         ProviderId::Gemini => (2.5, 15.0),
-        ProviderId::Ollama | ProviderId::LlamaCpp => (0.0, 0.0),
+        ProviderId::Ollama | ProviderId::LlamaCpp | ProviderId::Acp => (0.0, 0.0),
     }
 }
 

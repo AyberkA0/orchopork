@@ -44,6 +44,27 @@ The interface is a plain chat box. When you send a message, orchopork asks
   **Approve & deploy** starts it. The same tree then shows live status (who is working, who reported, turns and
   cost per agent), and clicking an agent opens its feed, where you can message that agent directly.
 
+### Agents on this computer (ACP)
+
+Claude Code, Gemini CLI, Codex and any other agent that speaks the
+[Agent Client Protocol](https://agentclientprotocol.com) can be used anywhere a model can be used: for a single-agent
+chat, as the lead of an orchestra, or as any member of one (pick it in the agent's edit dialog). orchopork starts
+the agent in the run's worktree, sends it the task with the same context an internal agent would get, streams its
+actions to the UI, answers its permission requests (shell commands only if `allow_commands` is on) and file requests
+(only inside the worktree), then checkpoints the result. Each agent uses your own login for that tool, and its cost
+is not counted against the budget.
+
+Presets (editable in **Models & settings → Agents on this computer**):
+
+| Agent       | Command                                        |
+|-------------|------------------------------------------------|
+| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp` |
+| Gemini CLI  | `gemini --acp`                                 |
+| Codex       | `npx -y @agentclientprotocol/codex-acp`        |
+
+Sign in to each tool once in a terminal (e.g. `claude` → `/login`). The **Test** button runs the ACP handshake.
+From the CLI: `orchopork init --actor acp:claude-code`.
+
 How an orchestra executes: an agent acts only after all of its subordinates have reported, so work flows bottom-up.
 Commanders read their subordinates' reports, check the files, and can **`delegate`** work back to a direct
 subordinate with an order. `finish` sends a report to the agent's commander. When the lead finishes, the optional

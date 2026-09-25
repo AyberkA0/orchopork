@@ -6,6 +6,7 @@
 //! - [`skills`] are declarative prompt modifiers, tools and validators.
 //! - [`server`] is the local HTTP API + embedded dashboard.
 
+pub mod acp;
 pub mod bootstrap;
 pub mod config;
 pub mod error;

@@ -343,7 +343,7 @@ async fn follow(engine: &Engine, run_id: &str, rx: &mut tokio::sync::broadcast::
             ev = rx.recv() => match ev {
                 Ok(Event::Step { step }) if step.run_id == run_id => print_step(&step, false),
                 Ok(Event::Log { run_id: r, message }) if r == run_id => println!("   · {message}"),
-                Ok(Event::Run { run }) if run.id == run_id && run.status != RunStatus::Running => {
+                Ok(Event::Run { run }) if run.id == run_id && run.status != RunStatus::Running && !engine.is_active(run_id) => {
                     print_final(&run);
                     return Ok(());
                 }

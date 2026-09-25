@@ -34,6 +34,11 @@ pub enum ProviderId {
     DeepSeek,
     #[serde(rename = "gemini")]
     Gemini,
+    /// An external agent (Claude Code, Gemini CLI, Codex…) driven over the
+    /// Agent Client Protocol; `model` is the agent id from config. Never
+    /// called through the gateway.
+    #[serde(rename = "acp")]
+    Acp,
 }
 
 impl ProviderId {
@@ -47,10 +52,14 @@ impl ProviderId {
             ProviderId::Claude => "claude",
             ProviderId::DeepSeek => "deepseek",
             ProviderId::Gemini => "gemini",
+            ProviderId::Acp => "acp",
         }
     }
 
     pub fn parse(s: &str) -> Result<Self> {
+        if s.trim() == "acp" {
+            return Ok(ProviderId::Acp);
+        }
         Self::ALL.into_iter().find(|p| p.as_str() == s.trim()).ok_or_else(|| {
             Error::InvalidRequest(format!("unknown provider {s:?} (ollama|llamacpp|claude|deepseek|gemini)"))
         })

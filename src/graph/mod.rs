@@ -18,6 +18,7 @@
 //! failures the next turn is escalated to a stronger model; when the cloud
 //! budget is exhausted, cloud roles fall back to a local actor.
 
+pub mod external;
 pub mod orchestra;
 pub mod prompts;
 pub mod protocol;
@@ -38,7 +39,7 @@ use crate::config::{Config, ModelRef, RemoteAuth};
 use crate::error::{Error, Result};
 use crate::fsutil::clip;
 use crate::git::GitRepo;
-use crate::providers::{CallOutcome, CompletionRequest, Message};
+use crate::providers::{CallOutcome, CompletionRequest, Message, ProviderId};
 use crate::storage::{NewStep, Phase, Run, RunMode, RunSpec, RunState, RunStatus, Step, StepKind, now_unix};
 use tools::{MAX_STORED_OUTPUT, ToolBox, run_shell};
 
@@ -385,8 +386,16 @@ impl Inner {
             }
             let steps = self.ws.store.steps(run_id).await?;
             let mut state = steps.last().map(|s| s.state.clone()).unwrap_or_default();
-            if steps.is_empty() && run.spec.mode != RunMode::Classic {
-                state.phase = Phase::Act; // solo and orchestra runs skip the planner
+            // Solo and orchestra runs skip the planner, and so does a classic
+            // run whose planner would be an external agent (it plans itself).
+            let planner_is_external = cfg
+                .routing
+                .planner
+                .as_ref()
+                .or(cfg.routing.actor.as_ref())
+                .is_some_and(|m| m.provider == ProviderId::Acp);
+            if steps.is_empty() && (run.spec.mode != RunMode::Classic || planner_is_external) {
+                state.phase = Phase::Act;
             }
             if run.spec.mode == RunMode::Orchestra {
                 if state.phase == Phase::Done {
@@ -498,6 +507,9 @@ impl Inner {
             (Some(e), true) => (e.clone(), true),
             _ => (actor, false),
         };
+        if model.provider == ProviderId::Acp {
+            return self.act_external(cfg, run, steps, state, &model).await;
+        }
         let skills = self.ws.skills.compose("")?;
         let toolbox = ToolBox::new(Path::new(&run.worktree), &cfg.limits, skills.tools.clone())?;
         let system =
@@ -679,6 +691,12 @@ impl Inner {
 /// The workspace config as a given run sees it: a solo run uses its own
 /// model for everything and has no planner or critic.
 fn effective_config(mut cfg: Config, spec: &RunSpec) -> Config {
+    // External agents cannot plan or review through the gateway.
+    for slot in [&mut cfg.routing.planner, &mut cfg.routing.critic] {
+        if slot.as_ref().is_some_and(|m| m.provider == ProviderId::Acp) {
+            *slot = None;
+        }
+    }
     match spec.mode {
         RunMode::Classic => {}
         RunMode::Solo => {

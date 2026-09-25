@@ -305,3 +305,82 @@ async fn orchestra_trees_are_validated_on_create() {
     };
     assert!(matches!(engine.create_run("x", None, spec).await, Err(Error::InvalidRequest(_))));
 }
+
+/// Minimal ACP agent: writes `<name>.txt` through the client and reports.
+#[cfg(unix)]
+const FAKE_ACP: &str = r#"
+import json, sys
+def send(o): sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+name = sys.argv[1]
+while True:
+    line = sys.stdin.readline()
+    if not line: break
+    m = json.loads(line)
+    meth = m.get("method")
+    if meth == "initialize": send({"jsonrpc": "2.0", "id": m["id"], "result": {"protocolVersion": 1}})
+    elif meth == "session/new": send({"jsonrpc": "2.0", "id": m["id"], "result": {"sessionId": "s"}})
+    elif meth == "session/prompt":
+        text = m["params"]["prompt"][0]["text"]
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s", "update": {"sessionUpdate": "tool_call", "toolCallId": "1", "title": "Write " + name, "kind": "edit", "status": "completed"}}})
+        send({"jsonrpc": "2.0", "id": 900, "method": "fs/write_text_file", "params": {"sessionId": "s", "path": name + ".txt", "content": "saw goal: " + str("Mission" in text or "Goal" in text)}})
+        sys.stdin.readline()
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "s", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": name + " report: file written"}}}})
+        send({"jsonrpc": "2.0", "id": m["id"], "result": {"stopReason": "end_turn"}})
+"#;
+
+#[cfg(unix)]
+fn fake_acp(dir: &Path, id: &str) -> crate::acp::ExternalAgent {
+    let script = dir.join("fake_acp.py");
+    std::fs::write(&script, FAKE_ACP).unwrap();
+    crate::acp::ExternalAgent {
+        id: id.into(),
+        name: format!("Fake {id}"),
+        command: "python3".into(),
+        args: vec![script.to_string_lossy().into(), id.into()],
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn solo_chat_with_an_external_acp_agent() {
+    let scripts = tempfile::tempdir().unwrap();
+    let agent = fake_acp(scripts.path(), "ext");
+    let (_d, engine) = setup(|c| c.external_agents = vec![agent]).await;
+    let model = ModelRef { provider: ProviderId::Acp, model: "ext".into() };
+    let spec = RunSpec { mode: RunMode::Solo, model: Some(model), agents: vec![] };
+    let run = engine.create_run("write a file", Some("test -f ext.txt"), spec).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    assert_eq!(kinds(&steps), ["act", "verify"]);
+    assert_eq!(steps[0].output, "ext report: file written");
+    assert_eq!(steps[0].meta["external"]["tool_calls"][0]["title"], "Write ext");
+    let body = std::fs::read_to_string(Path::new(&run.worktree).join("ext.txt")).unwrap();
+    assert_eq!(body, "saw goal: True");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn orchestra_mixes_internal_commanders_and_external_agents() {
+    let scripts = tempfile::tempdir().unwrap();
+    let ext = fake_acp(scripts.path(), "coder");
+    let (_d, engine) = setup(|c| c.external_agents = vec![ext]).await;
+    let lead = Scripted::new(ProviderId::Ollama, &[r#"{"tool": "finish", "args": {"summary": "team done"}}"#]);
+    register(&engine, &lead);
+    let mut coder = agent("coder", Some("lead"), "write coder.txt");
+    coder.model = Some(ModelRef { provider: ProviderId::Acp, model: "coder".into() });
+    let spec = RunSpec {
+        mode: RunMode::Orchestra,
+        model: Some(local("lead")),
+        agents: vec![agent("lead", None, "coordinate"), coder],
+    };
+    let run = engine.create_run("make files", None, spec).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    let who: Vec<&str> = steps.iter().map(|s| s.meta["agent"].as_str().unwrap_or("-")).collect();
+    assert_eq!(who, ["coder", "lead"]);
+    let seen = lead.seen.lock().unwrap();
+    assert!(seen[0].messages.iter().any(|m| m.content.contains("coder report: file written")));
+    assert!(Path::new(&run.worktree).join("coder.txt").exists());
+}

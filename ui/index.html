@@ -102,9 +102,9 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .banner { width: min(780px, 100%); margin: 8px auto; border: 1px solid var(--warn); color: var(--warn); border-radius: 10px; padding: 9px 12px; font-size: 13px; }
 
 /* modal */
-.scrim { position: fixed; inset: 0; background: rgba(10,10,14,.42); backdrop-filter: blur(3px); display: grid; place-items: center; z-index: 30; padding: 16px; animation: fade .15s; }
+.scrim { position: fixed; inset: 0; background: rgba(10,10,14,.42); display: grid; place-items: center; z-index: 30; padding: 16px; animation: fade .1s; }
 @keyframes fade { from { opacity: 0; } }
-.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); width: min(520px, 100%); max-height: 88vh; overflow: auto; padding: 22px; animation: rise .18s ease-out; }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); width: min(520px, 100%); max-height: 88vh; overflow: auto; padding: 22px; animation: rise .12s ease-out; }
 .modal.wide { width: min(900px, 100%); }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } }
 .modal h2 { margin: 0 0 6px; font-size: 19px; letter-spacing: -.01em; }
@@ -210,29 +210,27 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 
 /* motion */
 @media (prefers-reduced-motion: no-preference) {
-  .shell { transition: grid-template-columns .3s cubic-bezier(.2,.8,.2,1); }
-  .view-in { animation: viewIn .3s cubic-bezier(.2,.8,.2,1) both; }
-  .enter { animation: enter .34s cubic-bezier(.2,.8,.2,1) both; }
-  .node { transition: left .5s cubic-bezier(.2,.8,.2,1), top .5s cubic-bezier(.2,.8,.2,1), box-shadow .2s, border-color .25s, transform .15s, opacity .25s; }
+  .shell { transition: grid-template-columns .2s cubic-bezier(.2,.8,.2,1); }
+  .enter { animation: enter .18s cubic-bezier(.2,.8,.2,1) both; }
+  .node { transition: left .28s cubic-bezier(.2,.8,.2,1), top .28s cubic-bezier(.2,.8,.2,1), box-shadow .15s, border-color .15s, transform .12s, opacity .15s; }
   .node.noanim { transition: none; }
   .node.leaving { opacity: 0; transform: scale(.94); }
   .node.born { animation: pop .35s cubic-bezier(.2,.8,.2,1) both; }
-  .edges path { transition: d .5s cubic-bezier(.2,.8,.2,1), stroke .25s; }
-  .stage.smooth { transition: transform .35s cubic-bezier(.2,.8,.2,1); }
+  .edges path { transition: d .28s cubic-bezier(.2,.8,.2,1), stroke .15s; }
+  .stage.smooth { transition: transform .25s cubic-bezier(.2,.8,.2,1); }
   button { transition: transform .08s, background .15s, color .15s, border-color .15s, box-shadow .15s, opacity .15s; }
   button:active:not(:disabled) { transform: scale(.97); }
   .hitem { transition: background .15s, box-shadow .15s, transform .15s; }
   .hitem:active { transform: scale(.99); }
   .toast { animation: toastIn .26s cubic-bezier(.2,.8,.2,1) both; }
   .toast.out { animation: toastOut .2s ease-in forwards; }
-  .scrim.out { animation: fadeOut .16s ease-in forwards; }
-  .scrim.out .modal { animation: sink .16s ease-in forwards; }
+  .scrim.out { animation: fadeOut .1s ease-in forwards; }
+  .scrim.out .modal { animation: sink .1s ease-in forwards; }
   .live-line.swap { opacity: 0; }
   .pill { transition: color .25s, border-color .25s; }
   .meter > div { transition: width .6s cubic-bezier(.2,.8,.2,1); }
 }
-@keyframes viewIn { from { opacity: 0; transform: translateY(6px); } }
-@keyframes enter { from { opacity: 0; transform: translateY(10px); } }
+@keyframes enter { from { opacity: 0; transform: translateY(6px); } }
 @keyframes pop { from { opacity: 0; transform: scale(.9); } }
 @keyframes toastIn { from { opacity: 0; transform: translateY(10px) scale(.98); } }
 @keyframes toastOut { to { opacity: 0; transform: translateY(6px); } }
@@ -452,7 +450,9 @@ function viewFor(hash) {
 // immediately and the sidebar/state refresh in the background; on first
 // load a skeleton app shows while the state arrives.
 async function route() {
-  if (S.state && S.state.workspace) { shell(viewFor(location.hash)); refreshSide(); return; }
+  // In-app navigation: the sidebar is kept fresh by live events, so only
+  // the main area changes (no refetch, no sidebar rebuild).
+  if (S.state && S.state.workspace) { shell(viewFor(location.hash)); return; }
   if (!S.state) $("#root").replaceChildren(h("div", { class: "shell" + (S.sideOpen ? "" : " collapsed") },
     h("aside", { class: "side" }, h("div", { class: "top" }, sk("sk-title"), sk("sk-row")), h("div", { class: "hist" }, Array.from({ length: 6 }, () => sk("sk-row")))),
     h("main", { class: "main" }, h("div", { class: "hero" }, sk("sk-title"), h("div", { style: { width: "min(760px,100%)" } }, sk("sk-block"))))));
@@ -552,9 +552,15 @@ function sideEl() {
 // The shell (sidebar + frame) persists across navigation; only the main
 // area is swapped, with a short entrance animation.
 function shell(render) {
-  const main = h("main", { class: "main view-in" });
+  // No entrance animation: a view is usable the moment it is built.
+  const main = h("main", { class: "main" });
   const sh = $(".shell");
-  if (sh) { sh.classList.remove("mob"); replaceSide(); sh.querySelector(".main").replaceWith(main); }
+  if (sh) {
+    sh.classList.remove("mob");
+    const cur = location.hash.split("/")[2];
+    sh.querySelectorAll(".hitem").forEach((x) => x.classList.toggle("sel", x.dataset.id === cur));
+    sh.querySelector(".main").replaceWith(main);
+  }
   else {
     const shellEl = h("div", { class: "shell" + (S.sideOpen ? "" : " collapsed") }, sideEl(), main);
     // Narrow screens: a tap on the dimmed area closes the drawer.
@@ -744,7 +750,7 @@ function viewHome(main) {
 function modal(content, { wide, onClose, cls } = {}) {
   const scrim = h("div", { class: "scrim" });
   let closed = false;
-  const close = () => { if (closed) return; closed = true; document.removeEventListener("keydown", esc); scrim.classList.add("out"); setTimeout(() => scrim.remove(), 170); onClose && onClose(); };
+  const close = () => { if (closed) return; closed = true; document.removeEventListener("keydown", esc); scrim.classList.add("out"); setTimeout(() => scrim.remove(), 110); onClose && onClose(); };
   const esc = (e) => { if (e.key === "Escape") close(); };
   scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) close(); });
   document.addEventListener("keydown", esc);
@@ -1107,7 +1113,16 @@ function actLine(s, showAgent) {
         m.escalated && h("span", { class: "pill", style: { marginLeft: "6px" }, text: "escalated" })),
       note && h("div", { class: "small", style: { color: "var(--text)" }, text: firstLine(note, 240) }),
       tool === "delegate" && a.instruction && h("div", { class: "small", text: "“" + a.instruction + "”" }),
-      s.observation && tool !== "finish" && h("details", { class: "out", open: m.ok === false }, h("summary", { text: m.ok === false ? "error ▾" : "output ▾" }), h("pre", { text: s.observation }))));
+      s.observation && tool !== "finish" && lazyOut(m.ok === false ? "error ▾" : "output ▾", s.observation, m.ok === false)));
+}
+// A collapsible tool output whose text is only put into the page when it
+// is opened: long runs have hundreds of these, mostly never opened.
+function lazyOut(label, text, open) {
+  const pre = h("pre");
+  const fill = () => { if (!pre.textContent) pre.textContent = text; };
+  const d = h("details", { class: "out", ontoggle: () => d.open && fill() }, h("summary", { text: label }), pre);
+  if (open) { fill(); d.open = true; }
+  return d;
 }
 function parseArgs(text) { const m = (text || "").match(/\{[\s\S]*\}/g); if (!m) return {}; for (let i = m.length - 1; i >= 0; i--) { try { const o = JSON.parse(m[i]); return o.args || o.arguments || o; } catch {} } return {}; }
 let agentNames = {};
@@ -1147,6 +1162,17 @@ function setLive(text) {
 }
 const nearBottom = (el) => el.scrollHeight - el.scrollTop - el.clientHeight < 120;
 const toBottom = (el, smooth) => el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+
+// Fetches a run, asking only for the steps `prev` does not have yet. A
+// rewind (or any mismatch) falls back to fetching everything.
+async function fetchRun(id, prev) {
+  if (prev && prev.run && prev.run.id === id && prev.steps.length) {
+    const d = await api(`/api/runs/${id}?after=${prev.steps[prev.steps.length - 1].seq}`);
+    const steps = d.steps.length ? prev.steps.concat(d.steps) : prev.steps;
+    if (d.run.step_count === steps.length) return { run: d.run, steps, active: d.active };
+  }
+  return api(`/api/runs/${id}`);
+}
 
 // ---------- changing your mind: rewind, edit & resend, retry ----------
 // Rewinds `run` so that step `seq` is the last one kept (-1 = back to the
@@ -1209,7 +1235,7 @@ async function viewChat(main, id) {
   });
 
   const paint = async () => {
-    const d = S.detail = await api(`/api/runs/${id}`);
+    const d = S.detail = await fetchRun(id, S.detail);
     if (!S.view || S.view.id !== id) return;
     const { run, steps, active } = d;
     const wasBottom = first || nearBottom(scroll);
@@ -1221,7 +1247,7 @@ async function viewChat(main, id) {
         h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "working" : run.status),
         run.spec.model && h("span", { class: "pill", title: mref(run.spec.model), text: (run.spec.model.provider === "acp" ? "⚡ " : "") + fmtRef(run.spec.model) }),
         run.verify_command && h("span", { class: "pill mono", title: "Must pass before the agent may finish: " + run.verify_command, text: "✓ " + firstLine(run.verify_command, 24) }),
-        h("span", { class: "small faint", title: statLine(tokenStats(steps)), text: money(run.cost_usd) + (tokenStats(steps).cached ? ` · ${tokenStats(steps).pct}% cached` : "") }),
+        (() => { const t = tokenStats(steps); return h("span", { class: "small faint", title: statLine(t), text: money(run.cost_usd) + (t.cached ? ` · ${t.pct}% cached` : "") }); })(),
         runMenu(run, active)));
       banner.replaceChildren(errorBanner(run, active));
     }
@@ -1570,7 +1596,7 @@ async function viewOrchestraDraft(main) {
   S.view = { kind: "draft" };
   main.append(topbar(h("span", { class: "title grow", text: "New orchestra" }), h("span", { class: "small faint", text: firstLine(goal, 80) })));
   const body = h("div", { class: "center" }); main.append(body);
-  const models = (await loadModels(true)).models;
+  const models = (await loadModels()).models;
   const lead = await (async () => {
     body.replaceChildren(h("div", { class: "stack", style: { textAlign: "center" } }, h("div", { class: "orb", style: { margin: "0 auto" } }),
       h("h2", { style: { margin: 0 }, text: "First, choose the lead model" }),
@@ -1722,7 +1748,7 @@ async function viewOrchestraRun(main, id) {
   }
 
   async function refresh() {
-    data = S.detail = await api(`/api/runs/${id}`);
+    data = S.detail = await fetchRun(id, data);
     if (!S.view || S.view.id !== id) return;
     const { run, steps, active } = data;
     if (!document.hidden) markSeen(run);
@@ -1735,7 +1761,7 @@ async function viewOrchestraRun(main, id) {
     head.replaceChildren(topbar(
       h("span", { class: "title grow", text: run.goal }),
       h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "running" : run.status),
-      h("span", { class: "small muted", title: statLine(tokenStats(steps)), text: `${done}/${run.spec.agents.length} reported · ${money(run.cost_usd)}${tokenStats(steps).cached ? ` · ${tokenStats(steps).pct}% cached` : ""}` }),
+      (() => { const t = tokenStats(steps); return h("span", { class: "small muted", title: statLine(t), text: `${done}/${run.spec.agents.length} reported · ${money(run.cost_usd)}${t.cached ? ` · ${t.pct}% cached` : ""}` }); })(),
       active && h("button", { class: "ghost", text: "⏸ Pause", onclick: guard(async () => { await api(`/api/runs/${id}/pause`, { body: {} }); toast("Pausing after the current step"); }) }),
       runMenu(run, active)));
     if (active) head.append(h("div", { class: "row small muted", style: { padding: "0 16px 8px", gap: "8px" } }, h("span", { class: "dots" }, h("i"), h("i"), h("i")), h("span", { class: "live-line", text: S.lastLive || "working…" })));

@@ -373,6 +373,17 @@ impl Store {
         rows.iter().map(step_from_row).collect()
     }
 
+    /// Steps after `seq`, oldest first (what a viewer that already has the
+    /// rest needs).
+    pub async fn steps_after(&self, run_id: &str, seq: i64) -> Result<Vec<Step>> {
+        let rows = sqlx::query("SELECT * FROM steps WHERE run_id = ? AND seq > ? ORDER BY seq")
+            .bind(run_id)
+            .bind(seq)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter().map(step_from_row).collect()
+    }
+
     pub async fn step(&self, run_id: &str, seq: i64) -> Result<Step> {
         let row = sqlx::query("SELECT * FROM steps WHERE run_id = ? AND seq = ?")
             .bind(run_id)

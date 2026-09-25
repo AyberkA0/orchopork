@@ -130,6 +130,12 @@ impl Engine {
         Ok((store.get_run(run_id).await?, store.steps(run_id).await?))
     }
 
+    /// The run plus only the steps after `seq`.
+    pub async fn run_detail_after(&self, run_id: &str, seq: i64) -> Result<(Run, Vec<Step>)> {
+        let store = &self.inner.ws.store;
+        Ok((store.get_run(run_id).await?, store.steps_after(run_id, seq).await?))
+    }
+
     /// Creates the run's branch + worktree from the workspace's current
     /// HEAD and starts it. Uncommitted changes in your checkout are not
     /// part of the run.

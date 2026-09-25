@@ -679,6 +679,7 @@ impl Provider for ClaudeProvider {
 
 // ---- OpenAI-compatible: DeepSeek, Gemini, llama.cpp server -----------------
 
+#[derive(Clone)]
 pub struct OpenAiCompatProvider {
     id: ProviderId,
     client: reqwest::Client,
@@ -882,13 +883,22 @@ impl Provider for CompatRouter {
     }
 
     async fn list_models(&self) -> Result<Vec<String>> {
-        let mut all = Vec::new();
-        for e in &self.endpoints {
-            if let Ok(Ok(ms)) = tokio::time::timeout(Duration::from_secs(4), e.client.list_models()).await {
-                all.extend(ms.into_iter().map(|m| format!("{}/{m}", e.id)));
-            }
+        // All endpoints at once, so one unreachable endpoint costs its
+        // timeout once instead of once per endpoint before it.
+        let mut set = tokio::task::JoinSet::new();
+        for (i, e) in self.endpoints.iter().enumerate() {
+            let (id, client) = (e.id.clone(), e.client.clone());
+            set.spawn(async move {
+                let ms = tokio::time::timeout(Duration::from_secs(4), client.list_models()).await;
+                (i, id, ms.ok().and_then(|r| r.ok()).unwrap_or_default())
+            });
         }
-        Ok(all)
+        let mut parts = Vec::new();
+        while let Some(Ok(p)) = set.join_next().await {
+            parts.push(p);
+        }
+        parts.sort_by_key(|(i, ..)| *i);
+        Ok(parts.into_iter().flat_map(|(_, id, ms)| ms.into_iter().map(move |m| format!("{id}/{m}"))).collect())
     }
 
     fn rates(&self, model: &str) -> Option<(f64, f64)> {

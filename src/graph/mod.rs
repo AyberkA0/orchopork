@@ -431,7 +431,7 @@ impl Inner {
         system: String,
         messages: Vec<Message>,
     ) -> Result<CallOutcome> {
-        let req = CompletionRequest { system, messages, max_tokens: cfg.limits.max_output_tokens };
+        let req = CompletionRequest { system, messages, max_tokens: cfg.limits.max_output_tokens, effort: None };
         match self.ws.gateway.complete(model, &req, &run.id).await {
             Err(Error::Budget(msg)) => {
                 match cfg.routing.actor.as_ref().filter(|a| a.provider.is_local() && *a != model) {

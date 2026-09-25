@@ -173,6 +173,8 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .ext ul { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--muted); max-height: 220px; overflow: auto; }
 .ext li { padding: 2px 0; } .ext li b { font-weight: 500; color: var(--text); }
 .mgroup { padding: 8px 12px 4px; font: 600 11px var(--sans); color: var(--faint); text-transform: uppercase; letter-spacing: .06em; background: var(--bg2); border-bottom: 1px solid var(--line); position: sticky; top: 0; }
+.spin.sm { width: 12px; height: 12px; border-width: 2px; margin: 0 6px 0 0; display: inline-block; }
+.tuner select { font-size: 12.5px; }
 .mitem.off { opacity: .5; cursor: default; } .mitem.off:hover { background: none; }
 .agents-grid { display: grid; grid-template-columns: 150px 1fr auto auto auto; gap: 8px; align-items: center; margin-top: 10px; }
 .msg-user.pending div { opacity: .55; }
@@ -409,10 +411,10 @@ async function pickModel({ title, subtitle }) {
     const list = h("div", { class: "mlist" });
     const row = (m) => m.external
       ? h("div", { class: "mitem" + (m.available ? "" : " off") + (sel && mref(sel) === mref(m) ? " sel" : ""), title: m.available ? m.command : `Not found: ${m.command}`,
-          onclick: () => { if (m.available) { sel = m; paint(); } }, ondblclick: () => { if (m.available) { sel = m; done(); } } },
+          onclick: () => { if (m.available) { sel = m; paint(); retune(); } }, ondblclick: () => { if (m.available) { sel = m; done(); } } },
           h("span", { class: "ext-badge", text: "ACP" }), h("span", { class: "grow", text: m.name }),
           h("span", { class: "pill", text: m.available ? "your login" : "not installed" }))
-      : h("div", { class: "mitem" + (sel && mref(sel) === mref(m) ? " sel" : ""), onclick: () => { sel = m; paint(); }, ondblclick: () => { sel = m; done(); } },
+      : h("div", { class: "mitem" + (sel && mref(sel) === mref(m) ? " sel" : ""), onclick: () => { sel = m; paint(); retune(); }, ondblclick: () => { sel = m; done(); } },
           h("span", { class: "p", text: m.provider }), h("span", { class: "grow mono", text: m.model }), h("span", { class: "pill", text: m.local ? "local · free" : "cloud" }));
     const paint = () => {
       const f = q.value.toLowerCase();
@@ -426,7 +428,15 @@ async function pickModel({ title, subtitle }) {
     q.addEventListener("input", paint);
     q.addEventListener("keydown", (e) => { if (e.key === "Enter") done(); });
     let close;
-    const done = () => { if (!sel) return; store.set("model", sel); close(); resolve({ provider: sel.provider, model: sel.model }); };
+    let tuned = {};
+    const tuneArea = h("div", { style: { marginTop: "10px" } });
+    const retune = () => {
+      if (!sel) { tuneArea.replaceChildren(); return; }
+      const lastOpts = (store.get("model", null) || {}).options;
+      const ref = { provider: sel.provider, model: sel.model, options: mref(sel) === mref(store.get("model", null) || {}) ? lastOpts || {} : {} };
+      tuneArea.replaceChildren(tuner(ref, sel.efforts, (o) => (tuned = o)));
+    };
+    const done = () => { if (!sel) return; const out = { provider: sel.provider, model: sel.model, options: tuned }; store.set("model", out); close(); resolve(out); };
     const empty = !all.length;
     close = modal(h("div", {},
       h("h2", { text: title }), subtitle && h("p", { class: "muted small", text: subtitle }),
@@ -434,13 +444,60 @@ async function pickModel({ title, subtitle }) {
         h("b", { text: "No models or agents are ready yet." }),
         h("p", { class: "muted small", text: "Start Ollama (ollama pull qwen2.5-coder:14b), add a cloud API key, or install Claude Code / Gemini CLI / Codex." }),
         data.notes.map((n) => h("div", { class: "small warn", text: n })))
-        : [q, list, data.notes.map((n) => h("div", { class: "small warn", style: { marginTop: "6px" }, text: n }))],
+        : [q, list, tuneArea, data.notes.map((n) => h("div", { class: "small warn", style: { marginTop: "6px" }, text: n }))],
       h("div", { class: "actions" },
         h("button", { class: "ghost", text: "Set up models →", onclick: () => { close(); resolve(null); go("#/models"); } }),
         h("span", { class: "grow" }),
         !empty && h("button", { class: "primary", text: "Continue", onclick: done }))));
-    paint(); if (!empty) setTimeout(() => q.focus());
+    paint(); retune(); if (!empty) setTimeout(() => q.focus());
   });
+}
+
+// ---------- model tuning (family/version/effort) ----------
+S.agentOpts = {};
+async function agentOptions(id, refresh) {
+  if (!S.agentOpts[id] || refresh) S.agentOpts[id] = api("/api/agents/options", { body: { id, refresh: !!refresh } }).then((r) => r.options).catch((e) => { delete S.agentOpts[id]; throw e; });
+  return S.agentOpts[id];
+}
+const EFFORT_NAMES = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Max" };
+// "Claude Code · Opus 5.5 · High" — uses discovered names when known.
+function fmtRef(m) {
+  if (!m) return "";
+  const opts = m.options || {};
+  if (m.provider === "acp") {
+    const a = ((S.models && S.models.agents) || []).find((x) => x.model === m.model);
+    const disc = S.agentOptsResolved && S.agentOptsResolved[m.model];
+    const label = (k, v) => { const o = disc && disc.find((x) => x.id === k); const c = o && o.choices.find((x) => x.value === v); return c ? c.name : v; };
+    const order = (k) => (k === "model" ? 0 : k === "effort" ? 1 : 2);
+    const picked = Object.entries(opts).filter(([, v]) => v && v !== "default").sort(([x], [y]) => order(x) - order(y));
+    return [a ? a.name : m.model, ...picked.map(([k, v]) => label(k, v))].join(" · ");
+  }
+  return [m.model, opts.effort && (EFFORT_NAMES[opts.effort] || opts.effort) + " effort"].filter(Boolean).join(" · ");
+}
+S.agentOptsResolved = {};
+
+// Selects for whatever the chosen model/agent can be tuned with. Calls
+// onChange(options) on every change; returns the element.
+function tuner(ref, efforts, onChange) {
+  const box = h("div", { class: "tuner" });
+  const opts = { ...(ref.options || {}) };
+  const sel = (label, value, choices, key, hint) => h("div", { class: "grow" }, h("label", { text: label, title: hint || "" }),
+    h("select", { onchange: (e) => { if (e.target.value) opts[key] = e.target.value; else delete opts[key]; onChange({ ...opts }); } },
+      h("option", { value: "", text: "Default" }), choices.map((c) => h("option", { value: c.value, text: c.name, title: c.description || "", selected: opts[key] === c.value }))));
+  if (ref.provider === "acp") {
+    box.append(h("div", { class: "small muted row" }, h("span", { class: "spin sm" }), `Asking ${fmtRef(ref)} what it offers…`));
+    agentOptions(ref.model).then((list) => {
+      S.agentOptsResolved[ref.model] = list;
+      const rows = list.map((o) => sel(o.name, o.current, o.choices.filter((c) => c.value !== "default"), o.id, o.category));
+      box.replaceChildren(rows.length ? h("div", { class: "row", style: { gap: "10px", alignItems: "flex-end" } }, rows) : h("div", { class: "small faint", text: "This agent offers no model or effort choices." }),
+        h("button", { class: "ghost small", style: { marginTop: "4px" }, text: "↻ refresh", onclick: () => { S.agentOpts[ref.model] = null; box.replaceWith(tuner(ref, efforts, onChange)); agentOptions(ref.model, true); } }));
+    }).catch((e) => box.replaceChildren(h("div", { class: "small bad", text: e.message })));
+  } else if (efforts && efforts.length) {
+    box.append(h("div", { class: "row" }, sel("Effort", null, efforts.map((e) => ({ value: e, name: EFFORT_NAMES[e] || e })), "effort",
+      "How hard the model thinks: lower is faster and cheaper, higher is better on hard problems")));
+  }
+  onChange({ ...opts });
+  return box;
 }
 
 const startSolo = guard(async (goal, verify, model) => {
@@ -474,6 +531,7 @@ function extBlock(s) {
   const mark = (st) => (st === "completed" ? "✓" : st === "failed" ? "✗" : "·");
   return h("div", { class: "ext" },
     h("div", { class: "ext-h" }, h("span", { class: "ext-badge", text: "ACP" }), h("b", { text: agent ? agent.name : name }),
+      Object.entries(e.settings || {}).sort(([x]) => (x === "Model" ? -1 : 1)).map(([k, v]) => h("span", { class: "pill", title: k, text: v })),
       h("span", { text: `${calls.length} action${calls.length === 1 ? "" : "s"}` }), e.stop_reason === "cancelled" && h("span", { class: "warn", text: "stopped" })),
     calls.length > 0 && h("details", { class: "out" }, h("summary", { text: "actions ▾" }),
       h("ul", {}, calls.map((c) => h("li", {}, mark(c.status) + " ", h("b", { text: c.title }), h("span", { class: "faint", text: ` · ${c.kind}` }))))));
@@ -535,7 +593,7 @@ async function viewChat(main, id) {
       head.replaceChildren(topbar(
         h("span", { class: "title grow", text: run.goal }),
         h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "working" : run.status),
-        run.spec.model && h("span", { class: "pill mono", text: run.spec.model.provider === "acp" ? "⚡ " + run.spec.model.model : mref(run.spec.model) }),
+        run.spec.model && h("span", { class: "pill", title: mref(run.spec.model), text: (run.spec.model.provider === "acp" ? "⚡ " : "") + fmtRef(run.spec.model) }),
         h("span", { class: "small faint", text: money(run.cost_usd) }),
         runMenu(run, active)));
       banner.replaceChildren(run.error && !active ? h("div", { class: "banner enter", text: run.error }) : "");
@@ -650,7 +708,7 @@ function treeCanvas(ed) {
       h("div", { class: "rank" }, h("span", { class: "chev", text: chev || "·" }), h("span", { text: !a.parent ? `Lead · ${rname}` : rname })),
       h("div", { class: "nm", text: a.name }), h("div", { class: "rl", text: a.role || "—" }), h("div", { class: "tk", text: a.task }),
       st ? h("span", { class: "st " + (st.active ? "" : st.done ? "ok" : "faint"), text: st.active ? "● working" : st.done ? "✓ reported" : st.turns ? "◌ waiting" : "○ queued" })
-         : a.model && h("span", { class: "st pill mono", text: (a.model.provider === "acp" ? "⚡ " : "") + a.model.model.slice(0, 14) }),
+         : a.model && h("span", { class: "st pill", title: fmtRef(a.model), text: ((a.model.provider === "acp" ? "⚡ " : "") + fmtRef(a.model)).slice(0, 26) }),
       st && ext && h("span", { class: "ext-badge", style: { position: "absolute", bottom: "9px", right: "10px" }, text: "ACP" }),
       st && (st.turns || st.cost) ? h("div", { class: "small faint", style: { marginTop: "4px" }, text: `${st.turns} turns · ${money(st.cost)}` }) : null,
       !ed.readOnly && h("button", { class: "add", title: "Add a subordinate", text: "+", onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); addAgent(a.id); } }),
@@ -773,6 +831,15 @@ async function editAgent(ed, id, models) {
     agents.length > 0 && h("optgroup", { label: "Agents on this computer (ACP)" }, agents.map((x) => h("option", { value: mref(x), text: `⚡ ${x.name}`, selected: a.model && mref(a.model) === mref(x) }))),
     h("optgroup", { label: "Models" }, models.map((m) => h("option", { value: mref(m), text: `${mref(m)}${m.local ? "  (local)" : ""}`, selected: a.model && mref(a.model) === mref(m) }))));
   models = [...models, ...agents];
+  let tunedOpts = (a.model && a.model.options) || {};
+  const tuneSlot = h("div");
+  const retune = () => {
+    const v = model.value; if (!v) { tuneSlot.replaceChildren(); tunedOpts = {}; return; }
+    const [p, ...rest] = v.split(":"); const ref = { provider: p, model: rest.join(":"), options: a.model && mref(a.model) === v ? a.model.options || {} : {} };
+    const info = models.find((m) => mref(m) === v) || {};
+    tuneSlot.replaceChildren(tuner(ref, info.efforts, (o) => (tunedOpts = o)));
+  };
+  model.addEventListener("change", retune); setTimeout(retune);
   if (a.model && !models.some((m) => mref(m) === mref(a.model))) model.append(h("option", { value: mref(a.model), text: mref(a.model), selected: true }));
   const boss = h("select", { disabled: !a.parent }, ed.agents.filter((x) => x.id !== a.id && !isDesc(ed.agents, a.id, x.id))
     .map((x) => h("option", { value: x.id, text: x.name, selected: x.id === a.parent })));
@@ -783,6 +850,7 @@ async function editAgent(ed, id, models) {
     h("div", { class: "row", style: { gap: "10px" } },
       h("div", { class: "grow" }, h("label", { text: "Model" }), model),
       a.parent && h("div", { class: "grow" }, h("label", { text: "Reports to" }), boss)),
+    tuneSlot,
     h("div", { class: "actions" },
       a.parent && h("button", { class: "danger", text: "Remove", onclick: () => { removeAgent(ed, a.id); close(); } }),
       h("span", { class: "grow" }),
@@ -790,7 +858,7 @@ async function editAgent(ed, id, models) {
       h("button", { class: "primary", text: "Save", onclick: () => {
         if (!name.value.trim() || !task.value.trim()) return toast("Name and task are required", true);
         ed.push(); a.name = name.value.trim(); a.role = role.value.trim(); a.task = task.value.trim();
-        const [p, ...rest] = model.value.split(":"); a.model = model.value ? { provider: p, model: rest.join(":") } : null;
+        const [p, ...rest] = model.value.split(":"); a.model = model.value ? { provider: p, model: rest.join(":"), options: tunedOpts } : null;
         if (a.parent) a.parent = boss.value;
         ed.onChange(); close();
       } }))));
@@ -839,7 +907,7 @@ function orchestraEditor(main, { goal, verify, lead, agents, models }) {
   const hud = h("div", { class: "hud" },
     h("button", { text: "＋ Agent", title: "Add a subordinate to the selected agent", onclick: () => canvas.addAgent(ed.selected || ed.agents[0].id) }),
     h("button", { text: "↶ Undo", onclick: undo }), h("button", { text: "⤢ Fit", onclick: () => canvas.fit() }),
-    h("button", { class: "ghost", text: "Lead: " + mref(lead), onclick: guard(async () => { const m = await pickModel({ title: "Lead model" }); if (m) { lead = m; hud.lastChild.textContent = "Lead: " + mref(m); } }) }));
+    h("button", { class: "ghost", text: "Lead: " + fmtRef(lead), onclick: guard(async () => { const m = await pickModel({ title: "Lead model" }); if (m) { lead = m; hud.lastChild.textContent = "Lead: " + fmtRef(m); } }) }));
   const reserve = h("div", { class: "reserve" }, h("h6", { text: "Reserve · drag onto an agent" }),
     TEMPLATES.map((t) => h("div", { class: "tpl", title: t[2], onpointerdown: (e) => canvas.dragTemplate(e, t) }, h("b", { text: t[0] }), h("div", { class: "small faint", text: t[1] }))));
   const deploy = h("div", { class: "deploy" }, count,
@@ -924,7 +992,7 @@ async function viewOrchestraRun(main, id) {
         h("div", { class: "row" }, h("b", { class: "grow", text: a.name }), h("span", { class: "pill", text: rankOf(run.spec.agents, a.id)[1] })),
         h("div", { class: "small muted", text: a.role }),
         h("details", { class: "out" }, h("summary", { text: "task ▾" }), h("pre", { text: a.task })),
-        h("div", { class: "small faint", style: { marginTop: "6px" } }, `${st.turns || 0} turns · ${money(st.cost)} · `, h("span", { class: "mono", text: mref(a.model || run.spec.model) }),
+        h("div", { class: "small faint", style: { marginTop: "6px" } }, `${st.turns || 0} turns · ${money(st.cost)} · `, h("span", { text: fmtRef(a.model || run.spec.model) }),
           subs.length ? ` · commands ${subs.length}` : "")),
       feed, h("div", { class: "pc" }, c));
     if (atBottom) feed.scrollTop = feed.scrollHeight;

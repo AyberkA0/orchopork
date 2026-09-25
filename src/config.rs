@@ -4,6 +4,7 @@
 //! changes. Secrets never live here (see `secrets.rs`): this file is safe to
 //! show in the UI.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
@@ -13,28 +14,55 @@ use crate::error::{Error, Result};
 use crate::providers::ProviderId;
 
 /// A concrete model on a concrete provider, written `provider:model`
-/// (e.g. `ollama:qwen2.5-coder:14b`, `claude:claude-sonnet-5`).
+/// (e.g. `ollama:qwen2.5-coder:14b`, `claude:claude-sonnet-5`), optionally
+/// tuned with options: `claude:claude-opus-5-5?effort=high`,
+/// `acp:claude-code?model=opus&effort=xhigh`.
+///
+/// Options: `effort` for API models (Claude `output_config.effort`, Gemini
+/// `reasoning_effort`); for ACP agents, any session config option the
+/// agent advertises (typically `model` and `effort`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelRef {
     pub provider: ProviderId,
     pub model: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub options: BTreeMap<String, String>,
 }
 
 impl ModelRef {
     pub fn parse(s: &str) -> Result<Self> {
-        let (p, m) =
+        let (p, rest) =
             s.split_once(':').ok_or_else(|| Error::InvalidRequest(format!("expected provider:model, got {s:?}")))?;
         let provider = ProviderId::parse(p)?;
+        let (m, query) = rest.split_once('?').unwrap_or((rest, ""));
         if m.trim().is_empty() {
             return Err(Error::InvalidRequest(format!("empty model name in {s:?}")));
         }
-        Ok(Self { provider, model: m.trim().to_string() })
+        let mut options = BTreeMap::new();
+        for pair in query.split('&').filter(|p| !p.is_empty()) {
+            let (k, v) =
+                pair.split_once('=').ok_or_else(|| Error::InvalidRequest(format!("expected key=value in {pair:?}")))?;
+            options.insert(k.trim().to_string(), v.trim().to_string());
+        }
+        Ok(Self { provider, model: m.trim().to_string(), options })
+    }
+
+    pub fn new(provider: ProviderId, model: impl Into<String>) -> Self {
+        Self { provider, model: model.into(), options: BTreeMap::new() }
+    }
+
+    pub fn option(&self, key: &str) -> Option<&str> {
+        self.options.get(key).map(String::as_str).filter(|v| !v.is_empty() && *v != "default")
     }
 }
 
 impl fmt::Display for ModelRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.provider.as_str(), self.model)
+        write!(f, "{}:{}", self.provider.as_str(), self.model)?;
+        for (i, (k, v)) in self.options.iter().enumerate() {
+            write!(f, "{}{k}={v}", if i == 0 { '?' } else { '&' })?;
+        }
+        Ok(())
     }
 }
 
@@ -195,6 +223,12 @@ mod tests {
         assert_eq!(m.to_string(), "ollama:qwen2.5-coder:14b");
         assert!(ModelRef::parse("nope").is_err());
         assert!(ModelRef::parse("mystery:x").is_err());
+        let t = ModelRef::parse("acp:claude-code?model=opus&effort=high").unwrap();
+        assert_eq!(
+            (t.model.as_str(), t.option("model"), t.option("effort")),
+            ("claude-code", Some("opus"), Some("high"))
+        );
+        assert_eq!(t.to_string(), "acp:claude-code?effort=high&model=opus");
     }
 
     #[test]

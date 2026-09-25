@@ -14,6 +14,7 @@ const RATES: &[(ProviderId, &str, f64, f64)] = &[
     (ProviderId::Claude, "claude-opus-5-5", 4.0, 20.0),
     (ProviderId::Claude, "claude-opus-5", 5.0, 25.0),
     (ProviderId::Claude, "claude-opus-4", 5.0, 25.0),
+    (ProviderId::Claude, "claude-fable-5-1", 10.0, 50.0),
     (ProviderId::Claude, "claude-fable-5", 10.0, 50.0),
     (ProviderId::DeepSeek, "deepseek-chat", 0.28, 0.42),
     (ProviderId::DeepSeek, "deepseek-reasoner", 0.55, 2.19),
@@ -46,6 +47,16 @@ pub fn rates(provider: ProviderId, model: &str) -> (f64, f64) {
 pub fn cost_usd(provider: ProviderId, model: &str, prompt_tokens: u64, completion_tokens: u64) -> f64 {
     let (inp, out) = rates(provider, model);
     (prompt_tokens as f64 / 1_000_000.0) * inp + (completion_tokens as f64 / 1_000_000.0) * out
+}
+
+/// Reasoning-effort levels a model accepts (empty: no effort knob).
+pub fn effort_levels(provider: ProviderId, model: &str) -> &'static [&'static str] {
+    match provider {
+        ProviderId::Claude if model.starts_with("claude-haiku") => &[],
+        ProviderId::Claude => &["low", "medium", "high", "xhigh", "max"],
+        ProviderId::Gemini => &["low", "medium", "high"],
+        _ => &[],
+    }
 }
 
 /// Models offered in the UI for a cloud provider (anything else can still

@@ -109,6 +109,9 @@ pub struct CompletionRequest {
     /// reject assistant prefill).
     pub messages: Vec<Message>,
     pub max_tokens: u32,
+    /// Reasoning effort (`low`…`max`); set by the gateway from the target's
+    /// `effort` option. Providers without such a knob ignore it.
+    pub effort: Option<String>,
 }
 
 /// What a provider returns.
@@ -229,7 +232,9 @@ impl Gateway {
             est
         };
 
-        let result = provider.complete(&target.model, req).await;
+        let mut tuned = req.clone();
+        tuned.effort = target.option("effort").map(str::to_string);
+        let result = provider.complete(&target.model, &tuned).await;
         let outcome = match result {
             Ok(c) => {
                 let cost = pricing::cost_usd(target.provider, &target.model, c.prompt_tokens, c.completion_tokens);
@@ -497,12 +502,16 @@ impl Provider for ClaudeProvider {
     }
 
     async fn complete(&self, model: &str, req: &CompletionRequest) -> Result<Completion> {
-        let body = json!({
+        let mut body = json!({
             "model": model,
             "max_tokens": req.max_tokens,
             "system": req.system,
             "messages": wire_messages(None, &req.messages),
         });
+        // Haiku 4.5 rejects `effort`; every newer model accepts it.
+        if let Some(e) = req.effort.as_deref().filter(|_| !model.starts_with("claude-haiku")) {
+            body["output_config"] = json!({ "effort": e });
+        }
         let rb = self
             .client
             .post("https://api.anthropic.com/v1/messages")
@@ -615,11 +624,20 @@ impl Provider for OpenAiCompatProvider {
     }
 
     async fn complete(&self, model: &str, req: &CompletionRequest) -> Result<Completion> {
-        let body = json!({
+        let mut body = json!({
             "model": model,
             "messages": wire_messages(Some(&req.system), &req.messages),
             "max_tokens": req.max_tokens.min(self.max_tokens_cap),
         });
+        // Gemini's OpenAI endpoint takes low/medium/high.
+        if let (ProviderId::Gemini, Some(e)) = (self.id, req.effort.as_deref()) {
+            let e = match e {
+                "xhigh" | "max" => "high",
+                "minimal" => "low",
+                other => other,
+            };
+            body["reasoning_effort"] = json!(e);
+        }
         let rb = self.auth(self.client.post(format!("{}/chat/completions", self.base_url)).json(&body));
         let retries = if self.id.is_local() { 0 } else { 3 };
         let r: OaiResp = send_json(self.id.as_str(), rb, retries).await?;
@@ -671,7 +689,7 @@ mod tests {
     }
 
     fn req(max_tokens: u32) -> CompletionRequest {
-        CompletionRequest { system: "s".into(), messages: vec![Message::user("hi")], max_tokens }
+        CompletionRequest { system: "s".into(), messages: vec![Message::user("hi")], max_tokens, effort: None }
     }
 
     async fn store() -> (tempfile::TempDir, Store) {
@@ -681,7 +699,7 @@ mod tests {
     }
 
     fn haiku() -> ModelRef {
-        ModelRef { provider: ProviderId::Claude, model: "claude-haiku-4-5".into() }
+        ModelRef::new(ProviderId::Claude, "claude-haiku-4-5")
     }
 
     #[tokio::test]
@@ -698,7 +716,7 @@ mod tests {
         let gw = Gateway::new(store.clone(), 40.0);
         gw.register(Box::new(Stub { id: ProviderId::Ollama, delay_ms: 0 }));
         gw.register(Box::new(Stub { id: ProviderId::Claude, delay_ms: 0 }));
-        let local = ModelRef { provider: ProviderId::Ollama, model: "m".into() };
+        let local = ModelRef::new(ProviderId::Ollama, "m");
         assert_eq!(gw.complete(&local, &req(10), "r").await.unwrap().cost_usd, 0.0);
         assert!(matches!(gw.complete(&haiku(), &req(10), "r").await, Err(Error::Budget(_))));
     }

@@ -45,6 +45,8 @@ fn subtree_size(spec: &RunSpec, id: &str) -> usize {
     spec.children(id).map(|c| 1 + subtree_size(spec, &c.id)).sum()
 }
 
+const EXTERNAL_SUFFIX: &str = "\n\n---\nWork directly in the current directory (the shared git working tree). Do only your task. When you are done, end with a concise report for your commander: what you changed, how you verified it, and anything left open.";
+
 const DESIGNER: &str = "You design teams of AI agents for software tasks, organised like a decimal military chain of
 command: exactly one lead agent at the top; any agent may command subordinates; keep each commander's direct reports
 at 10 or fewer. Use the fewest agents that make sense: 1 for a trivial task, typically 3-8, deeper trees only for large
@@ -186,6 +188,35 @@ impl Inner {
             (Some(e), true) => (e.clone(), true),
             _ => (base, false),
         };
+
+        if model.provider == crate::providers::ProviderId::Acp {
+            let files = GitRepo::new(&run.worktree).ls_files().await?;
+            let mut pin = pinned(run, spec, &me, &subordinates, &state, &files);
+            if !subordinates.is_empty() {
+                pin.push_str("\nYou cannot delegate in this mode: review your subordinates' work in the files and fix or complete what is missing yourself.\n");
+            }
+            let groups = transcript(spec, &me, &root, steps, cfg.limits.tool_output_chars);
+            let messages = prompts::windowed(pin, groups, cfg.limits.cloud_context_chars);
+            let prompt = format!("{}{}", super::external::as_prompt(&messages), EXTERNAL_SUFFIX);
+            let out = self.external_turn(cfg, run, &model, &me.name, prompt).await?;
+            let mut meta = super::external::meta(&model, &out);
+            meta["agent"] = json!(me.id);
+            let mut next = RunState { failures: 0, escalate: false, ..state };
+            let text =
+                if out.text.is_empty() { format!("({} finished without a report)", me.name) } else { out.text.clone() };
+            if !out.cancelled {
+                meta["summary"] = json!(clip(&text, 6_000));
+                next.done.push(me.id.clone());
+                next.stack.pop();
+                if me.parent.is_none() {
+                    let skills = self.ws.skills.compose("")?;
+                    next.phase = if verify_commands(run, &skills).is_empty() { Phase::Done } else { Phase::Verify };
+                }
+            }
+            let obs = super::external::tool_lines(&out);
+            self.append(run, StepKind::Act, &text, Some(&obs), meta, &next, 0.0).await?;
+            return Ok(out.cancelled.then_some(Stop::Paused(None)));
+        }
 
         let skills = self.ws.skills.compose("")?;
         let toolbox = ToolBox::new(Path::new(&run.worktree), &cfg.limits, skills.tools.clone())?;

@@ -77,6 +77,8 @@ pub struct Limits {
     /// Output cap for every LLM call; also bounds the worst-case cost the
     /// budget guard reserves before a cloud call.
     pub max_output_tokens: u32,
+    /// Wall-clock limit for one external (ACP) agent turn.
+    pub external_timeout_secs: u64,
 }
 
 impl Default for Limits {
@@ -92,6 +94,7 @@ impl Default for Limits {
             local_context_chars: 40_000,
             cloud_context_chars: 200_000,
             max_output_tokens: 16_000,
+            external_timeout_secs: 3600,
         }
     }
 }
@@ -124,6 +127,8 @@ pub struct Config {
     pub remote_auth: RemoteAuth,
     pub routing: Routing,
     pub limits: Limits,
+    /// Agents driven over ACP (see `acp.rs`), usable anywhere a model is.
+    pub external_agents: Vec<crate::acp::ExternalAgent>,
 }
 
 impl Default for Config {
@@ -140,6 +145,7 @@ impl Default for Config {
             remote_auth: RemoteAuth::None,
             routing: Routing::default(),
             limits: Limits::default(),
+            external_agents: crate::acp::default_agents(),
         }
     }
 }

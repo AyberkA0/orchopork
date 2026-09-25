@@ -105,6 +105,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/config", axum::routing::put(put_config))
         .route("/api/workspace", post(open_workspace))
         .route("/api/models", get(available_models))
+        .route("/api/agents/probe", post(probe_agent))
         .route("/api/orchestra/propose", post(propose_team))
         .route("/api/providers/keys", post(set_provider_key))
         .route("/api/providers/{id}/models", get(provider_models))
@@ -354,6 +355,7 @@ fn validate_routing(ws: &Workspace, cfg: &Config) -> Result<()> {
         let usable = match m.provider {
             ProviderId::Ollama => true,
             ProviderId::LlamaCpp => cfg.llamacpp_url.as_deref().is_some_and(|u| !u.trim().is_empty()),
+            ProviderId::Acp => cfg.external_agents.iter().any(|a| a.id == m.model),
             p => ws.secrets.provider_key(p).is_some(),
         };
         if !usable {
@@ -452,8 +454,34 @@ async fn available_models(State(s): State<Shared>) -> ApiResult {
             );
         }
     }
+    // External agents: offered when their launcher is on PATH.
+    let mut agents = Vec::new();
+    for a in ws.config().external_agents {
+        let available = crate::acp::resolve_command(&a.command).is_some();
+        agents.push(json!({ "provider": "acp", "model": a.id, "name": a.name, "available": available,
+            "command": format!("{} {}", a.command, a.args.join(" ")) }));
+    }
     let default = ws.config().routing.actor;
-    Ok(Json(json!({ "models": out, "notes": notes, "default": default })))
+    Ok(Json(json!({ "models": out, "agents": agents, "notes": notes, "default": default })))
+}
+
+#[derive(Deserialize)]
+struct ProbeReq {
+    id: String,
+}
+
+/// Starts an external agent and runs the ACP handshake only.
+async fn probe_agent(State(s): State<Shared>, Json(req): Json<ProbeReq>) -> ApiResult {
+    let engine = s.engine()?;
+    let ws = engine.workspace();
+    let agent = ws
+        .config()
+        .external_agents
+        .into_iter()
+        .find(|a| a.id == req.id)
+        .ok_or_else(|| Error::NotFound(format!("external agent {}", req.id)))?;
+    let info = crate::acp::probe(&agent, &ws.root).await?;
+    Ok(Json(json!({ "ok": true, "info": info })))
 }
 
 #[derive(Deserialize)]

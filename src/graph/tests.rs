@@ -1,7 +1,7 @@
 //! End-to-end engine tests against scripted providers: real git worktrees,
 //! real SQLite, real tools; only the LLM is fake.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
 use super::*;
@@ -11,6 +11,10 @@ struct Scripted {
     id: ProviderId,
     replies: Mutex<VecDeque<String>>,
     seen: Mutex<Vec<CompletionRequest>>,
+    /// Sleeps before returning the reply for the call at this 1-based
+    /// index, so a test can act (e.g. inject) while that call is in
+    /// flight and the run is still active.
+    stall: Mutex<HashMap<usize, Duration>>,
 }
 
 impl Scripted {
@@ -19,7 +23,12 @@ impl Scripted {
             id,
             replies: Mutex::new(replies.iter().map(|s| s.to_string()).collect()),
             seen: Mutex::new(vec![]),
+            stall: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn stall_call(self: &Arc<Self>, call: usize, d: Duration) {
+        self.stall.lock().unwrap().insert(call, d);
     }
 }
 
@@ -31,7 +40,15 @@ impl Provider for Handle {
         self.0.id
     }
     async fn complete(&self, _model: &str, req: &CompletionRequest) -> Result<Completion> {
-        self.0.seen.lock().unwrap().push(req.clone());
+        let call = {
+            let mut seen = self.0.seen.lock().unwrap();
+            seen.push(req.clone());
+            seen.len()
+        };
+        let stall = self.0.stall.lock().unwrap().get(&call).copied();
+        if let Some(d) = stall {
+            tokio::time::sleep(d).await;
+        }
         let text = self.0.replies.lock().unwrap().pop_front().unwrap_or_else(|| FINISH.to_string());
         Ok(Completion { text, prompt_tokens: 100, completion_tokens: 50, truncated: false })
     }
@@ -295,6 +312,58 @@ async fn orchestra_works_bottom_up_with_delegation_and_reports() {
     assert!(Path::new(&run.worktree).join("bye.txt").exists());
 }
 
+/// Polls until `pred` holds for the run's steps, or panics.
+async fn wait_for(engine: &Engine, id: &str, mut pred: impl FnMut(&[Step]) -> bool) {
+    for _ in 0..500 {
+        let (_, steps) = engine.run_detail(id).await.unwrap();
+        if pred(&steps) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("condition not met for run {id}");
+}
+
+#[tokio::test]
+async fn inject_to_a_reported_agent_reopens_it_while_the_run_is_active() {
+    let (_d, engine) = setup(|_| {}).await;
+    // coder writes + finishes, then lead's first turn (a plain tool call,
+    // stalled so the run is still active when we inject) is in flight while
+    // we message the already-done coder; coder must reopen and act again,
+    // then its commander (lead) must act again too.
+    let replies = [
+        WRITE,
+        r#"{"tool": "finish", "args": {"summary": "hello.txt written"}}"#,
+        r#"{"tool": "read_file", "args": {"path": "hello.txt"}}"#,
+        r#"{"tool": "finish", "args": {"summary": "added a note"}}"#,
+        r#"{"tool": "finish", "args": {"summary": "mission complete"}}"#,
+    ];
+    let model = Scripted::new(ProviderId::Ollama, &replies);
+    model.stall_call(3, Duration::from_millis(300));
+    register(&engine, &model);
+    let spec = RunSpec {
+        mode: RunMode::Orchestra,
+        model: Some(local("lead")),
+        agents: vec![agent("lead", None, "coordinate"), agent("coder", Some("lead"), "write files")],
+    };
+    let run = engine.create_run("make files", None, spec).await.unwrap();
+
+    wait_for(&engine, &run.id, |steps| steps.len() >= 2).await;
+    assert!(engine.is_active(&run.id), "lead's (stalled) turn should still be in flight");
+    engine.inject(&run.id, "please add a note too", Some("coder")).await.unwrap();
+
+    let run = wait_idle(&engine, &run.id).await;
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    // We inject while call 3 (lead's stalled turn) is still in flight, so it
+    // is recorded as step 3, before that in-flight turn's own step lands.
+    assert_eq!(kinds(&steps), ["act", "act", "inject", "act", "act", "act"]);
+    let who: Vec<&str> = steps.iter().map(|s| s.meta["agent"].as_str().unwrap_or("-")).collect();
+    assert_eq!(who, ["coder", "coder", "coder", "lead", "coder", "lead"], "coder reopens, then lead acts again");
+    assert_eq!(steps[4].meta["summary"], "added a note");
+    assert_eq!(steps[5].meta["summary"], "mission complete");
+}
+
 #[tokio::test]
 async fn orchestra_trees_are_validated_on_create() {
     let (_d, engine) = setup(|_| {}).await;
@@ -382,5 +451,64 @@ async fn orchestra_mixes_internal_commanders_and_external_agents() {
     assert_eq!(who, ["coder", "lead"]);
     let seen = lead.seen.lock().unwrap();
     assert!(seen[0].messages.iter().any(|m| m.content.contains("coder report: file written")));
+    assert!(Path::new(&run.worktree).join("coder.txt").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn escalation_never_swaps_out_an_acp_agent() {
+    // lead (internal) commands coder (ACP, acts first) and bad (internal,
+    // acts second and fails). bad's escalated retry is stalled so we can,
+    // mid-turn, message the already-reported coder: that reopens coder (and
+    // lead) while `bad`'s carried-over `escalate` flag is still true in the
+    // stored state. Coder must still run as itself, not as the escalation
+    // model.
+    let scripts = tempfile::tempdir().unwrap();
+    let ext = fake_acp(scripts.path(), "coder");
+    let (_d, engine) = setup(|c| {
+        c.external_agents = vec![ext];
+        c.routing.escalation = Some(cloud());
+        c.limits.escalate_after = 1;
+        c.limits.max_failures = 10;
+    })
+    .await;
+    let ollama = Scripted::new(
+        ProviderId::Ollama,
+        &["no json here", r#"{"tool": "finish", "args": {"summary": "bad done"}}"#, FINISH],
+    );
+    let cloud_p = Scripted::new(ProviderId::Claude, &["still nothing"]);
+    cloud_p.stall_call(1, Duration::from_millis(300));
+    register(&engine, &ollama);
+    register(&engine, &cloud_p);
+    let mut coder = agent("coder", Some("lead"), "write coder.txt");
+    coder.model = Some(ModelRef::new(ProviderId::Acp, "coder"));
+    let bad = agent("bad", Some("lead"), "a task that keeps failing");
+    let spec = RunSpec {
+        mode: RunMode::Orchestra,
+        model: Some(local("lead")),
+        agents: vec![agent("lead", None, "coordinate"), coder, bad],
+    };
+    let run = engine.create_run("make files", None, spec).await.unwrap();
+
+    // Wait for coder's report and bad's first (non-escalated) failure, then
+    // catch bad's escalated retry while it's stalled and still active.
+    wait_for(&engine, &run.id, |steps| steps.len() >= 2).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(engine.is_active(&run.id), "bad's escalated (stalled) turn should still be in flight");
+    engine.inject(&run.id, "please also double check coder's work", Some("coder")).await.unwrap();
+
+    let run = wait_idle(&engine, &run.id).await;
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    assert_eq!(kinds(&steps), ["act", "act", "inject", "act", "act", "act", "act"]);
+    let who: Vec<&str> = steps.iter().map(|s| s.meta["agent"].as_str().unwrap_or("-")).collect();
+    assert_eq!(who, ["coder", "bad", "coder", "bad", "coder", "bad", "lead"]);
+
+    assert_eq!(steps[3].meta["escalated"], true, "bad's second failure must escalate");
+    assert_eq!(steps[3].meta["model"], "claude:claude-haiku-4-5");
+
+    // Coder's reopened turn must run as itself, never as the escalation model.
+    assert_eq!(steps[4].meta["model"], "acp:coder", "the ACP agent must not be swapped for the escalation model");
+    assert_eq!(cloud_p.seen.lock().unwrap().len(), 1, "the escalation model is never called on coder's behalf");
     assert!(Path::new(&run.worktree).join("coder.txt").exists());
 }

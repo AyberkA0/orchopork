@@ -16,7 +16,7 @@
 //!
 //! All agents share the run's worktree, one acting at a time.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde_json::json;
@@ -79,6 +79,13 @@ impl Engine {
     }
 }
 
+/// Lowercase, non-alphanumeric → `_`: the canonical form for both an
+/// agent's `id` and any `parent` field naming one, so the two compare equal
+/// regardless of how the model cased or punctuated them.
+fn sanitize_id(s: &str) -> String {
+    s.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+}
+
 /// Lenient team parsing + repair: sanitised unique ids, a single root,
 /// dangling parents re-attached to the root.
 pub fn parse_team(text: &str, goal: &str) -> Vec<AgentSpec> {
@@ -103,18 +110,22 @@ pub fn parse_team(text: &str, goal: &str) -> Vec<AgentSpec> {
     let mut ids = HashSet::new();
     for (i, v) in list.iter().enumerate() {
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
-        let mut id: String =
-            s("id").to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-        if id.is_empty() || ids.contains(&id) {
-            id = format!("agent_{}", i + 1);
-        }
-        ids.insert(id.clone());
+        // Skip empty-task entries before reserving an id slot, so a skipped
+        // agent cannot bump a later, real agent's id to a fallback.
         let task = s("task");
         if task.is_empty() {
             continue;
         }
+        let mut id = sanitize_id(&s("id"));
+        if id.is_empty() || ids.contains(&id) {
+            id = format!("agent_{}", i + 1);
+        }
+        ids.insert(id.clone());
         let name = if s("name").is_empty() { id.clone() } else { s("name") };
-        let parent = Some(s("parent")).filter(|p| !p.is_empty() && p != "null").map(|p| p.to_lowercase());
+        // `parent` names another agent's `id`, so it must be sanitised the
+        // same way or a valid parent looks unknown and gets reattached to
+        // the root below.
+        let parent = Some(sanitize_id(&s("parent"))).filter(|p| !p.is_empty() && p != "null");
         agents.push(AgentSpec { id, name, role: s("role"), task, parent, model: None });
     }
     if agents.is_empty() {
@@ -167,6 +178,36 @@ impl Inner {
             return Ok(None);
         }
 
+        // A message injected at agent X while X had already reported (X is
+        // in `done`) would otherwise sit unread forever: nothing re-reads
+        // `done` once it's set. Reopen X and its whole chain of command (so
+        // the report bubbles back up) whenever such a message is newer than
+        // X's last turn. Idempotent: once reopened, X leaves `done` and this
+        // no longer matches on later turns.
+        let mut last_act: HashMap<&str, i64> = HashMap::new();
+        for s in steps {
+            if s.kind == StepKind::Act
+                && let Some(a) = s.meta["agent"].as_str()
+            {
+                last_act.insert(a, s.seq);
+            }
+        }
+        for s in steps {
+            if s.kind != StepKind::Inject {
+                continue;
+            }
+            let target = s.meta["agent"].as_str().unwrap_or(&root);
+            let pending = last_act.get(target).is_none_or(|&seq| s.seq > seq);
+            if pending && state.done.iter().any(|d| d.as_str() == target) {
+                let mut cur = Some(target.to_string());
+                while let Some(id) = cur {
+                    state.done.retain(|d| *d != id);
+                    cur = spec.agent(&id).and_then(|a| a.parent.clone());
+                }
+                state.stack.clear();
+            }
+        }
+
         // Descend the chain of command to the first agent with no
         // unfinished subordinates.
         if state.stack.is_empty() {
@@ -183,10 +224,22 @@ impl Inner {
         })?;
         let subordinates: Vec<&AgentSpec> = spec.children(&me.id).collect();
 
+        // Escalation and the failure streak are per-agent, but `RunState` is
+        // shared for the whole tree: reset both when the acting agent
+        // changes, so one agent's failures never escalate a different
+        // agent's next turn.
+        let last_actor = steps.iter().rev().find(|s| s.kind == StepKind::Act).and_then(|s| s.meta["agent"].as_str());
+        if last_actor != Some(me.id.as_str()) {
+            state.failures = 0;
+            state.escalate = false;
+        }
+
         let base = me.model.clone().or_else(|| spec.model.clone()).or_else(|| cfg.routing.actor.clone());
         let base = base.ok_or_else(|| Error::InvalidRequest(format!("no model for agent {}", me.name)))?;
+        // Escalation swaps in a different (internal) model, so it never
+        // applies when the agent's own model is an external ACP agent.
         let (model, escalated) = match (&cfg.routing.escalation, state.escalate) {
-            (Some(e), true) => (e.clone(), true),
+            (Some(e), true) if base.provider != crate::providers::ProviderId::Acp => (e.clone(), true),
             _ => (base, false),
         };
 
@@ -435,6 +488,26 @@ mod tests {
         assert_eq!(a[2].parent.as_deref(), Some("lead"));
         assert!(RunSpec { agents: a, ..Default::default() }.validate_agents().is_ok());
         assert_eq!(parse_team("no json", "g")[0].task, "g");
+    }
+
+    #[test]
+    fn parent_ids_are_sanitised_like_ids() {
+        // "Tech-Lead" as an id sanitises to "tech_lead"; a child naming it
+        // as `parent` with the original casing/punctuation must resolve to
+        // the same (non-root) agent instead of being treated as unknown and
+        // reattached to the root.
+        let t = r#"{"agents": [
+            {"id": "ceo", "name": "CEO", "role": "r", "task": "lead the company", "parent": null},
+            {"id": "Tech-Lead", "name": "Lead", "role": "r", "task": "lead the team", "parent": "ceo"},
+            {"id": "dev", "name": "Dev", "role": "r", "task": "write code", "parent": "Tech-Lead"}
+        ]}"#;
+        let a = parse_team(t, "goal");
+        assert_eq!(a.len(), 3);
+        assert_eq!(a[0].id, "ceo");
+        assert_eq!(a[1].id, "tech_lead");
+        assert_eq!(a[1].parent.as_deref(), Some("ceo"));
+        assert_eq!(a[2].id, "dev");
+        assert_eq!(a[2].parent.as_deref(), Some("tech_lead"), "dev must stay under tech_lead, not fall to the root");
     }
 
     #[test]

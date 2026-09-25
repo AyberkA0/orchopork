@@ -9,13 +9,13 @@ use std::str::FromStr;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
-pub use checkpoint::{NewStep, Phase, Run, RunState, RunStatus, Step, StepKind};
+pub use checkpoint::{AgentSpec, NewStep, Phase, Run, RunMode, RunSpec, RunState, RunStatus, Step, StepKind};
 
 use crate::error::Result;
 
 /// v2 replaces the v1 `threads`/`snapshots`/`spend_ledger` tables (a manual
 /// step API with no run concept). v1 tables are left in place, unused.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS runs (
@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS runs (
     verify_command  TEXT,
     error           TEXT,
     created_at      INTEGER NOT NULL,
-    updated_at      INTEGER NOT NULL
+    updated_at      INTEGER NOT NULL,
+    spec            TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS steps (
     run_id       TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -79,6 +80,12 @@ impl Store {
             .busy_timeout(std::time::Duration::from_secs(5));
         let pool = SqlitePoolOptions::new().max_connections(4).connect_with(opts).await?;
         sqlx::raw_sql(SCHEMA).execute(&pool).await?;
+        // v3: run spec (mode, model, agent tree).
+        let cols: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('runs')").fetch_all(&pool).await?;
+        if !cols.iter().any(|(c,)| c == "spec") {
+            sqlx::raw_sql("ALTER TABLE runs ADD COLUMN spec TEXT NOT NULL DEFAULT '{}'").execute(&pool).await?;
+        }
         sqlx::raw_sql(&format!("PRAGMA user_version = {SCHEMA_VERSION}")).execute(&pool).await?;
         Ok(Self { pool })
     }

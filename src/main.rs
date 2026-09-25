@@ -182,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Run { goal, verify } => {
             let engine = engine(&root).await?;
             let mut rx = engine.subscribe();
-            let run = engine.create_run(&goal, verify.as_deref()).await?;
+            let run = engine.create_run(&goal, verify.as_deref(), Default::default()).await?;
             println!("run {} on branch {} ({})", run.id, run.branch, run.worktree);
             follow(&engine, &run.id, &mut rx).await
         }
@@ -220,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Inject { run, text } => {
-            let step = engine(&root).await?.inject(&run, &text).await?;
+            let step = engine(&root).await?.inject(&run, &text, None).await?;
             println!("queued as step {}; resume the run if it is not executing", step.seq);
             Ok(())
         }

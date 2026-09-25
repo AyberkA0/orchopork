@@ -81,7 +81,7 @@ fn to_action(obj: Map<String, Value>) -> Option<Action> {
 }
 
 /// Every top-level `{...}` span that parses as a JSON object, in order.
-fn json_objects(text: &str) -> Vec<Map<String, Value>> {
+pub(crate) fn json_objects(text: &str) -> Vec<Map<String, Value>> {
     balanced_spans(text)
         .into_iter()
         .filter_map(|span| {

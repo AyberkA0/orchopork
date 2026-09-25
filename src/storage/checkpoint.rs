@@ -8,6 +8,7 @@ use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
 use super::{Store, now_unix};
+use crate::config::ModelRef;
 use crate::error::{Error, Result};
 
 macro_rules! text_enum {
@@ -34,6 +35,91 @@ text_enum!(RunStatus { Running => "running", Paused => "paused", Done => "done" 
 text_enum!(Phase { Plan => "plan", Act => "act", Verify => "verify", Review => "review", Done => "done" });
 text_enum!(StepKind { Plan => "plan", Act => "act", Verify => "verify", Review => "review", Inject => "inject" });
 
+/// How a run is driven.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunMode {
+    /// plan → act → verify → review, models from the workspace routing.
+    #[default]
+    Classic,
+    /// One agent with tools and a single chosen model (a classic harness).
+    Solo,
+    /// A hierarchy of agents led by one commander (see `graph::orchestra`).
+    Orchestra,
+}
+
+/// One member of an orchestra. `parent == None` marks the single root.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentSpec {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub role: String,
+    pub task: String,
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// Overrides the run's lead model for this agent.
+    #[serde(default)]
+    pub model: Option<ModelRef>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RunSpec {
+    pub mode: RunMode,
+    /// Solo: the model. Orchestra: the lead model every agent inherits.
+    pub model: Option<ModelRef>,
+    pub agents: Vec<AgentSpec>,
+}
+
+impl RunSpec {
+    pub fn root(&self) -> Option<&AgentSpec> {
+        self.agents.iter().find(|a| a.parent.is_none())
+    }
+    pub fn agent(&self, id: &str) -> Option<&AgentSpec> {
+        self.agents.iter().find(|a| a.id == id)
+    }
+    pub fn children<'a>(&'a self, id: &'a str) -> impl Iterator<Item = &'a AgentSpec> + 'a {
+        self.agents.iter().filter(move |a| a.parent.as_deref() == Some(id))
+    }
+
+    /// One root, unique ids, existing parents, no cycles, non-empty tasks.
+    pub fn validate_agents(&self) -> Result<()> {
+        let bad = |m: String| Err(Error::InvalidRequest(m));
+        if self.agents.is_empty() {
+            return bad("the orchestra has no agents".into());
+        }
+        let roots = self.agents.iter().filter(|a| a.parent.is_none()).count();
+        if roots != 1 {
+            return bad(format!("the orchestra needs exactly one lead agent (found {roots})"));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for a in &self.agents {
+            if a.id.trim().is_empty() || !seen.insert(a.id.as_str()) {
+                return bad(format!("duplicate or empty agent id {:?}", a.id));
+            }
+            if a.task.trim().is_empty() || a.name.trim().is_empty() {
+                return bad(format!("agent {:?} needs a name and a task", a.id));
+            }
+        }
+        for a in &self.agents {
+            let mut cur = a.parent.as_deref();
+            let mut hops = 0;
+            while let Some(p) = cur {
+                let Some(pa) = self.agent(p) else {
+                    return bad(format!("{}'s commander {p:?} does not exist", a.name));
+                };
+                hops += 1;
+                if hops > self.agents.len() {
+                    return bad(format!("{} is part of a command cycle", a.name));
+                }
+                cur = pa.parent.as_deref();
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Loop state after a step. Stored with every step, so the state at any
 /// checkpoint is exact rather than re-derived.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,11 +131,17 @@ pub struct RunState {
     pub reviews: u32,
     /// Route the next actor turn to the escalation model.
     pub escalate: bool,
+    /// Orchestra only: active agent chain (last = acting now).
+    #[serde(default)]
+    pub stack: Vec<String>,
+    /// Orchestra only: agents whose task is complete.
+    #[serde(default)]
+    pub done: Vec<String>,
 }
 
 impl Default for RunState {
     fn default() -> Self {
-        Self { phase: Phase::Plan, failures: 0, reviews: 0, escalate: false }
+        Self { phase: Phase::Plan, failures: 0, reviews: 0, escalate: false, stack: vec![], done: vec![] }
     }
 }
 
@@ -70,6 +162,7 @@ pub struct Run {
     /// later rewound away.
     pub cost_usd: f64,
     pub step_count: i64,
+    pub spec: RunSpec,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,7 +183,7 @@ pub struct Step {
 }
 
 const RUN_COLUMNS: &str = "r.id, r.goal, r.status, r.branch, r.worktree, r.base_commit, r.verify_command, r.error,
-    r.created_at, r.updated_at,
+    r.created_at, r.updated_at, r.spec,
     (SELECT COALESCE(SUM(s.cost_usd), 0.0) FROM spend s WHERE s.run_id = r.id) AS cost_usd,
     (SELECT COUNT(*) FROM steps t WHERE t.run_id = r.id) AS step_count";
 
@@ -108,6 +201,7 @@ fn run_from_row(row: &SqliteRow) -> Result<Run> {
         updated_at: row.try_get("updated_at")?,
         cost_usd: row.try_get("cost_usd")?,
         step_count: row.try_get("step_count")?,
+        spec: serde_json::from_str(row.try_get::<&str, _>("spec")?).unwrap_or_default(),
     })
 }
 
@@ -141,6 +235,7 @@ pub struct NewStep<'a> {
 }
 
 impl Store {
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_run(
         &self,
         id: &str,
@@ -149,11 +244,12 @@ impl Store {
         worktree: &str,
         base_commit: &str,
         verify_command: Option<&str>,
+        spec: &RunSpec,
     ) -> Result<Run> {
         let now = now_unix();
         sqlx::query(
-            "INSERT INTO runs (id, goal, status, branch, worktree, base_commit, verify_command, error, created_at, updated_at)
-             VALUES (?, ?, 'paused', ?, ?, ?, ?, NULL, ?, ?)",
+            "INSERT INTO runs (id, goal, status, branch, worktree, base_commit, verify_command, error, created_at, updated_at, spec)
+             VALUES (?, ?, 'paused', ?, ?, ?, ?, NULL, ?, ?, ?)",
         )
         .bind(id)
         .bind(goal)
@@ -163,6 +259,7 @@ impl Store {
         .bind(verify_command)
         .bind(now)
         .bind(now)
+        .bind(serde_json::to_string(spec)?)
         .execute(&self.pool)
         .await?;
         self.get_run(id).await
@@ -208,6 +305,15 @@ impl Store {
             .execute(&self.pool)
             .await?
             .rows_affected())
+    }
+
+    pub async fn set_run_spec(&self, id: &str, spec: &RunSpec) -> Result<()> {
+        sqlx::query("UPDATE runs SET spec = ? WHERE id = ?")
+            .bind(serde_json::to_string(spec)?)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn delete_run(&self, id: &str) -> Result<()> {
@@ -299,7 +405,7 @@ mod tests {
     async fn steps_append_in_order_and_spend_survives_truncation() {
         let d = tempfile::tempdir().unwrap();
         let store = Store::open(&d.path().join("s.db")).await.unwrap();
-        store.insert_run("r1", "goal", "orchopork/r1", "/wt", "abcdef1", None).await.unwrap();
+        store.insert_run("r1", "goal", "orchopork/r1", "/wt", "abcdef1", None, &RunSpec::default()).await.unwrap();
         let st = RunState::default();
         for i in 0..3 {
             let s = store
@@ -329,5 +435,38 @@ mod tests {
         store.set_run_status("r1", RunStatus::Running, None).await.unwrap();
         assert_eq!(store.mark_interrupted_runs().await.unwrap(), 1);
         assert_eq!(store.get_run("r1").await.unwrap().status, RunStatus::Paused);
+    }
+}
+
+#[cfg(test)]
+mod spec_tests {
+    use super::*;
+
+    fn a(id: &str, parent: Option<&str>) -> AgentSpec {
+        AgentSpec {
+            id: id.into(),
+            name: id.into(),
+            role: String::new(),
+            task: "t".into(),
+            parent: parent.map(Into::into),
+            model: None,
+        }
+    }
+
+    #[test]
+    fn agent_trees_are_validated() {
+        let ok = RunSpec {
+            mode: RunMode::Orchestra,
+            model: None,
+            agents: vec![a("r", None), a("x", Some("r")), a("y", Some("x"))],
+        };
+        assert!(ok.validate_agents().is_ok());
+        assert_eq!(ok.children("r").count(), 1);
+        let two_roots = RunSpec { agents: vec![a("r", None), a("s", None)], ..ok.clone() };
+        assert!(two_roots.validate_agents().is_err());
+        let cycle = RunSpec { agents: vec![a("r", None), a("x", Some("y")), a("y", Some("x"))], ..ok.clone() };
+        assert!(cycle.validate_agents().is_err());
+        let orphan = RunSpec { agents: vec![a("r", None), a("x", Some("nope"))], ..ok };
+        assert!(orphan.validate_agents().is_err());
     }
 }

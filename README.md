@@ -25,10 +25,32 @@ cd /path/to/your/repo
 /path/to/orchopork                     # opens http://localhost:7878
 ```
 
-The dashboard walks you through four short steps: pick the workspace, confirm git, choose models and skills, then
-start a run. Restarting in a workspace that is already set up opens the dashboard directly.
+The interface is a plain chat box. When you send a message, orchopork asks
+**"Activate an agent orchestra?"**:
 
-The same thing from the terminal:
+- **No, single agent**: pick a model (local or cloud; a link leads to model setup if none is ready). One agent
+  with tools works on the request like a classic coding assistant. Replying continues the same conversation.
+- **Yes, orchestra**: pick a lead model. The lead drafts a team as a chain of command, and you review it on a canvas
+  before anything runs:
+  - each agent is a node with an auto-assigned decimal rank (private → corporal ≤10 → captain ≤100 → major ≤1000 →
+    general);
+  - **drag** an agent onto another to put it under that commander; any agent can command any number of agents;
+  - **drag from the reserve** (coder, tester, reviewer, researcher, docs writer, refactorer) onto an agent to add a
+    subordinate;
+  - **double-click** an agent to edit its name, role, task definition, model and commander;
+  - `Ctrl+Z` undo, `Delete` remove (its subordinates move up), `A` add a subordinate, `Enter` edit; pan by dragging
+    the background, zoom with the wheel.
+
+  **Approve & deploy** starts it. The same tree then shows live status (who is working, who reported, turns and
+  cost per agent), and clicking an agent opens its feed, where you can message that agent directly.
+
+How an orchestra executes: an agent acts only after all of its subordinates have reported, so work flows bottom-up.
+Commanders read their subordinates' reports, check the files, and can **`delegate`** work back to a direct
+subordinate with an order. `finish` sends a report to the agent's commander. When the lead finishes, the optional
+verification command gates completion. All agents share the run's worktree and act one at a time. The whole command
+state is checkpointed with every step, so pause, resume and rewind work exactly as they do for single runs.
+
+From the terminal (classic plan → act → verify → review pipeline):
 
 ```sh
 orchopork init --actor ollama:qwen2.5-coder:14b --planner claude:claude-sonnet-5 --critic deepseek:deepseek-chat
@@ -39,7 +61,7 @@ orchopork runs | show <id> | diff <id> | inject <id> "use serde" | resume <id> |
 
 Ctrl-C during `orchopork run` pauses after the current step. Resume later with `orchopork resume <id>`.
 
-## How a run works
+## How a classic run works
 
 ```text
 plan ──► act ⇄ tool ──finish──► verify ──pass──► review ──approve──► done

@@ -18,6 +18,7 @@
 //! failures the next turn is escalated to a stronger model; when the cloud
 //! budget is exhausted, cloud roles fall back to a local actor.
 
+pub mod orchestra;
 pub mod prompts;
 pub mod protocol;
 pub mod tools;
@@ -38,7 +39,7 @@ use crate::error::{Error, Result};
 use crate::fsutil::clip;
 use crate::git::GitRepo;
 use crate::providers::{CallOutcome, CompletionRequest, Message};
-use crate::storage::{NewStep, Phase, Run, RunState, RunStatus, Step, StepKind, now_unix};
+use crate::storage::{NewStep, Phase, Run, RunMode, RunSpec, RunState, RunStatus, Step, StepKind, now_unix};
 use tools::{MAX_STORED_OUTPUT, ToolBox, run_shell};
 
 const EVENT_CHANNEL_CAPACITY: usize = 512;
@@ -131,14 +132,26 @@ impl Engine {
     /// Creates the run's branch + worktree from the workspace's current
     /// HEAD and starts it. Uncommitted changes in your checkout are not
     /// part of the run.
-    pub async fn create_run(&self, goal: &str, verify_command: Option<&str>) -> Result<Run> {
+    pub async fn create_run(&self, goal: &str, verify_command: Option<&str>, spec: RunSpec) -> Result<Run> {
         let ws = &self.inner.ws;
         let goal = goal.trim();
         if goal.is_empty() {
             return Err(Error::InvalidRequest("goal is empty".into()));
         }
-        if ws.config().routing.actor.is_none() {
-            return Err(Error::InvalidRequest("choose an actor model in settings first".into()));
+        match spec.mode {
+            RunMode::Classic if ws.config().routing.actor.is_none() => {
+                return Err(Error::InvalidRequest("choose an actor model in settings first".into()));
+            }
+            RunMode::Solo if spec.model.is_none() => {
+                return Err(Error::InvalidRequest("choose a model for this chat".into()));
+            }
+            RunMode::Orchestra => {
+                spec.validate_agents()?;
+                if spec.model.is_none() && spec.agents.iter().any(|a| a.model.is_none()) {
+                    return Err(Error::InvalidRequest("choose a lead model for the orchestra".into()));
+                }
+            }
+            _ => {}
         }
         if !ws.repo.is_repo().await {
             return Err(Error::InvalidRequest(
@@ -154,7 +167,7 @@ impl Engine {
             let branch = format!("orchopork/{id}");
             let worktree = ws.state_dir.join("worktrees").join(&id);
             ws.repo.worktree_add(&worktree, &branch, &base).await?;
-            ws.store.insert_run(&id, goal, &branch, &worktree.to_string_lossy(), &base, verify).await?
+            ws.store.insert_run(&id, goal, &branch, &worktree.to_string_lossy(), &base, verify, &spec).await?
         };
         self.inner.emit(Event::Run { run: run.clone() });
         self.start(&run.id).await
@@ -217,7 +230,7 @@ impl Engine {
     /// Adds a user message the actor sees on its next turn. Works while the
     /// run executes, while paused, and on a finished run (which re-opens it
     /// for a follow-up; resume to continue).
-    pub async fn inject(&self, run_id: &str, text: &str) -> Result<Step> {
+    pub async fn inject(&self, run_id: &str, text: &str, agent: Option<&str>) -> Result<Step> {
         let text = text.trim();
         if text.is_empty() {
             return Err(Error::InvalidRequest("message is empty".into()));
@@ -226,7 +239,25 @@ impl Engine {
         let _g = self.inner.append_lock.lock().await;
         let run = ws.store.get_run(run_id).await?;
         let mut state = ws.store.head_step(run_id).await?.map(|s| s.state).unwrap_or_default();
-        if state.phase == Phase::Done {
+        let mut meta = json!({});
+        if run.spec.mode == RunMode::Orchestra {
+            let root = run.spec.root().map(|a| a.id.clone()).unwrap_or_default();
+            let target = agent.filter(|a| run.spec.agent(a).is_some()).map(str::to_string).unwrap_or(root);
+            meta["agent"] = json!(target);
+            // Re-open the target and its chain of command so the message is
+            // acted on; only when no loop is running (it owns the state).
+            if !self.is_active(run_id) {
+                let mut cur = Some(target);
+                while let Some(id) = cur {
+                    state.done.retain(|d| *d != id);
+                    cur = run.spec.agent(&id).and_then(|a| a.parent.clone());
+                }
+                state.stack.clear();
+                if state.phase == Phase::Done {
+                    state.phase = Phase::Act;
+                }
+            }
+        } else if state.phase == Phase::Done {
             state.phase = Phase::Act;
             state.reviews = 0;
         }
@@ -244,7 +275,7 @@ impl Engine {
                     kind: StepKind::Inject,
                     output: text,
                     observation: None,
-                    meta: json!({}),
+                    meta,
                     state: &state,
                     git_commit: &commit,
                     cost_usd: 0.0,
@@ -345,15 +376,28 @@ impl Inner {
             if pause.load(Ordering::SeqCst) {
                 return Ok(Stop::Paused(None));
             }
-            let cfg = self.ws.config();
+            let run = self.ws.store.get_run(run_id).await?;
+            let cfg = effective_config(self.ws.config(), &run.spec);
             if taken >= cfg.limits.steps_per_session {
                 return Ok(Stop::Paused(Some(format!(
                     "paused after {taken} steps (limits.steps_per_session); review progress and resume to continue"
                 ))));
             }
-            let run = self.ws.store.get_run(run_id).await?;
             let steps = self.ws.store.steps(run_id).await?;
-            let state = steps.last().map(|s| s.state.clone()).unwrap_or_default();
+            let mut state = steps.last().map(|s| s.state.clone()).unwrap_or_default();
+            if steps.is_empty() && run.spec.mode != RunMode::Classic {
+                state.phase = Phase::Act; // solo and orchestra runs skip the planner
+            }
+            if run.spec.mode == RunMode::Orchestra {
+                if state.phase == Phase::Done {
+                    return Ok(Stop::Done);
+                }
+                taken += 1;
+                if let Some(stop) = self.orchestra_turn(&cfg, &run, &steps, state).await? {
+                    return Ok(stop);
+                }
+                continue;
+            }
             let stop = match state.phase {
                 Phase::Plan => self.plan(&cfg, &run, &steps, state).await?,
                 Phase::Act => self.act(&cfg, &run, &steps, state).await?,
@@ -541,6 +585,24 @@ impl Inner {
     }
 
     async fn verify(&self, cfg: &Config, run: &Run, state: RunState) -> Result<Option<Stop>> {
+        let (all_ok, summary, details) = self.run_verification(cfg, run).await?;
+        let next = RunState {
+            phase: match (all_ok, cfg.routing.critic.is_some()) {
+                (false, _) => Phase::Act,
+                (true, true) => Phase::Review,
+                (true, false) => Phase::Done,
+            },
+            failures: 0,
+            escalate: false,
+            ..state
+        };
+        let meta = json!({ "ok": all_ok });
+        self.append(run, StepKind::Verify, &summary, Some(&details), meta, &next, 0.0).await?;
+        Ok(None)
+    }
+
+    /// Runs every verification command: (all passed, summary, details).
+    async fn run_verification(&self, cfg: &Config, run: &Run) -> Result<(bool, String, String)> {
         let skills = self.ws.skills.compose("")?;
         let timeout = Duration::from_secs(cfg.limits.command_timeout_secs.max(1));
         let mut summary = Vec::new();
@@ -563,19 +625,7 @@ impl Inner {
         if commands.is_empty() {
             summary.push("no verification configured".into());
         }
-        let next = RunState {
-            phase: match (all_ok, cfg.routing.critic.is_some()) {
-                (false, _) => Phase::Act,
-                (true, true) => Phase::Review,
-                (true, false) => Phase::Done,
-            },
-            failures: 0,
-            escalate: false,
-            ..state
-        };
-        let meta = json!({ "ok": all_ok });
-        self.append(run, StepKind::Verify, &summary.join("\n"), Some(details.trim_end()), meta, &next, 0.0).await?;
-        Ok(None)
+        Ok((all_ok, summary.join("\n"), details.trim_end().to_string()))
     }
 
     async fn review(&self, cfg: &Config, run: &Run, steps: &[Step], state: RunState) -> Result<Option<Stop>> {
@@ -624,6 +674,25 @@ impl Inner {
         }
         Ok(None)
     }
+}
+
+/// The workspace config as a given run sees it: a solo run uses its own
+/// model for everything and has no planner or critic.
+fn effective_config(mut cfg: Config, spec: &RunSpec) -> Config {
+    match spec.mode {
+        RunMode::Classic => {}
+        RunMode::Solo => {
+            cfg.routing.actor = spec.model.clone();
+            cfg.routing.planner = None;
+            cfg.routing.critic = None;
+        }
+        RunMode::Orchestra => {
+            // Budget fallback in `call` targets the local default, if any.
+            cfg.routing.critic = None;
+            cfg.routing.planner = None;
+        }
+    }
+    cfg
 }
 
 fn no_actor() -> Error {

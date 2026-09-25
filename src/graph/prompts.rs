@@ -78,7 +78,7 @@ pub fn critic_input(
     )
 }
 
-fn file_overview(files: &[String], max: usize) -> String {
+pub fn file_overview(files: &[String], max: usize) -> String {
     let mut s = format!("\n# Repository files ({})\n", files.len());
     if files.is_empty() {
         s.push_str("(empty repository)\n");
@@ -136,6 +136,13 @@ pub fn actor_messages(
     }
 
     let pinned = format!("# Goal\n{}\n\n# Plan\n{}\n{}", goal.trim(), clip(plan, 8_000), file_overview(files, 150));
+    windowed(pinned, groups, budget_chars)
+}
+
+/// Pinned first message + as many of the newest `groups` as fit in
+/// `budget_chars` (groups are never split). Starts and ends with a user
+/// message; no two consecutive messages share a role.
+pub fn windowed(pinned: String, groups: Vec<Vec<Message>>, budget_chars: usize) -> Vec<Message> {
     let mut remaining = budget_chars.saturating_sub(pinned.len());
     let mut kept: Vec<&Vec<Message>> = Vec::new();
     for g in groups.iter().rev() {
@@ -155,7 +162,7 @@ pub fn actor_messages(
         ));
     }
     if groups.is_empty() {
-        first.push_str("\nStart with the first step of the plan.\n");
+        first.push_str("\nStart now.\n");
     }
     let mut msgs = vec![Message::user(first)];
     for g in kept.into_iter().rev() {

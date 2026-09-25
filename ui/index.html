@@ -5,612 +5,894 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>orchopork</title>
 <style>
+:root {
+  --bg: #fbfaf8; --bg2: #f3f2ee; --panel: #ffffff; --line: #e4e2dc; --text: #17181a; --muted: #6e7076; --faint: #a3a5aa;
+  --accent: #5b5bd6; --accent2: #0ea5a0; --accent-ink: #fff; --ok: #1a8a4a; --warn: #b26b00; --bad: #c2362b;
+  --glow: rgba(91, 91, 214, .16); --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 28px rgba(0,0,0,.06);
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
   :root {
-    --bg: #f6f6f4; --panel: #ffffff; --border: #d9d9d4; --text: #16181b; --muted: #6b6f76;
-    --accent: #0f766e; --accent-ink: #ffffff; --danger: #b42318; --warn: #a15c07; --ok: #15803d;
-    --code: #f0f0ec; --add: #e6f4ea; --del: #fdecea;
-    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    --bg: #0d0e11; --bg2: #14161a; --panel: #17191e; --line: #262930; --text: #ececf0; --muted: #9194a0; --faint: #5d606a;
+    --accent: #8b8cff; --accent2: #2dd4bf; --accent-ink: #0d0e11; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    --glow: rgba(139, 140, 255, .18); --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0c0d0f; --panel: #141619; --border: #2a2e34; --text: #e7e9ec; --muted: #8d949e;
-      --accent: #2dd4bf; --accent-ink: #042f2b; --danger: #f87171; --warn: #fbbf24; --ok: #4ade80;
-      --code: #0f1113; --add: #0f2a1a; --del: #2d1414;
-    }
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); }
-  a { color: var(--accent); cursor: pointer; }
-  h1 { font-size: 22px; letter-spacing: -.01em; margin: 0 0 6px; }
-  h2 { font-size: 12px; font-weight: 600; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-  p { margin: 0 0 12px; }
-  .muted { color: var(--muted); } .small { font-size: 12px; } .mono { font-family: var(--mono); }
-  .ok { color: var(--ok); } .bad { color: var(--danger); } .warn { color: var(--warn); }
-  input, select, textarea {
-    width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 8px 10px; font: 13px var(--mono);
-  }
-  input[type=checkbox], input[type=radio] { width: auto; }
-  textarea { resize: vertical; min-height: 64px; font-family: var(--sans); font-size: 14px; }
-  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
-  button {
-    font: 600 13px var(--sans); border-radius: 6px; padding: 8px 14px; cursor: pointer;
-    background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent);
-  }
-  button.ghost { background: transparent; color: var(--text); border-color: var(--border); }
-  button.danger { background: transparent; color: var(--danger); border-color: var(--danger); }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .row > .grow { flex: 1; min-width: 160px; }
-  .spacer { flex: 1; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 14px; }
-  .banner { border: 1px solid var(--danger); color: var(--danger); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; white-space: pre-wrap; }
-  .banner.info { border-color: var(--border); color: var(--muted); }
-  .chip { display: inline-block; font: 600 11px var(--sans); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-  .chip.running { color: var(--accent); border-color: var(--accent); }
-  .chip.done { color: var(--ok); border-color: var(--ok); }
-  .chip.paused { color: var(--warn); border-color: var(--warn); }
-  .kv { display: grid; grid-template-columns: 140px 1fr; gap: 6px 12px; font-size: 13px; }
-  .kv > :nth-child(odd) { color: var(--muted); }
-  .list-row { display: flex; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--border); }
-  .list-row:last-child { border-bottom: 0; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14.5px/1.55 var(--sans); }
+button { font: 600 13px var(--sans); cursor: pointer; border-radius: 9px; padding: 8px 14px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+button.accent { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+button.ghost:hover { background: var(--bg2); color: var(--text); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .45; cursor: default; }
+input, select, textarea { width: 100%; font: 13.5px var(--sans); color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; outline: none; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
+textarea { resize: vertical; }
+label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
+.mono { font-family: var(--mono); } .muted { color: var(--muted); } .faint { color: var(--faint); } .small { font-size: 12.5px; }
+.ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+.row { display: flex; gap: 8px; align-items: center; } .grow { flex: 1; min-width: 0; } .wrap { flex-wrap: wrap; }
+.pill { display: inline-flex; align-items: center; gap: 5px; font: 600 11px var(--sans); padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.pill.running { color: var(--accent); border-color: var(--accent); } .pill.done { color: var(--ok); border-color: var(--ok); } .pill.paused { color: var(--warn); border-color: var(--warn); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: inline-block; }
+.running .dot, .pulse { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.toasts { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; z-index: 50; pointer-events: none; }
+.toast { background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; font-size: 13px; z-index: 50; max-width: 80vw; box-shadow: var(--shadow); }
+.toast.err { background: var(--bad); color: #fff; }
 
-  /* wizard */
-  .wizard { max-width: 700px; margin: 0 auto; padding: 56px 20px 80px; }
-  .progress { display: flex; gap: 6px; margin-bottom: 36px; }
-  .progress span { flex: 1; height: 3px; background: var(--border); border-radius: 2px; }
-  .progress span.on { background: var(--accent); }
-  .lede { color: var(--muted); font-size: 15px; margin-bottom: 28px; }
-  .pillars { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin-bottom: 28px; }
-  .pillars .panel { margin: 0; }
-  .route-grid { display: grid; grid-template-columns: 110px 150px 1fr; gap: 8px; align-items: center; }
-  .route-grid .role { font-size: 13px; }
-  .actions { display: flex; gap: 8px; margin-top: 20px; }
+/* shell */
+.shell { display: grid; grid-template-columns: 260px 1fr; height: 100vh; }
+.shell.collapsed { grid-template-columns: 0 1fr; }
+.side { background: var(--bg2); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.side .top { padding: 14px 12px 8px; }
+.brand { font: 800 15px var(--mono); letter-spacing: -.03em; display: flex; align-items: center; gap: 8px; }
+.brand i { width: 18px; height: 18px; border-radius: 6px; background: conic-gradient(from 200deg, var(--accent), var(--accent2), var(--accent)); display: inline-block; }
+.hist { flex: 1; overflow-y: auto; padding: 4px 8px; }
+.hist h6 { margin: 14px 6px 4px; font: 600 11px var(--sans); color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+.hitem { display: flex; gap: 8px; align-items: center; padding: 7px 9px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text); }
+.hitem:hover { background: var(--panel); } .hitem.sel { background: var(--panel); box-shadow: var(--shadow); }
+.hitem .t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hitem .ic { width: 16px; text-align: center; color: var(--muted); }
+.side .foot { padding: 10px 12px 14px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.meter { height: 4px; background: var(--line); border-radius: 3px; overflow: hidden; } .meter > div { height: 100%; background: linear-gradient(90deg, var(--accent2), var(--accent)); }
+.main { position: relative; min-width: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+.topbar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; min-height: 52px; }
+.topbar .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  /* app */
-  .app { display: grid; grid-template-columns: 290px 1fr; min-height: 100vh; }
-  .side { border-right: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-  .brand { font: 700 16px var(--mono); letter-spacing: -.02em; }
-  .budget-bar { height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 6px; }
-  .budget-bar > div { height: 100%; background: var(--accent); }
-  .run-item { padding: 9px 10px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
-  .run-item:hover { border-color: var(--border); }
-  .run-item.sel { border-color: var(--accent); background: var(--panel); }
-  .run-item .goal { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
-  .main { padding: 22px 28px 0; display: flex; flex-direction: column; min-width: 0; height: 100vh; }
-  .run-head { padding-bottom: 12px; border-bottom: 1px solid var(--border); }
-  .run-head .goal { font-size: 16px; font-weight: 600; white-space: pre-wrap; margin-bottom: 8px; }
-  .phases { display: flex; gap: 4px; align-items: center; font: 12px var(--mono); margin: 8px 0; }
-  .phases span { padding: 2px 8px; border-radius: 4px; color: var(--muted); }
-  .phases span.past { color: var(--text); }
-  .phases span.now { background: var(--accent); color: var(--accent-ink); }
-  .timeline { flex: 1; overflow-y: auto; padding: 14px 0; }
-  .step { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); margin-bottom: 10px; }
-  .step-head { display: flex; gap: 8px; align-items: center; padding: 8px 12px; font: 12px var(--mono); border-bottom: 1px solid var(--border); }
-  .step-head .kind { font-weight: 700; text-transform: uppercase; }
-  .step-body { padding: 10px 12px; }
-  .step pre, .diff pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.45 var(--mono); }
-  .step details { margin-top: 8px; }
-  .step summary { cursor: pointer; font-size: 12px; color: var(--muted); }
-  .step details pre { background: var(--code); padding: 8px; border-radius: 6px; margin-top: 6px; max-height: 420px; overflow: auto; }
-  .composer { border-top: 1px solid var(--border); padding: 12px 0 18px; }
-  .composer textarea { min-height: 52px; }
-  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; justify-content: center; align-items: flex-start; padding: 5vh 16px; z-index: 10; }
-  .modal { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; width: min(980px, 100%); max-height: 90vh; overflow: auto; padding: 20px; }
-  .diff .add { background: var(--add); } .diff .del { background: var(--del); } .diff .hunk { color: var(--accent); }
-  @media (max-width: 800px) {
-    .app { grid-template-columns: 1fr; } .side { border-right: 0; border-bottom: 1px solid var(--border); }
-    .main { height: auto; padding: 16px; } .route-grid { grid-template-columns: 1fr; }
-  }
+/* home */
+.hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; gap: 26px; }
+.hero h1 { font-size: 30px; letter-spacing: -.025em; margin: 0; font-weight: 650; text-align: center; }
+.hero h1 span { background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.composer { width: min(760px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); padding: 12px 12px 10px 16px; transition: box-shadow .2s, border-color .2s; }
+.composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--glow), var(--shadow); }
+.composer textarea { border: 0; box-shadow: none; padding: 4px 0; font-size: 15.5px; min-height: 28px; max-height: 280px; resize: none; background: transparent; }
+.composer textarea:focus { box-shadow: none; }
+.composer .bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.send { width: 36px; height: 36px; border-radius: 50%; padding: 0; display: grid; place-items: center; background: var(--text); color: var(--bg); border: 0; font-size: 17px; }
+.send.stop { background: var(--bad); color: #fff; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: 760px; }
+.chip { font-size: 12.5px; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; }
+.chip:hover { color: var(--text); border-color: var(--faint); }
+.verify-in { border: 0; border-top: 1px dashed var(--line); border-radius: 0; padding: 8px 0 2px; font: 12.5px var(--mono); box-shadow: none !important; }
+
+/* chat */
+.scroll { flex: 1; overflow-y: auto; }
+.thread { width: min(780px, 100%); margin: 0 auto; padding: 8px 20px 30px; }
+.msg-user { display: flex; justify-content: flex-end; margin: 18px 0; }
+.msg-user div { background: var(--bg2); border: 1px solid var(--line); padding: 10px 14px; border-radius: 16px 16px 4px 16px; max-width: 82%; white-space: pre-wrap; }
+.msg-ai { margin: 14px 0; white-space: pre-wrap; }
+.act { display: flex; gap: 10px; align-items: flex-start; padding: 5px 0; font-size: 13.5px; }
+.act .ic { width: 22px; height: 22px; flex: none; border-radius: 6px; display: grid; place-items: center; background: var(--bg2); border: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+.act.fail .ic { color: var(--bad); border-color: var(--bad); }
+.act .body { min-width: 0; flex: 1; }
+.act .tl { color: var(--muted); } .act .tl b { color: var(--text); font-weight: 600; }
+details.out summary { cursor: pointer; color: var(--faint); font-size: 12px; list-style: none; }
+details.out summary::-webkit-details-marker { display: none; }
+details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--line); padding: 10px; border-radius: 9px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 380px; overflow: auto; margin: 6px 0 0; }
+.sysline { text-align: center; font-size: 12px; color: var(--faint); margin: 16px 0; }
+.thinking { display: flex; gap: 8px; align-items: center; color: var(--muted); font-size: 13px; margin: 14px 0; }
+.dots i { display: inline-block; width: 5px; height: 5px; margin-right: 3px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite; }
+.dots i:nth-child(2) { animation-delay: .2s; } .dots i:nth-child(3) { animation-delay: .4s; }
+.dock { padding: 8px 20px 18px; display: flex; justify-content: center; }
+.banner { width: min(780px, 100%); margin: 8px auto; border: 1px solid var(--warn); color: var(--warn); border-radius: 10px; padding: 9px 12px; font-size: 13px; }
+
+/* modal */
+.scrim { position: fixed; inset: 0; background: rgba(10,10,14,.42); backdrop-filter: blur(3px); display: grid; place-items: center; z-index: 30; padding: 16px; animation: fade .15s; }
+@keyframes fade { from { opacity: 0; } }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow); width: min(520px, 100%); max-height: 88vh; overflow: auto; padding: 22px; animation: rise .18s ease-out; }
+.modal.wide { width: min(900px, 100%); }
+@keyframes rise { from { transform: translateY(8px); opacity: 0; } }
+.modal h2 { margin: 0 0 6px; font-size: 19px; letter-spacing: -.01em; }
+.modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+.choice { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.choice button { text-align: left; padding: 14px; border-radius: 14px; font-weight: 400; display: grid; gap: 4px; }
+.choice button b { font-size: 14px; } .choice button span { color: var(--muted); font-size: 12.5px; }
+.choice button.hot { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
+.orb { width: 54px; height: 54px; border-radius: 16px; margin-bottom: 12px; background: radial-gradient(circle at 30% 30%, var(--accent2), var(--accent)); box-shadow: 0 8px 30px var(--glow); }
+.mlist { max-height: 340px; overflow-y: auto; margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; }
+.mitem { display: flex; gap: 10px; align-items: center; padding: 9px 12px; cursor: pointer; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+.mitem:last-child { border-bottom: 0; } .mitem:hover { background: var(--bg2); } .mitem.sel { background: var(--glow); }
+.mitem .p { font: 11px var(--mono); color: var(--muted); width: 72px; }
+
+/* orchestra */
+.orch { flex: 1; display: grid; grid-template-columns: 1fr 380px; min-height: 0; }
+.orch.nopanel { grid-template-columns: 1fr; }
+.canvas { position: relative; overflow: hidden; background-color: var(--bg); background-image: radial-gradient(var(--line) 1px, transparent 1px); background-size: 22px 22px; cursor: grab; touch-action: none; }
+.canvas.panning { cursor: grabbing; }
+.stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.edges path { fill: none; stroke: var(--faint); stroke-width: 1.5; }
+.edges path.live { stroke: var(--accent); stroke-dasharray: 6 5; animation: flow 1s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -22; } }
+.node { position: absolute; width: 230px; min-height: 104px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; box-shadow: var(--shadow); cursor: pointer; user-select: none; transition: box-shadow .15s, border-color .15s, transform .12s; }
+.node:hover { border-color: var(--faint); }
+.node.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow), var(--shadow); }
+.node.drop { border-color: var(--accent2); box-shadow: 0 0 0 4px rgba(45,212,191,.25); transform: scale(1.03); }
+.node.dragging { opacity: .85; z-index: 5; transition: none; box-shadow: 0 16px 40px rgba(0,0,0,.2); }
+.node.active { border-color: var(--accent); } .node.active::after { content: ""; position: absolute; inset: -5px; border-radius: 17px; border: 2px solid var(--accent); animation: pulse 1.4s infinite; pointer-events: none; }
+.node.reported { border-color: var(--ok); }
+.node .rank { font: 700 10px var(--mono); letter-spacing: .06em; color: var(--accent); display: flex; align-items: center; gap: 6px; text-transform: uppercase; }
+.node .rank .chev { letter-spacing: -2px; }
+.node .nm { font-weight: 650; font-size: 14px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node .rl { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node .tk { font-size: 12px; color: var(--faint); margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.node .st { position: absolute; top: 9px; right: 10px; font-size: 11px; }
+.node .add { position: absolute; bottom: -12px; left: 50%; transform: translateX(-50%); width: 24px; height: 24px; border-radius: 50%; padding: 0; display: none; font-size: 14px; line-height: 1; background: var(--panel); }
+.node:hover .add { display: block; }
+.hud { position: absolute; left: 14px; top: 14px; display: flex; gap: 6px; z-index: 3; flex-wrap: wrap; }
+.hud button { background: var(--panel); box-shadow: var(--shadow); }
+.reserve { position: absolute; left: 14px; bottom: 14px; z-index: 3; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 10px; width: 210px; }
+.reserve h6 { margin: 0 0 6px; font: 600 11px var(--sans); color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+.tpl { padding: 6px 9px; border: 1px dashed var(--line); border-radius: 8px; font-size: 12.5px; margin-top: 5px; cursor: grab; background: var(--bg); }
+.tpl:hover { border-color: var(--accent); }
+.ghost-drag { position: fixed; z-index: 60; pointer-events: none; padding: 8px 12px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font-size: 12.5px; font-weight: 600; box-shadow: var(--shadow); }
+.deploy { position: absolute; right: 16px; bottom: 16px; z-index: 3; display: flex; gap: 8px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 8px 8px 8px 14px; box-shadow: var(--shadow); }
+.panel { border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
+.panel .ph { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+.panel .feed { flex: 1; overflow-y: auto; padding: 8px 16px; }
+.panel .pc { padding: 10px 12px 14px; border-top: 1px solid var(--line); }
+.panel .pc .composer { border-radius: 14px; padding: 8px 8px 8px 12px; }
+.panel .pc .composer textarea { font-size: 13.5px; }
+.center { flex: 1; display: grid; place-items: center; padding: 24px; }
+.stack { display: grid; gap: 12px; width: min(560px, 100%); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; box-shadow: var(--shadow); }
+.card h3 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.spin { width: 38px; height: 38px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: rot .8s linear infinite; margin: 0 auto 12px; }
+@keyframes rot { to { transform: rotate(360deg); } }
+.page { flex: 1; overflow-y: auto; } .page .inner { width: min(760px, 100%); margin: 0 auto; padding: 10px 20px 60px; }
+.kv { display: grid; grid-template-columns: 90px 1fr auto auto auto; gap: 8px; align-items: center; margin-top: 8px; }
+@media (max-width: 860px) { .shell { grid-template-columns: 0 1fr; } .orch { grid-template-columns: 1fr; } .panel { display: none; } .reserve { display: none; } }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script>
 "use strict";
-
-// ---- tiny DOM helpers (all user/model text goes through textContent) ----
+// ---------- helpers (all model/user text goes through textContent) ----------
 const h = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === undefined || v === null || v === false) continue;
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
     if (k === "text") n.textContent = v;
     else if (k === "class") n.className = v;
+    else if (k === "style" && typeof v === "object") Object.assign(n.style, v);
     else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
     else if (k === "value") n.value = v;
     else if (v === true) n.setAttribute(k, "");
     else n.setAttribute(k, v);
   }
-  for (const c of kids.flat(Infinity)) if (c !== null && c !== undefined && c !== false) n.append(c.nodeType ? c : String(c));
+  for (const c of kids.flat(Infinity)) if (c != null && c !== false) n.append(c.nodeType ? c : String(c));
   return n;
 };
 const $ = (s, el = document) => el.querySelector(s);
-const money = (x) => "$" + (x || 0).toFixed(x < 1 ? 4 : 2);
-const ago = (t) => { const s = Date.now() / 1000 - t; return s < 60 ? "just now" : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`; };
+const money = (x) => "$" + (x || 0).toFixed((x || 0) < 1 ? 3 : 2);
+const mref = (m) => (m ? `${m.provider}:${m.model}` : "");
+const firstLine = (s, n = 90) => { const l = (s || "").trim().split("\n")[0]; return l.length > n ? l.slice(0, n) + "…" : l; };
+const store = { get(k, d) { try { const v = localStorage.getItem("op." + k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("op." + k, JSON.stringify(v)); } catch {} } };
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { ...opts, headers: { "content-type": "application/json", ...(opts.headers || {}) },
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
+  const res = await fetch(path, { method: opts.method || (opts.body !== undefined ? "POST" : "GET"),
+    headers: { "content-type": "application/json" }, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error((body && body.error) || `HTTP ${res.status}`);
   return body;
 }
-
-const ui = { state: null, error: null, runs: [], selected: null, detail: null, es: null, newRun: false };
-
-function setError(e) { ui.error = e ? (e.message || String(e)) : null; const b = $("#error"); if (b) paintError(b); }
-function paintError(el) { el.replaceChildren(); if (ui.error) el.append(h("div", { class: "banner", text: ui.error })); }
-async function guarded(btn, fn) {
-  setError(null); if (btn) btn.disabled = true;
-  try { await fn(); } catch (e) { setError(e); } finally { if (btn) btn.disabled = false; }
+function toast(msg, err) {
+  let box = $(".toasts"); if (!box) { box = h("div", { class: "toasts" }); document.body.append(box); }
+  const t = h("div", { class: "toast" + (err ? " err" : ""), text: msg }); box.append(t);
+  setTimeout(() => t.remove(), err ? 6000 : 2600);
 }
+const guard = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message, true); } };
+function autosize(t) { const f = () => { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 280) + "px"; }; t.addEventListener("input", f); setTimeout(f); }
 
-async function boot() {
-  try { ui.state = await api("/api/state"); }
-  catch (e) { document.body.replaceChildren(h("div", { class: "wizard" }, h("div", { class: "banner", text: `Cannot reach orchopork: ${e.message}` }))); return; }
-  const w = ui.state.wizard;
-  if (location.pathname !== w.path) history.replaceState(null, "", w.path + location.hash);
-  if (w.step === "dashboard") return renderApp();
-  renderWizard();
-}
+// ---------- app state ----------
+const S = { state: null, runs: [], models: null, view: null, detail: null, pending: null, es: null, sideOpen: store.get("side", true) };
 
-// ================= wizard =================
-const STEPS = ["welcome", "permissions", "vcs", "skills", "dashboard"];
+async function loadState() { S.state = await api("/api/state"); }
+async function loadRuns() { if (S.state.workspace) S.runs = (await api("/api/runs")).runs; }
+async function loadModels(force) { if (!S.models || force) S.models = await api("/api/models"); return S.models; }
 
-function renderWizard() {
-  const w = ui.state.wizard;
-  const idx = STEPS.indexOf(w.step);
-  const page = h("div", { class: "wizard" },
-    h("div", { class: "progress" }, STEPS.slice(0, 4).map((_, i) => h("span", { class: i <= idx ? "on" : "" }))),
-    h("div", { id: "error" }));
-  ({ welcome: wWelcome, permissions: wPermissions, vcs: wVcs, skills: wSkills })[w.step](page, w);
-  $("#root").replaceChildren(page);
-  paintError($("#error"));
-}
-
-async function step(path, body) { await api(path, { method: "POST", body: body || {} }); ui.error = null; await boot(); }
-const backBtn = () => h("button", { class: "ghost", text: "Back", onclick: (e) => guarded(e.target, () => step("/api/wizard/back")) });
-
-function wWelcome(page) {
-  page.append(
-    h("h1", { text: "orchopork" }),
-    h("p", { class: "lede", text: "An agent that works through coding tasks on its own. It uses cheap local models for most of the work and a cloud model only when it gets stuck, with a hard monthly budget." }),
-    h("div", { class: "pillars" },
-      pillar("Hybrid routing", "A local model (Ollama, llama.cpp) runs the loop. After repeated failures a turn is escalated to Claude, DeepSeek or Gemini. When the budget is used up, it falls back to local."),
-      pillar("Isolated runs", "Each goal runs on its own branch in its own git worktree. Your checkout is never touched, and you can review the branch when the run is done."),
-      pillar("Checkpointed", "Every step is saved as a git commit plus a SQLite row. You can pause, message the agent, or rewind to any step at any time.")),
-    h("button", { text: "Initialize Workspace", onclick: (e) => guarded(e.target, () => step("/api/wizard/initialize")) }));
-}
-const pillar = (t, d) => h("div", { class: "panel" }, h("h2", { text: t }), h("div", { class: "small muted", text: d }));
-
-function wPermissions(page, w) {
-  const input = h("input", { value: (w.permissions && w.permissions.workspace) || ui.state.default_root || ".", placeholder: "/path/to/your/repo" });
-  const report = h("div");
-  if (w.permissions) paintReport(report, w.permissions);
-  page.append(
-    h("h1", { text: "Workspace" }),
-    h("p", { class: "lede", text: "Choose the project directory (usually a git repository). orchopork keeps its own state in a hidden .orchopork/ folder inside it and checks read/write access and which tools are installed." }),
-    h("div", { class: "panel" }, h("label", { text: "Directory" }), input, report),
-    h("div", { class: "actions" }, backBtn(),
-      h("button", { text: "Check & continue", onclick: (e) => guarded(e.target, async () => {
-        try { await step("/api/wizard/workspace", { path: input.value }); }
-        catch (err) { ui.state = await api("/api/state"); if (ui.state.wizard.permissions) paintReport(report, ui.state.wizard.permissions); throw err; }
-      }) })));
-}
-
-function paintReport(el, r) {
-  const yes = (b) => h("span", { class: b ? "ok" : "bad", text: b ? "yes" : "no" });
-  el.replaceChildren(h("div", { style: "margin-top:14px" },
-    h("div", { class: "list-row" }, h("span", { class: "spacer", text: "Readable" }), yes(r.readable)),
-    h("div", { class: "list-row" }, h("span", { class: "spacer", text: "Writable" }), yes(r.writable)),
-    r.toolchains.map((t) => h("div", { class: "list-row" },
-      h("span", { class: "spacer", text: t.name + (t.required ? " (required)" : "") }),
-      h("span", { class: "small " + (t.version ? "ok" : t.required ? "bad" : "muted"), text: t.version || "not found" })))));
-}
-
-function wVcs(page, w) {
-  const v = w.vcs || {};
-  const init = h("input", { type: "checkbox", id: "init", checked: !v.is_repo });
-  const auth = h("select", {}, [["none", "None: use my existing git credentials"], ["pat", "GitHub personal access token"], ["ssh", "SSH (use my ssh-agent)"]]
-    .map(([val, t]) => h("option", { value: val, text: t, selected: v.remote_auth === val })));
-  const token = h("input", { type: "password", placeholder: v.has_github_token ? "(stored, leave empty to keep)" : "ghp_…" });
-  const tokenRow = h("div", {}, h("label", { text: "GitHub token (stored in .orchopork/secrets.yaml, mode 0600)" }), token);
-  const sync = () => { tokenRow.style.display = auth.value === "pat" ? "" : "none"; };
-  auth.addEventListener("change", sync); sync();
-  page.append(
-    h("h1", { text: "Source control" }),
-    h("p", { class: "lede", text: "Runs are git branches (orchopork/<id>) in separate worktrees, so the workspace has to be a git repository. Pushing run branches is optional." }),
-    h("div", { class: "panel" },
-      h("div", { class: "kv" },
-        h("span", { text: "Repository" }), h("span", { class: v.is_repo ? "ok" : "warn", text: v.is_repo ? "yes" : "not a git repository" }),
-        h("span", { text: "Branch" }), h("span", { class: "mono", text: v.branch || "-" }),
-        h("span", { text: "origin" }), h("span", { class: "mono", text: v.origin || "none" })),
-      !v.is_repo && h("div", { class: "row", style: "margin-top:12px" }, init, h("label", { for: "init", style: "margin:0", text: "Run git init here" })),
-      h("label", { text: "Remote authentication for pushes" }), auth, tokenRow),
-    h("div", { class: "actions" }, backBtn(),
-      h("button", { text: "Continue", onclick: (e) => guarded(e.target, () => step("/api/wizard/vcs", {
-        init_if_missing: v.is_repo ? false : init.checked, remote_auth: auth.value, github_token: token.value || null })) })));
-}
-
-// Shared by the wizard and settings: provider endpoints/keys + role routing.
-function providerForm(cfg, providers, { withKeys }) {
-  const models = {}; // provider -> datalist element
-  const dl = (id, list) => { const d = h("datalist", { id: "dl-" + id }, list.map((m) => h("option", { value: m }))); models[id] = d; return d; };
-  const suggested = Object.fromEntries(providers.map((p) => [p.id, p.suggested_models]));
-  const lists = ["ollama", "llamacpp", "claude", "deepseek", "gemini"].map((p) => dl(p, suggested[p] || []));
-
-  const ollama = h("input", { value: cfg.ollama_url });
-  const llama = h("input", { value: cfg.llamacpp_url || "", placeholder: "optional, e.g. http://127.0.0.1:8080/v1" });
-  const detect = async (provider, url, out) => {
-    const r = await api(`/api/providers/${provider}/models?url=${encodeURIComponent(url)}`);
-    models[provider].replaceChildren(...r.models.map((m) => h("option", { value: m })));
-    out.textContent = r.models.length ? `${r.models.length} models: ${r.models.slice(0, 6).join(", ")}${r.models.length > 6 ? "…" : ""}` : "reachable, but no models installed (ollama pull <model>)";
-    out.className = "small ok";
-  };
-  const oOut = h("div", { class: "small muted" }), lOut = h("div", { class: "small muted" });
-  const probe = (p, input, out) => (e) => guarded(e.target, async () => { try { await detect(p, input.value, out); } catch (err) { out.textContent = err.message; out.className = "small bad"; } });
-
-  const keys = {};
-  const keyRows = ["claude", "deepseek", "gemini"].map((p) => {
-    const configured = (providers.find((x) => x.id === p) || {}).configured;
-    keys[p] = h("input", { type: "password", placeholder: configured ? "key stored (type to replace)" : "API key" });
-    return h("div", { class: "row", style: "margin-top:6px" }, h("span", { style: "width:80px", text: p }), h("div", { class: "grow" }, keys[p]));
-  });
-
-  const roles = [
-    ["actor", "Actor *", "does the work turn by turn; a local model keeps runs cheap"],
-    ["planner", "Planner", "writes the plan once per run; a strong cloud model is worth it here"],
-    ["critic", "Critic", "reviews the final diff; leave empty to accept once verification passes"],
-    ["escalation", "Escalation", "takes over a turn after repeated actor failures"],
-  ];
-  const routeInputs = {};
-  const grid = h("div", { class: "route-grid" });
-  for (const [role, label, hint] of roles) {
-    const cur = cfg.routing[role];
-    const prov = h("select", {}, h("option", { value: "", text: role === "actor" ? "choose…" : "none" }),
-      ["ollama", "llamacpp", "claude", "deepseek", "gemini"].map((p) => h("option", { value: p, text: p, selected: cur && cur.provider === p })));
-    const model = h("input", { value: cur ? cur.model : "", placeholder: "model", list: cur ? "dl-" + cur.provider : "" });
-    prov.addEventListener("change", () => { model.setAttribute("list", "dl-" + prov.value); if (!model.value && suggested[prov.value] && suggested[prov.value][0]) model.value = suggested[prov.value][0]; });
-    routeInputs[role] = { prov, model };
-    grid.append(h("div", { class: "role", title: hint }, label), prov, model);
-  }
-
-  const el = h("div", {},
-    lists,
-    h("div", { class: "panel" }, h("h2", { text: "Local models" }),
-      h("label", { text: "Ollama URL" }), h("div", { class: "row" }, h("div", { class: "grow" }, ollama), h("button", { class: "ghost", text: "Detect models", onclick: probe("ollama", ollama, oOut) })), oOut,
-      h("label", { text: "llama.cpp server (OpenAI-compatible)" }), h("div", { class: "row" }, h("div", { class: "grow" }, llama), h("button", { class: "ghost", text: "Detect", onclick: probe("llamacpp", llama, lOut) })), lOut),
-    withKeys && h("div", { class: "panel" }, h("h2", { text: "Cloud API keys" }),
-      h("p", { class: "small muted", text: "Optional. Keys are stored in .orchopork/secrets.yaml (0600) and never sent back to the browser." }), keyRows),
-    h("div", { class: "panel" }, h("h2", { text: "Routing" }), grid,
-      h("p", { class: "small muted", style: "margin-top:10px", text: "Hover a role for details. Model names autocomplete; any name the provider accepts works." })));
-
-  // Fill datalists from a live Ollama if it is up, silently.
-  detect("ollama", cfg.ollama_url, oOut).catch(() => { oOut.textContent = "Ollama not reachable at this URL"; oOut.className = "small warn"; });
-
-  return {
-    el,
-    read() {
-      const routing = {};
-      for (const [role, { prov, model }] of Object.entries(routeInputs)) {
-        routing[role] = prov.value && model.value.trim() ? { provider: prov.value, model: model.value.trim() } : null;
-      }
-      const k = {}; for (const [p, i] of Object.entries(keys)) if (i.value.trim()) k[p] = i.value.trim();
-      return { routing, ollama_url: ollama.value.trim(), llamacpp_url: llama.value.trim() || null, keys: k };
-    },
-  };
-}
-
-function skillList(skills, onToggle) {
-  return h("div", {}, skills.map((s) => {
-    const box = h("input", { type: "checkbox", checked: s.enabled, onchange: (e) => onToggle(s.name, e.target.checked, e.target) });
-    return h("div", { class: "list-row" }, box,
-      h("div", { class: "grow" }, h("div", {}, h("strong", { text: s.name }), h("span", { class: "chip", style: "margin-left:8px", text: s.type.replace("_", " ") })),
-        h("div", { class: "small muted", text: s.description })));
-  }));
-}
-
-function wSkills(page) {
-  const ws = ui.state.workspace;
-  const form = providerForm(ws.config, ws.providers, { withKeys: true });
-  const enabled = new Set(ws.skills.filter((s) => s.enabled).map((s) => s.name));
-  const cap = h("input", { type: "number", min: "0", step: "1", value: ws.config.monthly_cap_usd });
-  page.append(
-    h("h1", { text: "Models & skills" }),
-    h("p", { class: "lede", text: "Choose which model plays which role, set the monthly cloud budget, and pick the skills that shape the agent's behaviour." }),
-    form.el,
-    h("div", { class: "panel" }, h("h2", { text: "Budget" }),
-      h("label", { text: "Monthly cloud cap (USD). Cloud calls that could exceed it are refused before they are sent." }), cap),
-    h("div", { class: "panel" }, h("h2", { text: "Skills" }),
-      skillList(ws.skills, (name, on) => { on ? enabled.add(name) : enabled.delete(name); }),
-      h("p", { class: "small muted", style: "margin-top:8px", text: "Add your own as YAML/Markdown files in .orchopork/skills/." })),
-    h("div", { class: "actions" }, backBtn(),
-      h("button", { text: "Open dashboard", onclick: (e) => guarded(e.target, () => step("/api/wizard/finish", {
-        ...form.read(), monthly_cap_usd: Number(cap.value), enabled_skills: [...enabled] })) })));
-}
-
-// ================= dashboard =================
-async function renderApp() {
-  const ws = ui.state.workspace;
-  const side = h("aside", { class: "side" },
-    h("div", { class: "row" }, h("span", { class: "brand", text: "orchopork" }), h("span", { class: "spacer" }),
-      h("button", { class: "ghost", text: "Settings", onclick: openSettings })),
-    h("div", { class: "small muted mono", title: ws.root, text: ws.root }),
-    h("div", { id: "budget" }),
-    h("button", { text: "+ New run", onclick: () => { ui.selected = null; ui.newRun = true; paintRuns(); paintMain(); } }),
-    h("div", { id: "runs", style: "overflow-y:auto; flex:1" }));
-  const main = h("main", { class: "main", id: "main" });
-  $("#root").replaceChildren(h("div", { class: "app" }, side, main));
-  paintBudget();
+// ---------- router ----------
+window.addEventListener("hashchange", route);
+async function route() {
+  try { await loadState(); } catch (e) { $("#root").replaceChildren(h("div", { class: "center" }, h("div", { class: "card", text: "Cannot reach orchopork: " + e.message }))); return; }
+  if (!S.state.workspace) return viewOpen();
   await loadRuns();
-  const hash = location.hash.slice(1);
-  if (hash && ui.runs.some((r) => r.id === hash)) await selectRun(hash);
-  else { ui.newRun = ui.runs.length === 0; paintMain(); }
+  const [, a, b] = location.hash.slice(1).split("/");
+  if (a === "models") return shell(viewModels);
+  if (a === "o" && b === "new") return shell(viewOrchestraDraft);
+  if (a === "o" && b) return shell((m) => viewOrchestraRun(m, b));
+  if (a === "c" && b) return shell((m) => viewChat(m, b));
+  return shell(viewHome);
+}
+const go = (hash) => { if (location.hash === hash) route(); else location.hash = hash; };
+
+// ---------- shell ----------
+function sideEl() {
+  const ws = S.state.workspace;
+  const b = ws.budget, pct = b.cap_usd > 0 ? Math.min(100, (b.spent_usd / b.cap_usd) * 100) : 100;
+  const cur = location.hash.split("/")[2];
+  const item = (r) => h("div", { class: "hitem" + (r.id === cur ? " sel" : ""), title: r.goal, onclick: () => go(`#/${r.spec.mode === "orchestra" ? "o" : "c"}/${r.id}`) },
+    h("span", { class: "ic", text: r.spec.mode === "orchestra" ? "⎇" : "›" }), h("span", { class: "t", text: r.goal }),
+    r.status === "running" && h("span", { class: "dot pulse", style: { color: "var(--accent)" } }));
+  const orch = S.runs.filter((r) => r.spec.mode === "orchestra"), chats = S.runs.filter((r) => r.spec.mode !== "orchestra");
+  return h("aside", { class: "side" },
+    h("div", { class: "top" },
+      h("div", { class: "row" }, h("div", { class: "brand" }, h("i"), "orchopork"), h("span", { class: "grow" }),
+        h("button", { class: "ghost", title: "Hide sidebar", text: "⟨", onclick: () => toggleSide() })),
+      h("button", { style: { width: "100%", marginTop: "12px", textAlign: "left" }, onclick: () => go("#/"), text: "＋  New chat" })),
+    h("div", { class: "hist" },
+      orch.length > 0 && [h("h6", { text: "Orchestras" }), orch.map(item)],
+      chats.length > 0 && [h("h6", { text: "Chats" }), chats.map(item)],
+      !S.runs.length && h("div", { class: "small faint", style: { padding: "12px 8px" }, text: "Your conversations will appear here." })),
+    h("div", { class: "foot" },
+      h("div", { class: "row small" }, h("span", { class: "muted", text: `${money(b.spent_usd)} of ${money(b.cap_usd)}` }), h("span", { class: "grow" }), h("span", { class: "faint", text: "this month" })),
+      h("div", { class: "meter" }, h("div", { style: { width: pct + "%" } })),
+      h("div", { class: "row" }, h("button", { class: "ghost", style: { padding: "6px 8px" }, onclick: () => go("#/models"), text: "⚙  Models & settings" })),
+      h("div", { class: "small faint mono", title: ws.root, style: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }, text: ws.root })));
+}
+function shell(render) {
+  const main = h("main", { class: "main" });
+  $("#root").replaceChildren(h("div", { class: "shell" + (S.sideOpen ? "" : " collapsed") }, sideEl(), main));
+  S.view = null;
+  render(main);
   connectEvents();
 }
+function toggleSide() { S.sideOpen = !S.sideOpen; store.set("side", S.sideOpen); $(".shell").classList.toggle("collapsed", !S.sideOpen); }
+const topbar = (...kids) => h("div", { class: "topbar" }, !S.sideOpen && h("button", { class: "ghost", text: "☰", onclick: toggleSide }), ...kids);
 
-function paintBudget() {
-  const b = ui.state.workspace.budget;
-  const pct = b.cap_usd > 0 ? Math.min(100, (b.spent_usd / b.cap_usd) * 100) : 100;
-  $("#budget").replaceChildren(
-    h("div", { class: "row small" }, h("span", { text: `${money(b.spent_usd)} of ${money(b.cap_usd)} this month` }), h("span", { class: "spacer" }),
-      h("span", { class: pct > 90 ? "bad" : "muted", text: `${money(b.remaining_usd)} left` })),
-    h("div", { class: "budget-bar" }, h("div", { style: `width:${pct}%` + (pct > 90 ? ";background:var(--danger)" : "") })));
+// ---------- open a project (replaces the old wizard) ----------
+function viewOpen() {
+  const input = h("input", { value: S.state.default_root || "", class: "mono" });
+  const go_ = guard(async (btn, init) => {
+    btn.disabled = true;
+    try {
+      const r = await api("/api/workspace", { body: { path: input.value, git_init: !!init } });
+      if (r.needs_git_init) {
+        if (confirm(`${r.path} is not a git repository.\n\norchopork runs every task on its own git branch. Initialize a repository here?`)) return go_(btn, true);
+        return;
+      }
+      route();
+    } finally { btn.disabled = false; }
+  });
+  const btn = h("button", { class: "primary", text: "Open", onclick: () => go_(btn) });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") go_(btn); });
+  $("#root").replaceChildren(h("div", { class: "center", style: { minHeight: "100vh" } }, h("div", { class: "stack", style: { textAlign: "center" } },
+    h("div", { class: "orb", style: { margin: "0 auto 8px" } }),
+    h("h1", { style: { margin: 0, fontSize: "28px", letterSpacing: "-.02em" }, text: "orchopork" }),
+    h("p", { class: "muted", style: { margin: "0 0 10px" }, text: "Local-first AI agents, from a single helper to a whole chain of command. Pick the project folder to work in." }),
+    h("div", { class: "row" }, h("div", { class: "grow" }, input), btn),
+    h("p", { class: "small faint", text: "Your checkout is never modified: every task runs on its own branch in a separate worktree." }))));
+  input.focus();
 }
 
-async function refreshBudget() {
-  try { ui.state = await api("/api/state"); paintBudget(); } catch { /* keep last */ }
+// ---------- home ----------
+function composer({ placeholder, onSend, verify, running, onStop, big }) {
+  const t = h("textarea", { rows: 1, placeholder });
+  autosize(t);
+  let vIn = null;
+  const vBtn = verify && h("button", { class: "ghost small", title: "A command that must pass before the agent may finish", text: "✓ verify", onclick: () => {
+    if (vIn) { vIn.remove(); vIn = null; return; }
+    vIn = h("input", { class: "verify-in", placeholder: "verification command, e.g. cargo test / pytest -q / npm test" }); box.append(vIn); vIn.focus();
+  } });
+  const send = () => { const v = t.value.trim(); if (!v) return; onSend(v, vIn ? vIn.value.trim() : "", () => { t.value = ""; t.dispatchEvent(new Event("input")); }); };
+  t.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+  const sendBtn = running ? h("button", { class: "send stop", title: "Pause after the current step", text: "■", onclick: onStop })
+    : h("button", { class: "send", title: "Send (Enter)", text: "↑", onclick: send });
+  const box = h("div", { class: "composer" }, t, h("div", { class: "bar" }, vBtn, h("span", { class: "grow" }), running && h("button", { class: "ghost small", text: "send", onclick: send }), sendBtn));
+  if (big) setTimeout(() => t.focus());
+  box.textarea = t;
+  return box;
 }
 
-async function loadRuns() { ui.runs = (await api("/api/runs")).runs; paintRuns(); }
-
-function paintRuns() {
-  const el = $("#runs"); if (!el) return;
-  if (!ui.runs.length) { el.replaceChildren(h("div", { class: "small muted", text: "No runs yet." })); return; }
-  el.replaceChildren(...ui.runs.map((r) => h("div", { class: "run-item" + (r.id === ui.selected ? " sel" : ""), onclick: () => selectRun(r.id) },
-    h("div", { class: "goal", text: r.goal }),
-    h("div", { class: "row small muted" }, h("span", { class: "chip " + r.status, text: r.status }), h("span", { text: `${r.step_count} steps · ${money(r.cost_usd)}` }),
-      h("span", { class: "spacer" }), h("span", { text: ago(r.updated_at) })))));
+function viewHome(main) {
+  const hour = new Date().getHours();
+  const hi = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const c = composer({ placeholder: "Describe what you want built, fixed or explained…", verify: true, big: true, onSend: (goal, verify) => askMode(goal, verify) });
+  const ideas = ["Add tests for the least covered module", "Find and fix the most likely bug in this repo", "Write a README section explaining the architecture", "Refactor the largest function into smaller pieces"];
+  main.append(topbar(), h("div", { class: "hero" },
+    h("h1", {}, `${hi}. `, h("span", { text: "What shall we build?" })),
+    c,
+    h("div", { class: "chips" }, ideas.map((i) => h("span", { class: "chip", text: i, onclick: () => { c.textarea.value = i; c.textarea.dispatchEvent(new Event("input")); c.textarea.focus(); } })))));
 }
 
-async function selectRun(id) {
-  ui.selected = id; ui.newRun = false; history.replaceState(null, "", "/app#" + id);
-  paintRuns();
-  try { ui.detail = await api(`/api/runs/${id}`); } catch (e) { setError(e); ui.detail = null; }
-  paintMain();
-}
-
-function paintMain() {
-  const main = $("#main"); if (!main) return;
-  const err = h("div", { id: "error" });
-  if (ui.newRun || !ui.detail) { main.replaceChildren(err, newRunForm()); paintError(err); return; }
-  const { run, steps, active } = ui.detail;
-  main.replaceChildren(err, runHeader(run, steps, active), timeline(steps, active), composer(run, active));
-  paintError(err);
-  const tl = $(".timeline"); tl.scrollTop = tl.scrollHeight;
-}
-
-function newRunForm() {
-  const cfg = ui.state.workspace.config;
-  const goal = h("textarea", { placeholder: "What should the agent do? Be specific about the outcome, e.g. \"Add a --json flag to the list command and cover it with a test.\"", style: "min-height:130px" });
-  const verify = h("input", { placeholder: "optional, e.g. cargo test   /   pytest -q   /   npm test" });
-  const r = cfg.routing;
-  const fmt = (m) => (m ? `${m.provider}:${m.model}` : "none");
-  return h("div", { style: "max-width:760px" },
-    h("h1", { text: "New run" }),
-    h("p", { class: "muted", text: "The run starts from your current HEAD on a new branch. Your working tree is never modified." }),
-    h("div", { class: "panel" },
-      h("label", { text: "Goal" }), goal,
-      h("label", { text: "Verification command (must pass before the run can finish)" }), verify,
-      h("div", { class: "actions" }, h("button", { text: "Start run", onclick: (e) => guarded(e.target, async () => {
-        const { run } = await api("/api/runs", { method: "POST", body: { goal: goal.value, verify_command: verify.value || null } });
-        await loadRuns(); await selectRun(run.id);
-      }) }))),
-    h("div", { class: "panel small" }, h("h2", { text: "Routing" }),
-      h("div", { class: "kv" }, h("span", { text: "actor" }), h("span", { class: "mono", text: fmt(r.actor) }),
-        h("span", { text: "planner" }), h("span", { class: "mono", text: r.planner ? fmt(r.planner) : "same as actor" }),
-        h("span", { text: "critic" }), h("span", { class: "mono", text: fmt(r.critic) }),
-        h("span", { text: "escalation" }), h("span", { class: "mono", text: fmt(r.escalation) }))));
-}
-
-const PHASES = ["plan", "act", "verify", "review", "done"];
-
-function runHeader(run, steps, active) {
-  const phase = steps.length ? steps[steps.length - 1].state.phase : "plan";
-  const pi = PHASES.indexOf(phase);
-  const act = (label, fn, cls) => h("button", { class: cls || "ghost", text: label, onclick: (e) => guarded(e.target, fn) });
-  const controls = h("div", { class: "row" },
-    active ? act("Pause", () => api(`/api/runs/${run.id}/pause`, { method: "POST" }).then(() => setError({ message: "Pausing after the current step…" })))
-      : run.status !== "done" || phase !== "done" ? act("Resume", async () => { await api(`/api/runs/${run.id}/resume`, { method: "POST" }); await selectRun(run.id); }, "") : null,
-    act("Diff", () => showDiff(run)),
-    act("Push branch", async () => { const r = await api(`/api/runs/${run.id}/push`, { method: "POST" }); alertModal("Pushed", r.output); }),
-    h("span", { class: "spacer" }),
-    !active && act("Delete", async () => {
-      if (!confirm(`Delete run ${run.id}, its worktree and branch ${run.branch}?`)) return;
-      await api(`/api/runs/${run.id}`, { method: "DELETE" }); ui.selected = null; ui.detail = null; ui.newRun = true; await loadRuns(); paintMain();
-    }, "danger"));
-  return h("div", { class: "run-head" },
-    h("div", { class: "goal", text: run.goal }),
-    h("div", { class: "row small muted" },
-      h("span", { class: "chip " + run.status, text: active ? "running" : run.status }),
-      h("span", { class: "mono", text: run.branch }), h("span", { text: `${steps.length} steps` }), h("span", { text: money(run.cost_usd) }),
-      run.verify_command && h("span", { class: "mono", text: `verify: ${run.verify_command}` })),
-    h("div", { class: "phases" }, PHASES.map((p, i) => [i > 0 && h("span", { text: "→" }), h("span", { class: i < pi ? "past" : i === pi ? "now" : "", text: p })])),
-    run.error && h("div", { class: "banner info", style: "margin:8px 0 0", text: run.error }),
-    h("div", { style: "margin-top:10px" }, controls));
-}
-
-function timeline(steps, active) {
-  const el = h("div", { class: "timeline" });
-  if (!steps.length) el.append(h("div", { class: "muted", text: active ? "Planning…" : "No steps yet." }));
-  for (const s of steps) el.append(stepCard(s, active));
-  if (active && steps.length) el.append(h("div", { class: "small muted", id: "working", text: "working…" }));
-  return el;
-}
-
-function stepCard(s, active) {
-  const m = s.meta || {};
-  const tool = s.kind === "act" ? (m.tool || "?") : null;
-  const okFlag = m.ok === undefined ? null : m.ok;
-  const head = h("div", { class: "step-head" },
-    h("span", { class: "muted", text: "#" + s.seq }), h("span", { class: "kind", text: s.kind }),
-    tool && h("span", { text: tool }),
-    okFlag !== null && h("span", { class: okFlag ? "ok" : "bad", text: okFlag ? "ok" : "failed" }),
-    m.verdict && h("span", { class: m.verdict === "approve" ? "ok" : "warn", text: m.verdict }),
-    m.escalated && h("span", { class: "warn", text: "escalated" }),
-    h("span", { class: "spacer" }),
-    m.model && h("span", { class: "muted", text: m.model }),
-    s.cost_usd > 0 && h("span", { class: "muted", text: money(s.cost_usd) }),
-    !active && h("a", { class: "small", title: "Reset the worktree to right after this step and drop later steps", text: "rewind here",
-      onclick: () => guarded(null, async () => {
-        if (!confirm(`Rewind run to step #${s.seq}? Later steps are removed (the old tree is kept under refs/orchopork/rewound).`)) return;
-        await api(`/api/runs/${s.run_id}/rewind`, { method: "POST", body: { seq: s.seq } }); await selectRun(s.run_id); await loadRuns();
-      }) }));
-  const body = h("div", { class: "step-body" });
-  if (s.kind === "act") {
-    const note = s.output.replace(/```(?:json)?[\s\S]*?```/g, "").replace(/\{[\s\S]*\}\s*$/, "").trim();
-    if (note) body.append(h("pre", { text: note }));
-    body.append(h("details", {}, h("summary", { text: "model reply" }), h("pre", { text: s.output })));
-    if (s.observation) body.append(h("details", { open: okFlag === false }, h("summary", { text: "result" }), h("pre", { text: s.observation })));
-  } else {
-    body.append(h("pre", { text: s.output }));
-    if (s.observation) body.append(h("details", { open: m.ok === false }, h("summary", { text: "output" }), h("pre", { text: s.observation })));
-  }
-  return h("div", { class: "step", id: `step-${s.seq}` }, head, body);
-}
-
-function composer(run, active) {
-  const text = h("textarea", { placeholder: active ? "Message the agent. It will read this on its next turn." : run.status === "done" ? "Ask for a follow-up, then press Send & resume." : "Leave guidance for the agent, then resume." });
-  const send = async (resume) => {
-    if (!text.value.trim()) return;
-    await api(`/api/runs/${run.id}/inject`, { method: "POST", body: { text: text.value } });
-    text.value = "";
-    if (resume) await api(`/api/runs/${run.id}/resume`, { method: "POST" });
-    await selectRun(run.id);
-  };
-  text.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) guarded(null, () => send(!active)); });
-  return h("div", { class: "composer" }, text,
-    h("div", { class: "row", style: "margin-top:8px" }, h("span", { class: "small muted", text: "Ctrl/⌘ + Enter to send" }), h("span", { class: "spacer" }),
-      !active && h("button", { class: "ghost", text: "Send", onclick: (e) => guarded(e.target, () => send(false)) }),
-      h("button", { text: active ? "Send" : "Send & resume", onclick: (e) => guarded(e.target, () => send(!active)) })));
-}
-
-function modal(...kids) {
-  const bg = h("div", { class: "modal-bg", onclick: (e) => { if (e.target === bg) bg.remove(); } });
-  const close = h("button", { class: "ghost", text: "Close", onclick: () => bg.remove() });
-  bg.append(h("div", { class: "modal" }, h("div", { class: "row", style: "margin-bottom:12px" }, kids.shift(), h("span", { class: "spacer" }), close), ...kids));
-  document.body.append(bg);
-  const esc = (e) => { if (e.key === "Escape") { bg.remove(); document.removeEventListener("keydown", esc); } };
+// ---------- modals ----------
+function modal(content, { wide } = {}) {
+  const scrim = h("div", { class: "scrim" });
+  const close = () => { scrim.remove(); document.removeEventListener("keydown", esc); };
+  const esc = (e) => { if (e.key === "Escape") close(); };
+  scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) close(); });
   document.addEventListener("keydown", esc);
-  return bg;
+  scrim.append(h("div", { class: "modal" + (wide ? " wide" : "") }, content));
+  document.body.append(scrim);
+  return close;
 }
-const alertModal = (title, text) => modal(h("h1", { text: title }), h("pre", { class: "mono small", style: "white-space:pre-wrap", text }));
+
+function askMode(goal, verify) {
+  let close;
+  const yes = h("button", { class: "hot", onclick: () => { close(); S.pending = { goal, verify }; go("#/o/new"); } },
+    h("b", { text: "⎇  Yes, assemble an orchestra" }), h("span", { text: "A lead model designs a team with a chain of command. You review and edit it before anything runs." }));
+  const no = h("button", { onclick: async () => { close(); const m = await pickModel({ title: "Which model should work on this?" }); if (m) startSolo(goal, verify, m); } },
+    h("b", { text: "›  No, a single agent" }), h("span", { text: "One agent with tools works on it directly, like a classic coding assistant." }));
+  close = modal(h("div", {},
+    h("div", { class: "orb" }), h("h2", { text: "Activate an agent orchestra?" }),
+    h("p", { class: "muted", style: { margin: 0 }, text: firstLine(goal, 160) }),
+    h("div", { class: "choice" }, yes, no)));
+  setTimeout(() => yes.focus());
+}
+
+async function pickModel({ title, subtitle }) {
+  let data;
+  try { data = await loadModels(true); } catch (e) { toast(e.message, true); return null; }
+  return new Promise((resolve) => {
+    const last = store.get("model", null) || data.default;
+    let sel = data.models.find((m) => mref(m) === mref(last)) || data.models[0] || null;
+    const q = h("input", { placeholder: "Search models…" });
+    const list = h("div", { class: "mlist" });
+    const paint = () => {
+      const f = q.value.toLowerCase();
+      const ms = data.models.filter((m) => mref(m).toLowerCase().includes(f));
+      list.replaceChildren(...(ms.length ? ms.map((m) => h("div", { class: "mitem" + (sel && mref(sel) === mref(m) ? " sel" : ""),
+        onclick: () => { sel = m; paint(); }, ondblclick: () => { sel = m; done(); } },
+        h("span", { class: "p", text: m.provider }), h("span", { class: "grow mono", text: m.model }), h("span", { class: "pill", text: m.local ? "local · free" : "cloud" })))
+        : [h("div", { class: "mitem muted", text: "No models match." })]));
+    };
+    q.addEventListener("input", paint);
+    let close;
+    const done = () => { if (!sel) return; store.set("model", sel); close(); resolve({ provider: sel.provider, model: sel.model }); };
+    const empty = !data.models.length;
+    close = modal(h("div", {},
+      h("h2", { text: title }), subtitle && h("p", { class: "muted small", text: subtitle }),
+      empty ? h("div", { class: "card", style: { marginTop: "12px", boxShadow: "none" } },
+        h("b", { text: "No models are set up yet." }),
+        h("p", { class: "muted small", text: "Start Ollama (ollama serve && ollama pull qwen2.5-coder:14b) or add a cloud API key." }),
+        data.notes.map((n) => h("div", { class: "small warn", text: n })))
+        : [q, list, data.notes.map((n) => h("div", { class: "small warn", style: { marginTop: "6px" }, text: n }))],
+      h("div", { class: "actions" },
+        h("button", { class: "ghost", text: "Set up models →", onclick: () => { close(); resolve(null); go("#/models"); } }),
+        h("span", { class: "grow" }),
+        !empty && h("button", { class: "primary", text: "Continue", onclick: done }))));
+    paint(); if (!empty) setTimeout(() => q.focus());
+  });
+}
+
+const startSolo = guard(async (goal, verify, model) => {
+  const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "solo", model } });
+  go(`#/c/${run.id}`);
+});
+
+// ---------- chat view ----------
+const TOOL_ICON = { read_file: "◱", list_files: "☰", search: "⌕", write_file: "✎", edit_file: "✎", run_command: "$", finish: "✓", delegate: "↳" };
+function actLine(s, showAgent) {
+  const m = s.meta || {}; const tool = m.tool || "?"; const a = parseArgs(s.output);
+  const target = a.path || a.command || a.pattern || a.agent || "";
+  const note = s.output.replace(/```(?:json)?[\s\S]*?```/g, "").replace(/\{[\s\S]*\}\s*$/, "").trim();
+  return h("div", { class: "act" + (m.ok === false ? " fail" : "") },
+    h("span", { class: "ic", text: m.ok === false ? "!" : TOOL_ICON[tool] || "•" }),
+    h("div", { class: "body" },
+      h("div", { class: "tl" }, showAgent && h("b", { text: agentName(m.agent) + " · " }), h("b", { text: tool.replace("_", " ") }), target && [" ", h("span", { class: "mono small", text: firstLine(target, 70) })],
+        m.escalated && h("span", { class: "pill", style: { marginLeft: "6px" }, text: "escalated" })),
+      note && h("div", { class: "small", style: { color: "var(--text)" }, text: firstLine(note, 240) }),
+      tool === "delegate" && a.instruction && h("div", { class: "small", text: "“" + a.instruction + "”" }),
+      s.observation && tool !== "finish" && h("details", { class: "out", open: m.ok === false }, h("summary", { text: m.ok === false ? "error ▾" : "output ▾" }), h("pre", { text: s.observation }))));
+}
+function parseArgs(text) { const m = (text || "").match(/\{[\s\S]*\}/g); if (!m) return {}; for (let i = m.length - 1; i >= 0; i--) { try { const o = JSON.parse(m[i]); return o.args || o.arguments || o; } catch {} } return {}; }
+let agentNames = {};
+const agentName = (id) => agentNames[id] || id || "";
+
+function renderThread(run, steps, active) {
+  const th = h("div", { class: "thread" }, h("div", { class: "msg-user" }, h("div", { text: run.goal })));
+  for (const s of steps) {
+    const m = s.meta || {};
+    if (s.kind === "inject") th.append(h("div", { class: "msg-user" }, h("div", { text: s.output })));
+    else if (s.kind === "plan") th.append(h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Plan" }), s.output));
+    else if (s.kind === "act" && m.tool === "finish") th.append(h("div", { class: "msg-ai", text: parseArgs(s.output).summary || s.output }));
+    else if (s.kind === "act") th.append(actLine(s));
+    else if (s.kind === "verify") th.append(h("div", { class: "sysline" }, h("span", { class: m.ok ? "ok" : "bad", text: m.ok ? "✓ verification passed" : "✗ verification failed" }), " · ", s.output.split("\n")[0]));
+    else if (s.kind === "review") th.append(h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Review · " + (m.verdict || "") }), s.output));
+  }
+  if (active) th.append(h("div", { class: "thinking", id: "thinking" }, h("span", { class: "dots" }, h("i"), h("i"), h("i")), h("span", { text: "working…" })));
+  return th;
+}
+
+async function viewChat(main, id) {
+  S.view = { kind: "chat", id };
+  const scroll = h("div", { class: "scroll" });
+  const head = h("div", {});
+  const dock = h("div", { class: "dock" });
+  main.append(head, scroll, dock);
+  const paint = async (keepScroll) => {
+    const d = S.detail = await api(`/api/runs/${id}`);
+    const { run, steps, active } = d;
+    const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+    head.replaceChildren(topbar(
+      h("span", { class: "title grow", text: run.goal }),
+      h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "working" : run.status),
+      run.spec.model && h("span", { class: "pill mono", text: mref(run.spec.model) }),
+      h("span", { class: "small faint", text: money(run.cost_usd) }),
+      runMenu(run, active)));
+    scroll.replaceChildren(run.error && !active ? h("div", { class: "banner", text: run.error }) : "", renderThread(run, steps, active));
+    const c = composer({ placeholder: active ? "Message the agent (read on its next turn)…" : "Reply to continue…", running: active,
+      onStop: guard(async () => { await api(`/api/runs/${id}/pause`, { body: {} }); toast("Pausing after the current step"); }),
+      onSend: guard(async (text, _v, clear) => { await api(`/api/runs/${id}/inject`, { body: { text } }); clear(); if (!active) await api(`/api/runs/${id}/resume`, { body: {} }); paint(); }) });
+    const prev = dock.querySelector("textarea"); if (prev && prev.value) c.textarea.value = prev.value;
+    dock.replaceChildren(c);
+    if (!keepScroll || atBottom) scroll.scrollTop = scroll.scrollHeight;
+  };
+  S.view.refresh = () => paint(true);
+  await paint(false);
+}
+
+function runMenu(run, active) {
+  return h("span", { class: "row" },
+    !active && run.status !== "done" && h("button", { class: "ghost", text: "▶ Resume", onclick: guard(async () => { await api(`/api/runs/${run.id}/resume`, { body: {} }); S.view && S.view.refresh(); }) }),
+    h("button", { class: "ghost", text: "Diff", onclick: guard(() => showDiff(run)) }),
+    h("button", { class: "ghost", text: "Push", onclick: guard(async () => { const r = await api(`/api/runs/${run.id}/push`, { body: {} }); toast(firstLine(r.output) || "Pushed"); }) }),
+    !active && h("button", { class: "ghost danger", title: "Delete this conversation, its worktree and branch", text: "🗑", onclick: guard(async () => {
+      if (!confirm(`Delete "${firstLine(run.goal, 60)}" with its branch ${run.branch}?`)) return;
+      await api(`/api/runs/${run.id}`, { method: "DELETE" }); go("#/");
+    }) }));
+}
 
 async function showDiff(run) {
   const d = await api(`/api/runs/${run.id}/diff`);
-  const pre = h("pre");
-  for (const line of (d.patch || "(no changes)").split("\n")) {
-    const cls = line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : line.startsWith("@@") ? "hunk" : "";
-    pre.append(h("div", { class: cls, text: line || " " }));
+  const pre = h("pre", { class: "block", style: { maxHeight: "60vh" } });
+  for (const line of (d.patch || "(no changes yet)").split("\n")) {
+    const c = line.startsWith("+") && !line.startsWith("+++") ? "ok" : line.startsWith("-") && !line.startsWith("---") ? "bad" : line.startsWith("@@") ? "muted" : "";
+    pre.append(h("div", { class: c, text: line || " " }));
   }
-  modal(h("h1", { text: `Diff · ${run.branch}` }), h("div", { class: "diff" }, h("pre", { class: "muted", text: d.stat || "" }), h("hr"), pre),
-    h("p", { class: "small muted", style: "margin-top:12px", text: `Merge it yourself when you are happy: git merge ${run.branch}` }));
+  modal(h("div", {}, h("h2", { text: "Changes on " + run.branch }), h("pre", { class: "block", text: d.stat || "no changes" }), pre,
+    h("p", { class: "small muted", text: `Happy with it? git merge ${run.branch}` })), { wide: true });
 }
 
-async function openSettings() {
-  ui.state = await api("/api/state");
-  const ws = ui.state.workspace;
-  const cfg = structuredClone(ws.config);
-  const form = providerForm(cfg, ws.providers, { withKeys: false });
-  const err = h("div");
-  const num = (k, label) => { const i = h("input", { type: "number", value: cfg.limits[k] }); i.dataset.key = k; return h("div", {}, h("label", { text: label }), i); };
-  const limits = h("div", { class: "route-grid", style: "grid-template-columns:1fr 1fr" },
-    num("steps_per_session", "Steps per start/resume"), num("max_failures", "Failed turns before pausing"),
-    num("escalate_after", "Failed turns before escalating"), num("max_review_rounds", "Review rounds before pausing"),
-    num("command_timeout_secs", "Command timeout (s)"), num("max_output_tokens", "Max output tokens per call"),
-    num("local_context_chars", "Context budget, local (chars)"), num("cloud_context_chars", "Context budget, cloud (chars)"));
-  const allow = h("input", { type: "checkbox", checked: cfg.limits.allow_commands, id: "allowcmd" });
+// ---------- orchestra: tree editor ----------
+const RANKS = [[0, "Private", ""], [10, "Corporal", "›"], [100, "Captain", "››"], [1000, "Major", "›››"], [Infinity, "General", "★"]];
+const TEMPLATES = [
+  ["Coder", "implements code changes", "Implement the changes assigned by your commander, with tests where sensible."],
+  ["Tester", "writes and runs tests", "Write or extend tests for the work of your peers and run the test suite; report failures precisely."],
+  ["Reviewer", "reviews for bugs", "Review the changes made so far for bugs, edge cases and inconsistencies; fix small issues, report the rest."],
+  ["Researcher", "reads and maps code", "Read the relevant code and report where and how the change should be made; do not edit files."],
+  ["Docs writer", "updates documentation", "Update README and docs to match the changes made by the team."],
+  ["Refactorer", "cleans up structure", "Refactor the touched code for clarity without changing behaviour; keep tests green."],
+];
+function subtree(agents, id) { return agents.filter((a) => a.parent === id).reduce((n, c) => n + 1 + subtree(agents, c.id), 0); }
+function rankOf(agents, id) { const n = subtree(agents, id); return RANKS.find(([max]) => n <= max) ; }
+function uid(agents, base) { let s = (base || "agent").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "agent", id = s, i = 2; while (agents.some((a) => a.id === id)) id = `${s}_${i++}`; return id; }
+function isDesc(agents, id, maybeDesc) { let cur = agents.find((a) => a.id === maybeDesc); while (cur && cur.parent) { if (cur.parent === id) return true; cur = agents.find((a) => a.id === cur.parent); } return false; }
+
+const NW = 230, NH = 104, GX = 26, GY = 66;
+function layoutTree(agents) {
+  const kids = (id) => agents.filter((a) => a.parent === id);
+  const memo = {};
+  const width = (id) => memo[id] ??= Math.max(NW, kids(id).reduce((s, c, i) => s + width(c.id) + (i ? GX : 0), 0));
+  const pos = {};
+  const place = (id, x, y) => {
+    const w = width(id); pos[id] = { x: x + w / 2 - NW / 2, y };
+    const k = kids(id); const total = k.reduce((s, c, i) => s + width(c.id) + (i ? GX : 0), 0);
+    let cx = x + (w - total) / 2;
+    for (const c of k) { place(c.id, cx, y + NH + GY); cx += width(c.id) + GX; }
+  };
+  const root = agents.find((a) => !a.parent);
+  if (root) place(root.id, 0, 0);
+  const xs = Object.values(pos);
+  return { pos, w: root ? width(root.id) : NW, h: xs.length ? Math.max(...xs.map((p) => p.y)) + NH : NH };
+}
+
+// A pan/zoom canvas with draggable nodes. `ed` = { agents, status?, readOnly, selected, onSelect, onChange, onEdit }
+function treeCanvas(ed) {
+  const canvas = h("div", { class: "canvas" });
+  const stage = h("div", { class: "stage" });
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("class", "edges");
+  stage.append(svg); canvas.append(stage);
+  let view = ed.view || { x: 40, y: 40, k: 1 }, fitted = !!ed.view;
+  const apply = () => { stage.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.k})`; ed.view = view; };
+
+  function paint() {
+    const L = layoutTree(ed.agents);
+    stage.querySelectorAll(".node").forEach((n) => n.remove());
+    svg.replaceChildren();
+    svg.setAttribute("width", L.w + 40); svg.setAttribute("height", L.h + 40);
+    for (const a of ed.agents) {
+      if (!a.parent || !L.pos[a.parent]) continue;
+      const p = L.pos[a.parent], c = L.pos[a.id];
+      const x1 = p.x + NW / 2, y1 = p.y + NH, x2 = c.x + NW / 2, y2 = c.y, my = (y1 + y2) / 2;
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", `M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}`);
+      const st = ed.status && ed.status[a.id];
+      if (st && st.active) path.setAttribute("class", "live");
+      svg.append(path);
+    }
+    for (const a of ed.agents) {
+      const p = L.pos[a.id]; if (!p) continue;
+      const [, rname, chev] = rankOf(ed.agents, a.id);
+      const st = ed.status && ed.status[a.id];
+      const n = h("div", { class: "node" + (ed.selected === a.id ? " sel" : "") + (st && st.active ? " active" : "") + (st && st.done ? " reported" : ""), "data-id": a.id, style: { left: p.x + "px", top: p.y + "px" } },
+        h("div", { class: "rank" }, h("span", { class: "chev", text: chev || "·" }), h("span", { text: !a.parent ? `Lead · ${rname}` : rname })),
+        h("div", { class: "nm", text: a.name }), h("div", { class: "rl", text: a.role || "—" }), h("div", { class: "tk", text: a.task }),
+        st ? h("span", { class: "st " + (st.active ? "" : st.done ? "ok" : "faint"), text: st.active ? "● working" : st.done ? "✓ reported" : st.turns ? "◌ waiting" : "○ queued" })
+           : a.model && h("span", { class: "st pill mono", text: a.model.model.slice(0, 14) }),
+        st && (st.turns || st.cost) ? h("div", { class: "small faint", style: { marginTop: "4px" }, text: `${st.turns} turns · ${money(st.cost)}` }) : null,
+        !ed.readOnly && h("button", { class: "add", title: "Add a subordinate", text: "+", onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); addAgent(a.id); } }));
+      n.addEventListener("pointerdown", (e) => nodeDown(e, a, n));
+      n.addEventListener("dblclick", (e) => { e.stopPropagation(); ed.onEdit && ed.onEdit(a.id); });
+      stage.append(n);
+    }
+    if (!fitted && canvas.clientWidth) { fitted = true; const k = Math.min(1, (canvas.clientWidth - 60) / (L.w + 20), (canvas.clientHeight - 140) / (L.h + 20)); view = { k: Math.max(.35, k), x: (canvas.clientWidth - L.w * Math.max(.35, k)) / 2, y: 50 }; }
+    apply();
+  }
+
+  function addAgent(parent, tpl) {
+    const [name, role, task] = tpl || ["New agent", "", "Describe this agent's task."];
+    ed.push(); const id = uid(ed.agents, name);
+    ed.agents.push({ id, name, role, task, parent, model: null });
+    ed.selected = id; ed.onChange(); paint();
+    if (!tpl) ed.onEdit(id);
+  }
+  canvas.addAgent = addAgent;
+
+  function nodeDown(e, a, n) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    ed.selected = a.id; ed.onSelect && ed.onSelect(a.id);
+    stage.querySelectorAll(".node.sel").forEach((x) => x.classList.remove("sel")); n.classList.add("sel");
+    if (ed.readOnly || !a.parent) return; // the lead stays on top
+    const sx = e.clientX, sy = e.clientY; let dragging = false, target = null;
+    const move = (ev) => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      if (!dragging && Math.hypot(dx, dy) < 5) return;
+      dragging = true; n.classList.add("dragging");
+      n.style.transform = `translate(${dx / view.k}px,${dy / view.k}px)`;
+      target = dropTarget(ev, (id) => id !== a.id && id !== a.parent && !isDesc(ed.agents, a.id, id));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      n.classList.remove("dragging"); n.style.transform = "";
+      clearDrop();
+      if (dragging && target) { ed.push(); a.parent = target; ed.onChange(); toast(`${a.name} now reports to ${ed.agents.find((x) => x.id === target).name}`); }
+      if (dragging) paint();
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  }
+  function clearDrop() { stage.querySelectorAll(".node.drop").forEach((x) => x.classList.remove("drop")); }
+  function dropTarget(ev, ok) {
+    clearDrop();
+    const el = document.elementsFromPoint(ev.clientX, ev.clientY).find((x) => x.classList && x.classList.contains("node") && !x.classList.contains("dragging"));
+    const id = el && el.dataset.id;
+    if (id && ok(id)) { el.classList.add("drop"); return id; }
+    return null;
+  }
+  // Template drag from the reserve panel.
+  canvas.dragTemplate = (e, tpl) => {
+    e.preventDefault();
+    const g = h("div", { class: "ghost-drag", text: "＋ " + tpl[0] }); document.body.append(g);
+    let target = null;
+    const move = (ev) => { g.style.left = ev.clientX + 12 + "px"; g.style.top = ev.clientY + 8 + "px"; target = dropTarget(ev, () => true); };
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); g.remove(); clearDrop(); if (target) addAgent(target, tpl); };
+    move(e); window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  };
+
+  // Pan & zoom.
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".node, .hud, .reserve, .deploy, button")) return;
+    const sx = e.clientX - view.x, sy = e.clientY - view.y; canvas.classList.add("panning");
+    const move = (ev) => { view.x = ev.clientX - sx; view.y = ev.clientY - sy; apply(); };
+    const up = () => { canvas.classList.remove("panning"); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+  });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault(); const r = canvas.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+    const k = Math.min(2, Math.max(.25, view.k * (e.deltaY < 0 ? 1.1 : 1 / 1.1)));
+    view.x = mx - (mx - view.x) * (k / view.k); view.y = my - (my - view.y) * (k / view.k); view.k = k; apply();
+  }, { passive: false });
+  canvas.fit = () => { fitted = false; paint(); };
+  canvas.paint = paint;
+  new ResizeObserver(() => { if (!fitted) paint(); }).observe(canvas);
+  setTimeout(paint);
+  return canvas;
+}
+
+async function editAgent(ed, id, models) {
+  const a = ed.agents.find((x) => x.id === id); if (!a) return;
+  const name = h("input", { value: a.name }), role = h("input", { value: a.role, placeholder: "e.g. writes the parser" });
+  const task = h("textarea", { rows: 6, value: a.task });
+  const model = h("select", {}, h("option", { value: "", text: "Inherit the lead model" }),
+    models.map((m) => h("option", { value: mref(m), text: `${mref(m)}${m.local ? "  (local)" : ""}`, selected: a.model && mref(a.model) === mref(m) })));
+  if (a.model && !models.some((m) => mref(m) === mref(a.model))) model.append(h("option", { value: mref(a.model), text: mref(a.model), selected: true }));
+  const boss = h("select", { disabled: !a.parent }, ed.agents.filter((x) => x.id !== a.id && !isDesc(ed.agents, a.id, x.id))
+    .map((x) => h("option", { value: x.id, text: x.name, selected: x.id === a.parent })));
+  const close = modal(h("div", {},
+    h("div", { class: "row" }, h("h2", { class: "grow", text: "Edit agent" }), h("span", { class: "pill", text: rankOf(ed.agents, a.id)[1] })),
+    h("label", { text: "Name" }), name, h("label", { text: "Role" }), role,
+    h("label", { text: "Task definition" }), task,
+    h("div", { class: "row", style: { gap: "10px" } },
+      h("div", { class: "grow" }, h("label", { text: "Model" }), model),
+      a.parent && h("div", { class: "grow" }, h("label", { text: "Reports to" }), boss)),
+    h("div", { class: "actions" },
+      a.parent && h("button", { class: "danger", text: "Remove", onclick: () => { removeAgent(ed, a.id); close(); } }),
+      h("span", { class: "grow" }),
+      h("button", { class: "ghost", text: "Cancel", onclick: () => close() }),
+      h("button", { class: "primary", text: "Save", onclick: () => {
+        if (!name.value.trim() || !task.value.trim()) return toast("Name and task are required", true);
+        ed.push(); a.name = name.value.trim(); a.role = role.value.trim(); a.task = task.value.trim();
+        const [p, ...rest] = model.value.split(":"); a.model = model.value ? { provider: p, model: rest.join(":") } : null;
+        if (a.parent) a.parent = boss.value;
+        ed.onChange(); close();
+      } }))));
+  setTimeout(() => task.focus());
+}
+function removeAgent(ed, id) {
+  const a = ed.agents.find((x) => x.id === id); if (!a || !a.parent) return;
+  ed.push(); ed.agents.forEach((x) => { if (x.parent === id) x.parent = a.parent; });
+  ed.agents = ed.agents.filter((x) => x.id !== id); ed.selected = a.parent; ed.onChange();
+}
+
+// ---------- orchestra: draft ----------
+async function viewOrchestraDraft(main) {
+  if (!S.pending) { go("#/"); return; }
+  const { goal, verify } = S.pending;
+  S.view = { kind: "draft" };
+  main.append(topbar(h("span", { class: "title grow", text: "New orchestra" }), h("span", { class: "small faint", text: firstLine(goal, 80) })));
+  const body = h("div", { class: "center" }); main.append(body);
+  const models = (await loadModels(true)).models;
+  const lead = await (async () => {
+    body.replaceChildren(h("div", { class: "stack", style: { textAlign: "center" } }, h("div", { class: "orb", style: { margin: "0 auto" } }),
+      h("h2", { style: { margin: 0 }, text: "First, choose the lead model" }),
+      h("p", { class: "muted", text: "The lead designs the chain of command now and commands it during the run. A strong model pays off here; subordinates can use cheaper ones." })));
+    return pickModel({ title: "Lead model", subtitle: "Designs the team and leads it." });
+  })();
+  if (!lead) { if (location.hash === "#/o/new") go("#/"); return; }
+  body.replaceChildren(h("div", { class: "stack", style: { textAlign: "center" } }, h("div", { class: "spin" }),
+    h("h2", { style: { margin: 0 }, text: "Drafting the chain of command…" }), h("p", { class: "muted small mono", text: mref(lead) })));
+  let agents;
+  try { agents = (await api("/api/orchestra/propose", { body: { goal, model: lead } })).agents; }
+  catch (e) { body.replaceChildren(h("div", { class: "stack" }, h("div", { class: "card" }, h("b", { text: "The lead could not design a team." }), h("p", { class: "small bad", text: e.message }),
+    h("div", { class: "row" }, h("button", { text: "Back", onclick: () => go("#/") }), h("button", { class: "primary", text: "Try again", onclick: () => route() }))))); return; }
+  body.remove();
+  orchestraEditor(main, { goal, verify, lead, agents, models });
+}
+
+function orchestraEditor(main, { goal, verify, lead, agents, models }) {
+  const history = [];
+  const ed = { agents, selected: agents[0] && agents[0].id,
+    push() { history.push(JSON.stringify(ed.agents)); if (history.length > 100) history.shift(); },
+    onChange() { canvas.paint(); count.textContent = `${ed.agents.length} agent${ed.agents.length > 1 ? "s" : ""}`; },
+    onEdit: (id) => editAgent(ed, id, models) };
+  const canvas = treeCanvas(ed);
+  const count = h("span", { class: "small muted" });
+  const undo = () => { if (!history.length) return toast("Nothing to undo"); ed.agents = JSON.parse(history.pop()); ed.onChange(); };
+  const hud = h("div", { class: "hud" },
+    h("button", { text: "＋ Agent", title: "Add a subordinate to the selected agent", onclick: () => canvas.addAgent(ed.selected || ed.agents[0].id) }),
+    h("button", { text: "↶ Undo", onclick: undo }), h("button", { text: "⤢ Fit", onclick: () => canvas.fit() }),
+    h("button", { class: "ghost", text: "Lead: " + mref(lead), onclick: guard(async () => { const m = await pickModel({ title: "Lead model" }); if (m) { lead = m; hud.lastChild.textContent = "Lead: " + mref(m); } }) }));
+  const reserve = h("div", { class: "reserve" }, h("h6", { text: "Reserve · drag onto an agent" }),
+    TEMPLATES.map((t) => h("div", { class: "tpl", title: t[2], onpointerdown: (e) => canvas.dragTemplate(e, t) }, h("b", { text: t[0] }), h("div", { class: "small faint", text: t[1] }))));
+  const deploy = h("div", { class: "deploy" }, count,
+    h("span", { class: "small faint", text: "· drag to reassign · double-click to edit" }),
+    h("button", { class: "ghost", text: "Cancel", onclick: () => go("#/") }),
+    h("button", { class: "accent", text: "Approve & deploy", onclick: guard(async (e) => {
+      e.target.disabled = true;
+      try {
+        const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "orchestra", model: lead, agents: ed.agents } });
+        S.pending = null; go(`#/o/${run.id}`);
+      } finally { e.target.disabled = false; }
+    }) }));
+  canvas.append(hud, reserve, deploy);
+  const wrap = h("div", { class: "orch nopanel" }, canvas);
+  main.append(wrap);
+  ed.onChange();
+  const keys = (e) => {
+    if (!document.body.contains(canvas)) return document.removeEventListener("keydown", keys);
+    if (e.target.closest("input, textarea, select") || $(".scrim")) return;
+    if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); undo(); }
+    else if ((e.key === "Delete" || e.key === "Backspace") && ed.selected) removeAgent(ed, ed.selected);
+    else if (e.key === "Enter" && ed.selected) ed.onEdit(ed.selected);
+    else if (e.key === "a" && ed.selected) canvas.addAgent(ed.selected);
+  };
+  document.addEventListener("keydown", keys);
+  setTimeout(() => toast("Review the team. Drag agents to reassign them, double-click to edit, or drag from the reserve."), 300);
+}
+
+// ---------- orchestra: live run ----------
+async function viewOrchestraRun(main, id) {
+  S.view = { kind: "orch", id };
+  const head = h("div"); main.append(head);
+  const wrap = h("div", { class: "orch" }); main.append(wrap);
+  const ed = { agents: [], readOnly: true, selected: null, status: {}, onSelect: () => paintPanel(), onChange() {}, onEdit: (aid) => { ed.selected = aid; paintPanel(); } };
+  const canvas = treeCanvas(ed);
+  const panel = h("div", { class: "panel" });
+  wrap.append(canvas, panel);
+  let data;
+
+  function statusOf(steps, active) {
+    const last = steps.length ? steps[steps.length - 1].state : { stack: [], done: [] };
+    const st = {};
+    for (const a of data.run.spec.agents) st[a.id] = { turns: 0, cost: 0, done: (last.done || []).includes(a.id), active: false };
+    for (const s of steps) { const a = s.meta && s.meta.agent; if (a && st[a] && s.kind === "act") { st[a].turns++; st[a].cost += s.cost_usd; } }
+    if (active) {
+      // The agent acting next: descend from the stack top to the first unfinished subordinate.
+      let top = (last.stack || []).slice(-1)[0] || (data.run.spec.agents.find((a) => !a.parent) || {}).id;
+      for (;;) { const c = data.run.spec.agents.find((a) => a.parent === top && !st[a.id].done); if (!c) break; top = c.id; }
+      if (st[top]) st[top].active = true;
+    }
+    return st;
+  }
+
+  function paintPanel() {
+    const { run, steps, active } = data;
+    const a = run.spec.agents.find((x) => x.id === ed.selected) || run.spec.agents.find((x) => !x.parent);
+    if (!a) return;
+    const mine = steps.filter((s) => (s.meta && (s.meta.agent === a.id || s.meta.target === a.id)) || (!s.meta.agent && !a.parent && s.kind !== "act"));
+    const subs = run.spec.agents.filter((x) => x.parent === a.id);
+    const feed = h("div", { class: "feed" });
+    for (const s of mine) {
+      if (s.kind === "inject") feed.append(h("div", { class: "msg-user" }, h("div", { text: s.output })));
+      else if (s.kind === "verify") feed.append(h("div", { class: "sysline" }, h("span", { class: s.meta.ok ? "ok" : "bad", text: s.meta.ok ? "✓ verification passed" : "✗ verification failed" })));
+      else if (s.meta.tool === "delegate" && s.meta.target === a.id) feed.append(h("div", { class: "msg-user" }, h("div", {}, h("div", { class: "small faint", text: "Order from " + agentName(s.meta.agent) }), s.meta.instruction)));
+      else if (s.meta.tool === "finish" && s.meta.agent === a.id) feed.append(h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Report" }), s.meta.summary || s.output));
+      else if (s.meta.agent === a.id) feed.append(actLine(s));
+    }
+    if (!mine.length) feed.append(h("div", { class: "small faint", style: { padding: "20px 0" }, text: ed.status[a.id] && ed.status[a.id].active ? "Starting…" : "Nothing yet. Agents act after all of their subordinates have reported." }));
+    const st = ed.status[a.id] || {};
+    const c = composer({ placeholder: `Message ${a.name}…`, onSend: guard(async (text, _v, clear) => {
+      await api(`/api/runs/${id}/inject`, { body: { text, agent: a.id } }); clear();
+      if (!data.active) await api(`/api/runs/${id}/resume`, { body: {} });
+      refresh();
+    }) });
+    const prev = panel.querySelector("textarea");
+    if (prev && prev.value && panel.dataset.agent === a.id) c.textarea.value = prev.value;
+    panel.dataset.agent = a.id;
+    const atBottom = !panel.querySelector(".feed") || (() => { const f = panel.querySelector(".feed"); return f.scrollHeight - f.scrollTop - f.clientHeight < 60; })();
+    panel.replaceChildren(
+      h("div", { class: "ph" },
+        h("div", { class: "row" }, h("b", { class: "grow", text: a.name }), h("span", { class: "pill", text: rankOf(run.spec.agents, a.id)[1] })),
+        h("div", { class: "small muted", text: a.role }),
+        h("details", { class: "out" }, h("summary", { text: "task ▾" }), h("pre", { text: a.task })),
+        h("div", { class: "small faint", style: { marginTop: "6px" } }, `${st.turns || 0} turns · ${money(st.cost)} · `, h("span", { class: "mono", text: mref(a.model || run.spec.model) }),
+          subs.length ? ` · commands ${subs.length}` : "")),
+      feed, h("div", { class: "pc" }, c));
+    if (atBottom) feed.scrollTop = feed.scrollHeight;
+  }
+
+  async function refresh() {
+    data = await api(`/api/runs/${id}`);
+    const { run, steps, active } = data;
+    agentNames = Object.fromEntries(run.spec.agents.map((a) => [a.id, a.name]));
+    ed.agents = run.spec.agents; ed.status = statusOf(steps, active);
+    if (!ed.selected) ed.selected = (Object.entries(ed.status).find(([, s]) => s.active) || [run.spec.agents[0].id])[0];
+    const done = Object.values(ed.status).filter((s) => s.done).length;
+    head.replaceChildren(topbar(
+      h("span", { class: "title grow", text: run.goal }),
+      h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "running" : run.status),
+      h("span", { class: "small muted", text: `${done}/${run.spec.agents.length} reported · ${money(run.cost_usd)}` }),
+      active && h("button", { class: "ghost", text: "⏸ Pause", onclick: guard(async () => { await api(`/api/runs/${id}/pause`, { body: {} }); toast("Pausing after the current step"); }) }),
+      runMenu(run, active)));
+    if (run.error && !active) head.append(h("div", { class: "banner", text: run.error }));
+    canvas.paint(); paintPanel();
+    const log = $("#orch-log"); if (log && !active) log.remove();
+  }
+  S.view.refresh = refresh;
+  await refresh();
+}
+
+// ---------- models & settings ----------
+async function viewModels(main) {
+  S.view = { kind: "models" };
+  const ws = S.state.workspace, cfg = structuredClone(ws.config);
+  const pv = Object.fromEntries(ws.providers.map((p) => [p.id, p]));
+  main.append(topbar(h("span", { class: "title grow", text: "Models & settings" })));
+  const page = h("div", { class: "page" }), inner = h("div", { class: "inner stack" }); page.append(inner); main.append(page);
+
+  const ollama = h("input", { value: cfg.ollama_url, class: "mono" }), oOut = h("div", { class: "small muted" });
+  const llama = h("input", { value: cfg.llamacpp_url || "", placeholder: "http://127.0.0.1:8080/v1 (optional)", class: "mono" }), lOut = h("div", { class: "small muted" });
+  const probe = (p, input, out) => guard(async () => {
+    out.textContent = "checking…"; out.className = "small muted";
+    try { const r = await api(`/api/providers/${p}/models?url=${encodeURIComponent(input.value)}`); out.textContent = r.models.length ? `✓ ${r.models.length} models: ${r.models.slice(0, 8).join(", ")}` : "✓ reachable, no models pulled yet (ollama pull qwen2.5-coder:14b)"; out.className = "small ok"; }
+    catch (e) { out.textContent = e.message; out.className = "small bad"; }
+  });
+  const keyRow = (p, label) => {
+    const key = h("input", { type: "password", placeholder: pv[p].configured ? "•••••• stored — paste to replace" : "paste API key" });
+    const out = h("span", { class: "small " + (pv[p].configured ? "ok" : "faint"), text: pv[p].configured ? "✓ set" : "not set" });
+    return [h("b", { class: "small", text: label }), key,
+      h("button", { text: "Save", onclick: guard(async () => { await api("/api/providers/keys", { body: { provider: p, api_key: key.value } }); key.value = ""; out.textContent = "✓ saved"; out.className = "small ok"; S.models = null; }) }),
+      h("button", { class: "ghost", text: "Test", onclick: guard(async () => { try { const r = await api(`/api/providers/${p}/models`); out.textContent = `✓ ${r.models.length} models`; out.className = "small ok"; } catch (e) { out.textContent = e.message; out.className = "small bad"; } }) }),
+      out];
+  };
   const cap = h("input", { type: "number", min: "0", value: cfg.monthly_cap_usd });
   const numCtx = h("input", { type: "number", value: cfg.ollama_num_ctx });
+  const allow = h("input", { type: "checkbox", style: { width: "auto" }, checked: cfg.limits.allow_commands });
+  const lim = (k, label) => { const i = h("input", { type: "number", value: cfg.limits[k] }); i.dataset.k = k; return h("div", {}, h("label", { text: label }), i); };
+  const limits = h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" } },
+    lim("steps_per_session", "Steps before pausing for a check"), lim("max_failures", "Failed turns before pausing"),
+    lim("escalate_after", "Failed turns before escalating"), lim("command_timeout_secs", "Command timeout (s)"),
+    lim("max_output_tokens", "Max output tokens per call"), lim("local_context_chars", "Local context budget (chars)"));
+  const esc = h("input", { value: mref(cfg.routing.escalation), placeholder: "e.g. claude:claude-sonnet-5 (optional)", class: "mono" });
+  const def = h("input", { value: mref(cfg.routing.actor), placeholder: "e.g. ollama:qwen2.5-coder:14b (optional)", class: "mono" });
+  const parseRef = (v) => { v = v.trim(); if (!v) return null; const i = v.indexOf(":"); return i < 0 ? null : { provider: v.slice(0, i), model: v.slice(i + 1) }; };
 
-  const keyPanel = h("div", { class: "panel" }, h("h2", { text: "Cloud API keys" }), ["claude", "deepseek", "gemini"].map((p) => {
-    const info = ws.providers.find((x) => x.id === p);
-    const key = h("input", { type: "password", placeholder: info.configured ? "stored; type to replace, or remove" : "API key" });
-    const out = h("span", { class: "small muted", text: info.configured ? "configured" : "not set" });
-    return h("div", { class: "row", style: "margin-top:6px" }, h("span", { style: "width:80px", text: p }), h("div", { class: "grow" }, key),
-      h("button", { class: "ghost", text: "Save", onclick: (e) => guarded(e.target, async () => { await api("/api/providers/keys", { method: "POST", body: { provider: p, api_key: key.value } }); key.value = ""; out.textContent = "saved"; }) }),
-      info.configured && h("button", { class: "ghost", text: "Remove", onclick: (e) => guarded(e.target, async () => { await api("/api/providers/keys", { method: "POST", body: { provider: p, api_key: "" } }); out.textContent = "removed"; }) }),
-      h("button", { class: "ghost", text: "Test", onclick: (e) => guarded(e.target, async () => {
-        try { const r = await api(`/api/providers/${p}/models`); out.textContent = `ok · ${r.models.length} models`; out.className = "small ok"; }
-        catch (x) { out.textContent = x.message; out.className = "small bad"; } }) }),
-      out);
-  }));
-
-  const skillsBox = h("div");
-  const paintSkills = (skills, errors) => skillsBox.replaceChildren(
-    skillList(skills, (name, on, box) => guarded(null, async () => { try { await api("/api/skills/toggle", { method: "POST", body: { name, on } }); } catch (e) { box.checked = !on; throw e; } })),
-    ...(errors || []).map((x) => h("div", { class: "banner", text: `${x.path}: ${x.error}` })));
+  const skills = h("div");
+  const paintSkills = (list, errors) => skills.replaceChildren(...list.map((s) => h("label", { class: "row", style: { color: "var(--text)", fontSize: "13.5px", alignItems: "flex-start", gap: "10px" } },
+    h("input", { type: "checkbox", style: { width: "auto", marginTop: "4px" }, checked: s.enabled, onchange: guard(async (e) => { try { await api("/api/skills/toggle", { body: { name: s.name, on: e.target.checked } }); } catch (x) { e.target.checked = !e.target.checked; throw x; } }) }),
+    h("span", {}, h("b", { text: s.name }), " ", h("span", { class: "pill", text: s.type.replace("_", " ") }), h("div", { class: "small muted", text: s.description })))),
+    ...(errors || []).map((x) => h("div", { class: "small bad", text: `${x.path}: ${x.error}` })));
   paintSkills(ws.skills, ws.skill_errors);
 
-  const bg = modal(h("h1", { text: "Settings" }), err, form.el,
-    h("div", { class: "panel" }, h("h2", { text: "Local tuning" }), h("label", { text: "Ollama context window (num_ctx, tokens)" }), numCtx),
-    keyPanel,
-    h("div", { class: "panel" }, h("h2", { text: "Budget & limits" }), h("label", { text: "Monthly cloud cap (USD)" }), cap, limits,
-      h("div", { class: "row", style: "margin-top:12px" }, allow, h("label", { for: "allowcmd", style: "margin:0", text: "Allow the agent to run shell commands (run_command)" }))),
-    h("div", { class: "panel" }, h("div", { class: "row" }, h("h2", { text: "Skills" }), h("span", { class: "spacer" }),
-      h("button", { class: "ghost", text: "Reload from disk", onclick: (e) => guarded(e.target, async () => { const r = await api("/api/skills/reload", { method: "POST" }); paintSkills(r.skills, r.errors); }) })), skillsBox),
-    h("div", { class: "actions" }, h("button", { text: "Save settings", onclick: (e) => {
-      err.replaceChildren(); e.target.disabled = true;
-      (async () => {
-        const f = form.read();
-        const next = { ...cfg, routing: f.routing, ollama_url: f.ollama_url, llamacpp_url: f.llamacpp_url, monthly_cap_usd: Number(cap.value), ollama_num_ctx: Number(numCtx.value) };
-        next.limits = { ...cfg.limits, allow_commands: allow.checked };
-        limits.querySelectorAll("input[data-key]").forEach((i) => { next.limits[i.dataset.key] = Number(i.value); });
-        await api("/api/config", { method: "PUT", body: next });
-        ui.state = await api("/api/state"); paintBudget(); paintMain(); bg.remove();
-      })().catch((x) => err.replaceChildren(h("div", { class: "banner", text: x.message }))).finally(() => { e.target.disabled = false; });
-    } })));
+  inner.append(
+    h("div", { class: "card" }, h("h3", { text: "Local models · free" }),
+      h("label", { text: "Ollama" }), h("div", { class: "row" }, h("div", { class: "grow" }, ollama), h("button", { text: "Detect", onclick: probe("ollama", ollama, oOut) })), oOut,
+      h("label", { text: "llama.cpp server" }), h("div", { class: "row" }, h("div", { class: "grow" }, llama), h("button", { text: "Detect", onclick: probe("llamacpp", llama, lOut) })), lOut,
+      h("label", { text: "Ollama context window (num_ctx)" }), numCtx),
+    h("div", { class: "card" }, h("h3", { text: "Cloud models" }), h("p", { class: "small muted", style: { margin: 0 }, text: "Keys are stored in .orchopork/secrets.yaml (0600) and never sent back to the browser." }),
+      h("div", { class: "kv" }, keyRow("claude", "Claude"), keyRow("deepseek", "DeepSeek"), keyRow("gemini", "Gemini"))),
+    h("div", { class: "card" }, h("h3", { text: "Budget & routing" }),
+      h("label", { text: "Monthly cloud cap (USD) — calls that could exceed it are refused before they are sent" }), cap,
+      h("label", { text: "Escalation model — takes over a turn after repeated failures" }), esc,
+      h("label", { text: "Default model for the CLI" }), def),
+    h("div", { class: "card" }, h("h3", { text: "Safety" }), limits,
+      h("label", { class: "row", style: { color: "var(--text)", marginTop: "14px" } }, allow, "Allow agents to run shell commands")),
+    h("div", { class: "card" }, h("div", { class: "row" }, h("h3", { class: "grow", text: "Skills" }),
+      h("button", { class: "ghost", text: "Reload", onclick: guard(async () => { const r = await api("/api/skills/reload", { body: {} }); paintSkills(r.skills, r.errors); }) })), skills),
+    h("div", { class: "row" }, h("span", { class: "grow" }),
+      h("button", { class: "primary", text: "Save settings", onclick: guard(async () => {
+        const next = { ...cfg, ollama_url: ollama.value.trim(), llamacpp_url: llama.value.trim() || null, monthly_cap_usd: Number(cap.value), ollama_num_ctx: Number(numCtx.value),
+          routing: { ...cfg.routing, escalation: parseRef(esc.value), actor: parseRef(def.value) }, limits: { ...cfg.limits, allow_commands: allow.checked } };
+        limits.querySelectorAll("input[data-k]").forEach((i) => { next.limits[i.dataset.k] = Number(i.value); });
+        await api("/api/config", { method: "PUT", body: next }); S.models = null; toast("Saved");
+      }) })));
+  probe("ollama", ollama, oOut)();
 }
 
-// ---- live updates ----
-let refetchTimer = null;
-function refetchSoon() { clearTimeout(refetchTimer); refetchTimer = setTimeout(async () => { await loadRuns(); if (ui.selected) await selectRun(ui.selected); refreshBudget(); }, 150); }
-
+// ---------- live events ----------
+let refetchT = null;
 function connectEvents() {
-  if (ui.es) ui.es.close();
-  ui.es = new EventSource("/api/events");
-  ui.es.onmessage = (msg) => {
+  if (S.es) return;
+  S.es = new EventSource("/api/events");
+  S.es.onmessage = (msg) => {
     const ev = JSON.parse(msg.data);
-    if (ev.kind === "step") {
-      const d = ui.detail;
-      if (d && d.run.id === ev.step.run_id && !d.steps.some((s) => s.seq === ev.step.seq)) {
-        d.steps.push(ev.step);
-        const tl = $(".timeline");
-        if (tl) {
-          const working = $("#working"); if (working) working.remove();
-          const empty = tl.querySelector(".muted:only-child"); if (empty) empty.remove();
-          tl.append(stepCard(ev.step, true), h("div", { class: "small muted", id: "working", text: "working…" }));
-          tl.scrollTop = tl.scrollHeight;
-        }
-      }
-      if (ev.step.cost_usd > 0) refreshBudget();
-      const r = ui.runs.find((x) => x.id === ev.step.run_id); if (r) { r.step_count += 1; r.cost_usd += ev.step.cost_usd; r.updated_at = ev.step.created_at; paintRuns(); }
-    } else if (ev.kind === "run") {
-      const i = ui.runs.findIndex((x) => x.id === ev.run.id);
-      if (i >= 0) ui.runs[i] = ev.run; else ui.runs.unshift(ev.run);
-      paintRuns();
-      if (ui.selected === ev.run.id) refetchSoon();
-    } else if (ev.kind === "log") {
-      if (ui.selected === ev.run_id) { const w = $("#working"); if (w) w.textContent = ev.message; }
-    } else {
-      refetchSoon();
-    }
+    const runId = ev.run ? ev.run.id : ev.step ? ev.step.run_id : ev.run_id;
+    if (ev.kind === "log" && S.view && S.view.id === runId) { const t = $("#thinking span:last-child"); if (t) t.textContent = ev.message; return; }
+    if (ev.kind === "run") { const i = S.runs.findIndex((r) => r.id === ev.run.id); if (i >= 0) S.runs[i] = ev.run; }
+    if (S.view && S.view.id === runId && S.view.refresh) { clearTimeout(refetchT); refetchT = setTimeout(() => S.view.refresh().catch(() => {}), 120); }
+    if (ev.kind === "run" || ev.kind === "deleted") refreshSide();
   };
+  S.es.onerror = () => { S.es.close(); S.es = null; setTimeout(connectEvents, 2000); };
+}
+let sideT = null;
+function refreshSide() {
+  clearTimeout(sideT);
+  sideT = setTimeout(async () => {
+    try {
+      await loadState(); await loadRuns();
+      const side = $(".side"); if (side) side.replaceWith(sideEl());
+    } catch {}
+  }, 250);
 }
 
-window.addEventListener("popstate", boot);
-boot();
+route();
 </script>
 </body>
 </html>

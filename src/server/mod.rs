@@ -28,6 +28,7 @@ use crate::error::{Error, Result};
 use crate::graph::Engine;
 use crate::providers::{OllamaProvider, OpenAiCompatProvider, Provider, ProviderId, pricing};
 use crate::secrets::GITHUB;
+use crate::storage::RunSpec;
 use wizard::{Event, VcsStatus, Wizard};
 
 /// Single-file embedded SPA; client JS routes off `wizard.step`.
@@ -54,7 +55,7 @@ impl AppState {
         });
         if Workspace::is_initialized(&default_root) {
             let ws = Workspace::open(&default_root).await?;
-            if ws.config().onboarded {
+            if ws.config().onboarded || ws.repo.is_repo().await {
                 let engine = Engine::new(ws).await?;
                 *state.engine.write().unwrap() = Some(engine);
                 state.wizard.lock().unwrap().apply(Event::Resume)?;
@@ -102,6 +103,9 @@ pub fn router(state: Shared) -> Router {
         .route("/api/wizard/finish", post(wizard_finish))
         .route("/api/wizard/back", post(wizard_back))
         .route("/api/config", axum::routing::put(put_config))
+        .route("/api/workspace", post(open_workspace))
+        .route("/api/models", get(available_models))
+        .route("/api/orchestra/propose", post(propose_team))
         .route("/api/providers/keys", post(set_provider_key))
         .route("/api/providers/{id}/models", get(provider_models))
         .route("/api/skills", get(list_skills))
@@ -341,9 +345,6 @@ struct FinishReq {
 /// key, llama.cpp needs its URL.
 fn validate_routing(ws: &Workspace, cfg: &Config) -> Result<()> {
     let r = &cfg.routing;
-    if r.actor.is_none() {
-        return Err(Error::InvalidRequest("choose an actor model (the one that does most of the work)".into()));
-    }
     for (role, m) in
         [("planner", &r.planner), ("actor", &r.actor), ("critic", &r.critic), ("escalation", &r.escalation)]
     {
@@ -384,11 +385,88 @@ async fn wizard_finish(State(s): State<Shared>, Json(req): Json<FinishReq>) -> A
     next.llamacpp_url = req.llamacpp_url.map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
     next.monthly_cap_usd = req.monthly_cap_usd;
     next.onboarded = true;
+    if next.routing.actor.is_none() {
+        return Err(Error::InvalidRequest("choose an actor model (the one that does most of the work)".into()).into());
+    }
     validate_routing(ws, &next)?;
     next.validate()?;
     ws.skills.set_enabled_exact(&req.enabled_skills)?;
     ws.update_config(|c| *c = next)?;
     apply(&s, Event::SkillsConfirmed)
+}
+
+// ---- chat-first flow ------------------------------------------------------
+
+#[derive(Deserialize)]
+struct OpenWorkspaceReq {
+    path: String,
+    #[serde(default)]
+    git_init: bool,
+}
+
+/// One-step replacement for the wizard: bind a directory as the workspace.
+/// A non-repository is refused with `needs_git_init` unless `git_init`.
+async fn open_workspace(State(s): State<Shared>, Json(req): Json<OpenWorkspaceReq>) -> ApiResult {
+    let path = tokio::fs::canonicalize(expand_home(&req.path))
+        .await
+        .map_err(|e| Error::InvalidRequest(format!("{}: {e}", req.path.trim())))?;
+    if !path.is_dir() {
+        return Err(Error::InvalidRequest(format!("{} is not a directory", path.display())).into());
+    }
+    let repo = crate::git::GitRepo::new(&path);
+    if !repo.is_repo().await {
+        if !req.git_init {
+            return Ok(Json(json!({ "needs_git_init": true, "path": path })));
+        }
+        repo.init().await?;
+    }
+    let engine = s.bind(&path).await?;
+    engine.workspace().update_config(|c| c.onboarded = true)?;
+    {
+        let mut w = s.wizard.lock().unwrap();
+        w.apply(Event::Resume)?;
+    }
+    Ok(Json(json!({ "ok": true, "path": path })))
+}
+
+/// Every model the user can pick right now: live local models plus the
+/// known models of cloud providers that have a key.
+async fn available_models(State(s): State<Shared>) -> ApiResult {
+    let engine = s.engine()?;
+    let ws = engine.workspace();
+    let mut out = Vec::new();
+    let mut notes = Vec::new();
+    for id in ws.gateway.configured() {
+        if id.is_local() {
+            let provider = ws.gateway.provider(id)?;
+            match tokio::time::timeout(std::time::Duration::from_secs(4), provider.list_models()).await {
+                Ok(Ok(models)) => {
+                    out.extend(models.into_iter().map(|m| json!({ "provider": id, "model": m, "local": true })))
+                }
+                Ok(Err(e)) => notes.push(e.to_string()),
+                Err(_) => notes.push(format!("{}: timed out", id.as_str())),
+            }
+        } else {
+            out.extend(
+                pricing::suggested_models(id)
+                    .into_iter()
+                    .map(|m| json!({ "provider": id, "model": m, "local": false })),
+            );
+        }
+    }
+    let default = ws.config().routing.actor;
+    Ok(Json(json!({ "models": out, "notes": notes, "default": default })))
+}
+
+#[derive(Deserialize)]
+struct ProposeReq {
+    goal: String,
+    model: crate::config::ModelRef,
+}
+
+async fn propose_team(State(s): State<Shared>, Json(req): Json<ProposeReq>) -> ApiResult {
+    let agents = s.engine()?.propose_team(&req.goal, &req.model).await?;
+    Ok(Json(json!({ "agents": agents })))
 }
 
 // ---- settings ---------------------------------------------------------------------
@@ -480,11 +558,14 @@ struct CreateRunReq {
     goal: String,
     #[serde(default)]
     verify_command: Option<String>,
+    /// mode / model / agents; defaults to a classic run.
+    #[serde(flatten)]
+    spec: RunSpec,
 }
 
 async fn create_run(State(s): State<Shared>, Json(req): Json<CreateRunReq>) -> ApiResult {
     let engine = s.engine()?;
-    let run = engine.create_run(&req.goal, req.verify_command.as_deref()).await?;
+    let run = engine.create_run(&req.goal, req.verify_command.as_deref(), req.spec).await?;
     Ok(Json(json!({ "run": run })))
 }
 
@@ -510,10 +591,13 @@ async fn resume_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> Ap
 #[derive(Deserialize)]
 struct InjectReq {
     text: String,
+    /// Orchestra runs: the agent the message is for (default: the lead).
+    #[serde(default)]
+    agent: Option<String>,
 }
 
 async fn inject_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(req): Json<InjectReq>) -> ApiResult {
-    Ok(Json(json!({ "step": s.engine()?.inject(&id, &req.text).await? })))
+    Ok(Json(json!({ "step": s.engine()?.inject(&id, &req.text, req.agent.as_deref()).await? })))
 }
 
 #[derive(Deserialize)]

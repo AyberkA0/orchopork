@@ -95,7 +95,7 @@ async fn happy_path_plans_acts_verifies_reviews_and_leaves_main_checkout_alone()
     register(&engine, &actor);
     register(&engine, &critic);
 
-    let run = engine.create_run("create hello.txt", Some("test -f hello.txt")).await.unwrap();
+    let run = engine.create_run("create hello.txt", Some("test -f hello.txt"), RunSpec::default()).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     let (_, steps) = engine.run_detail(&run.id).await.unwrap();
 
@@ -121,7 +121,7 @@ async fn failed_verification_sends_the_actor_back_to_work() {
     let actor = Scripted::new(ProviderId::Ollama, &["plan", FINISH, fix, FINISH]);
     register(&engine, &actor);
 
-    let run = engine.create_run("make `ok` exist", Some("test -f ok")).await.unwrap();
+    let run = engine.create_run("make `ok` exist", Some("test -f ok"), RunSpec::default()).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     let (_, steps) = engine.run_detail(&run.id).await.unwrap();
     assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
@@ -145,7 +145,7 @@ async fn repeated_failures_escalate_then_pause() {
     register(&engine, &actor);
     register(&engine, &strong);
 
-    let run = engine.create_run("anything", None).await.unwrap();
+    let run = engine.create_run("anything", None, RunSpec::default()).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     let (_, steps) = engine.run_detail(&run.id).await.unwrap();
     assert_eq!(run.status, RunStatus::Paused);
@@ -167,7 +167,7 @@ async fn budget_exhaustion_falls_back_to_the_local_actor() {
     register(&engine, &actor);
     register(&engine, &planner);
 
-    let run = engine.create_run("anything", None).await.unwrap();
+    let run = engine.create_run("anything", None, RunSpec::default()).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     let (_, steps) = engine.run_detail(&run.id).await.unwrap();
     assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
@@ -181,12 +181,12 @@ async fn inject_reopens_a_done_run_and_rewind_restores_the_worktree() {
     let (_d, engine) = setup(|_| {}).await;
     let actor = Scripted::new(ProviderId::Ollama, &["plan", WRITE, FINISH]);
     register(&engine, &actor);
-    let run = engine.create_run("create hello.txt", None).await.unwrap();
+    let run = engine.create_run("create hello.txt", None, RunSpec::default()).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     assert_eq!(run.status, RunStatus::Done);
     assert!(matches!(engine.start(&run.id).await, Err(Error::Conflict(_))));
 
-    engine.inject(&run.id, "also add bye.txt").await.unwrap();
+    engine.inject(&run.id, "also add bye.txt", None).await.unwrap();
     let bye = r#"{"tool": "write_file", "args": {"path": "bye.txt", "content": "bye"}}"#;
     actor.replies.lock().unwrap().extend([bye.to_string(), FINISH.to_string()]);
     engine.start(&run.id).await.unwrap();
@@ -215,11 +215,93 @@ async fn pause_stops_between_steps_and_a_second_engine_is_refused() {
     let (d, engine) = setup(|c| c.limits.steps_per_session = 2).await;
     let actor = Scripted::new(ProviderId::Ollama, &["plan", WRITE, WRITE, FINISH]);
     register(&engine, &actor);
-    let run = engine.create_run("x", None).await.unwrap();
+    let run = engine.create_run("x", None, RunSpec::default()).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     assert_eq!((run.status, run.step_count), (RunStatus::Paused, 2));
     assert!(run.error.unwrap().contains("steps_per_session"));
 
     let ws2 = Workspace::open(d.path()).await.unwrap();
     assert!(matches!(Engine::new(ws2).await, Err(Error::Conflict(_))));
+}
+
+#[tokio::test]
+async fn solo_runs_use_their_own_model_and_skip_planning() {
+    let (_d, engine) = setup(|_| {}).await;
+    let chosen = Scripted::new(ProviderId::Claude, &[WRITE, FINISH]);
+    register(&engine, &chosen);
+    let spec = RunSpec { mode: RunMode::Solo, model: Some(cloud()), agents: vec![] };
+    let run = engine.create_run("create hello.txt", None, spec).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    assert_eq!(kinds(&steps), ["act", "act"]);
+    assert_eq!(steps[0].meta["model"], "claude:claude-haiku-4-5");
+}
+
+fn agent(id: &str, parent: Option<&str>, task: &str) -> crate::storage::AgentSpec {
+    crate::storage::AgentSpec {
+        id: id.into(),
+        name: id.to_uppercase(),
+        role: "r".into(),
+        task: task.into(),
+        parent: parent.map(Into::into),
+        model: None,
+    }
+}
+
+#[tokio::test]
+async fn orchestra_works_bottom_up_with_delegation_and_reports() {
+    let (_d, engine) = setup(|_| {}).await;
+    // Order of turns: coder (leaf) writes + finishes, then lead delegates back,
+    // coder fixes + finishes, lead finishes.
+    let replies = [
+        WRITE,
+        r#"{"tool": "finish", "args": {"summary": "hello.txt written"}}"#,
+        r#"{"tool": "delegate", "args": {"agent": "coder", "instruction": "also add bye.txt"}}"#,
+        r#"{"tool": "write_file", "args": {"path": "bye.txt", "content": "bye"}}"#,
+        r#"{"tool": "finish", "args": {"summary": "bye.txt added"}}"#,
+        r#"{"tool": "finish", "args": {"summary": "mission complete"}}"#,
+    ];
+    let model = Scripted::new(ProviderId::Ollama, &replies);
+    register(&engine, &model);
+    let spec = RunSpec {
+        mode: RunMode::Orchestra,
+        model: Some(local("lead")),
+        agents: vec![agent("lead", None, "coordinate"), agent("coder", Some("lead"), "write files")],
+    };
+    let run = engine.create_run("make files", Some("test -f bye.txt"), spec).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    let who: Vec<&str> = steps.iter().map(|s| s.meta["agent"].as_str().unwrap_or("-")).collect();
+    assert_eq!(who, ["coder", "coder", "lead", "coder", "coder", "lead", "lead"]);
+    assert_eq!(steps.last().unwrap().kind, StepKind::Verify);
+
+    let seen = model.seen.lock().unwrap();
+    assert!(
+        seen[2]
+            .messages
+            .iter()
+            .any(|m| m.content.contains("Report from CODER") && m.content.contains("hello.txt written"))
+    );
+    assert!(seen[2].system.contains("delegate"), "commanders get the delegate tool");
+    assert!(!seen[0].system.contains("- delegate"), "leaves do not");
+    assert!(
+        seen[3]
+            .messages
+            .iter()
+            .any(|m| m.content.contains("Order from LEAD") && m.content.contains("also add bye.txt"))
+    );
+    assert!(Path::new(&run.worktree).join("bye.txt").exists());
+}
+
+#[tokio::test]
+async fn orchestra_trees_are_validated_on_create() {
+    let (_d, engine) = setup(|_| {}).await;
+    let spec = RunSpec {
+        mode: RunMode::Orchestra,
+        model: Some(local("lead")),
+        agents: vec![agent("a", None, "t"), agent("b", None, "t")],
+    };
+    assert!(matches!(engine.create_run("x", None, spec).await, Err(Error::InvalidRequest(_))));
 }

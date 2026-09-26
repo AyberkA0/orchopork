@@ -749,8 +749,9 @@ function viewHome(main) {
 // ---------- modals ----------
 function modal(content, { wide, onClose, cls } = {}) {
   const scrim = h("div", { class: "scrim" });
-  let closed = false;
-  const close = () => { if (closed) return; closed = true; document.removeEventListener("keydown", esc); scrim.classList.add("out"); setTimeout(() => scrim.remove(), 110); onClose && onClose(); };
+  let closed = false, locked = false;
+  const close = () => { if (closed || locked) return; closed = true; document.removeEventListener("keydown", esc); scrim.classList.add("out"); setTimeout(() => scrim.remove(), 110); onClose && onClose(); };
+  close.setLocked = (v) => { locked = v; };
   const esc = (e) => { if (e.key === "Escape") close(); };
   scrim.addEventListener("mousedown", (e) => { if (e.target === scrim) close(); });
   document.addEventListener("keydown", esc);
@@ -914,7 +915,33 @@ const ENDPOINT_PRESETS = [
   { name: "Together", base_url: "https://api.together.xyz/v1", key: "https://api.together.ai/settings/api-keys", blurb: "Open models, hosted" },
   { name: "xAI", base_url: "https://api.x.ai/v1", key: "https://console.x.ai", blurb: "Grok models" },
 ];
-const POPULAR_OLLAMA = ["qwen2.5-coder:7b", "qwen2.5-coder:14b", "qwen3:8b", "llama3.1:8b", "deepseek-r1:8b", "gpt-oss:20b"];
+const POPULAR_OLLAMA = [
+  { model: "qwen2.5-coder:1.5b", size: "~1 GB" },
+  { model: "qwen2.5-coder:7b", size: "~4.7 GB" },
+  { model: "qwen2.5-coder:14b", size: "~9 GB" },
+  { model: "qwen2.5-coder:32b", size: "~20 GB" },
+  { model: "qwen3:4b", size: "~2.6 GB" },
+  { model: "qwen3:8b", size: "~5.2 GB" },
+  { model: "qwen3:14b", size: "~9 GB" },
+  { model: "qwen3:30b-a3b", size: "~19 GB" },
+  { model: "llama3.2:3b", size: "~2 GB" },
+  { model: "llama3.1:8b", size: "~4.9 GB" },
+  { model: "llama3.3:70b", size: "~43 GB" },
+  { model: "deepseek-r1:1.5b", size: "~1.1 GB" },
+  { model: "deepseek-r1:8b", size: "~5.2 GB" },
+  { model: "deepseek-r1:14b", size: "~9 GB" },
+  { model: "deepseek-r1:32b", size: "~20 GB" },
+  { model: "gpt-oss:20b", size: "~13 GB" },
+  { model: "gpt-oss:120b", size: "~65 GB" },
+  { model: "mistral:7b", size: "~4.1 GB" },
+  { model: "mistral-nemo:12b", size: "~7.1 GB" },
+  { model: "gemma3:4b", size: "~3.3 GB" },
+  { model: "gemma3:12b", size: "~8.1 GB" },
+  { model: "gemma3:27b", size: "~17 GB" },
+  { model: "phi4:14b", size: "~9.1 GB" },
+  { model: "devstral:24b", size: "~14 GB" },
+  { model: "codellama:13b", size: "~7.4 GB" },
+];
 
 // What is on this machine (keys in env, local servers, agent CLIs).
 function detectSetup(fresh) {
@@ -983,12 +1010,18 @@ function openAddModel() {
         try { const r = await api(`/api/providers/ollama/models?url=${encodeURIComponent(url.value)}`); status.textContent = r.models.length ? `✓ Running · installed: ${r.models.join(", ")}` : "✓ Running · no models installed yet — download one below"; status.className = "small ok"; return r.models; }
         catch (e) { status.textContent = "Ollama is not reachable here. Install it from ollama.com and start it, then check again."; status.className = "small bad"; return null; }
       };
+      let controller = null;
+      const backBtn = back();
+      const useBtn = h("button", { class: "primary", text: "Use installed models", onclick: guard(async (e) => { e.target.disabled = true; try { const r = await api("/api/models/add", { body: { kind: "ollama", url: url.value } }); success("Ollama", r.models, "ollama"); } finally { e.target.disabled = false; } }) });
+      const cancelBtn = h("button", { class: "ghost", text: "Cancel download", style: { display: "none" }, onclick: () => { if (controller) controller.abort(); } });
+      const setBusy = (busy) => { close.setLocked(busy); backBtn.disabled = busy; useBtn.disabled = busy; cancelBtn.style.display = busy ? "" : "none"; };
       const pull = guard(async (btnEl) => {
         const model = pullName.value.trim(); if (!model) return;
-        btnEl.disabled = true; bar.style.display = ""; pstat.textContent = "Starting download…";
+        btnEl.disabled = true; setBusy(true); bar.style.display = ""; pstat.textContent = "Starting download…";
+        controller = new AbortController();
         try {
           await api("/api/models/add", { body: { kind: "ollama", url: url.value } });
-          const res = await fetch("/api/ollama/pull", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model }) });
+          const res = await fetch("/api/ollama/pull", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model }), signal: controller.signal });
           if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
           const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "", last = null;
           for (;;) {
@@ -1005,16 +1038,19 @@ function openAddModel() {
           if (!last || last.status !== "success") throw new Error("download did not finish");
           const models = (await check()) || [];
           success("Ollama", models, "ollama");
-        } finally { btnEl.disabled = false; }
+        } catch (e) {
+          if (e.name === "AbortError") { pstat.textContent = "Download cancelled."; bar.style.display = "none"; }
+          else throw e;
+        } finally { btnEl.disabled = false; controller = null; setBusy(false); }
       });
       const pbtn = h("button", { text: "Download", onclick: (e) => pull(e.target) });
       body.replaceChildren(h("div", { class: "enter" }, h("h2", { text: "Ollama — local models" }),
         h("p", { class: "small muted", text: "Free and private: models run on your machine." }),
         h("label", { text: "Ollama URL" }), h("div", { class: "row" }, h("div", { class: "grow" }, url), h("button", { class: "ghost", text: "Check", onclick: () => check() })), status,
         h("label", { text: "Download a model" }), h("div", { class: "row" }, h("div", { class: "grow" }, pullName), pbtn),
-        h("div", { class: "chips", style: { justifyContent: "flex-start", marginTop: "8px" } }, POPULAR_OLLAMA.map((m) => h("span", { class: "chip", text: m, onclick: () => { pullName.value = m; } }))),
-        bar, pstat,
-        h("div", { class: "actions" }, back(), h("span", { class: "grow" }), h("button", { class: "primary", text: "Use installed models", onclick: guard(async (e) => { e.target.disabled = true; try { const r = await api("/api/models/add", { body: { kind: "ollama", url: url.value } }); success("Ollama", r.models, "ollama"); } finally { e.target.disabled = false; } }) }))));
+        h("div", { class: "chips", style: { justifyContent: "flex-start", marginTop: "8px" } }, POPULAR_OLLAMA.map((m) => h("span", { class: "chip", text: `${m.model} · ${m.size}`, onclick: () => { pullName.value = m.model; } }))),
+        bar, pstat, cancelBtn,
+        h("div", { class: "actions" }, backBtn, h("span", { class: "grow" }), useBtn)));
       check();
     }
     // Preset agents: status, one-click install, sign-in hint, then an

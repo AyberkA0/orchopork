@@ -1,8 +1,10 @@
 //! Local HTTP API + embedded dashboard. Binds loopback only, and rejects
 //! requests whose `Host`/`Origin` is not local (DNS-rebinding protection:
 //! this API can run shell commands through the agent, so a web page must
-//! never be able to reach it).
+//! never be able to reach it). Access from other devices is opt-in and
+//! token-gated; see `remote`.
 
+pub mod remote;
 mod setup;
 pub mod wizard;
 
@@ -11,7 +13,7 @@ use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-use axum::extract::{Path as UrlPath, Query, Request, State};
+use axum::extract::{ConnectInfo, Path as UrlPath, Query, Request, State};
 use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
@@ -49,6 +51,8 @@ pub struct AppState {
     wizard: Mutex<Wizard>,
     /// Pre-filled in the workspace picker (the `--workspace` argument).
     default_root: PathBuf,
+    /// Machine-wide "access from other devices" setting.
+    pub remote: remote::Remote,
 }
 
 pub type Shared = Arc<AppState>;
@@ -58,6 +62,10 @@ impl AppState {
     /// straight to the dashboard; otherwise start the wizard and touch
     /// nothing on disk until the user picks a directory.
     pub async fn new(default_root: PathBuf) -> Result<Shared> {
+        Self::with_remote(default_root, remote::Remote::open(remote::default_path())).await
+    }
+
+    pub async fn with_remote(default_root: PathBuf, remote: remote::Remote) -> Result<Shared> {
         let state = Arc::new(Self {
             cloud_models: Default::default(),
             models_cache: Mutex::new(None),
@@ -65,6 +73,7 @@ impl AppState {
             engine: RwLock::new(None),
             wizard: Mutex::new(Wizard::default()),
             default_root: default_root.clone(),
+            remote,
         });
         if Workspace::is_initialized(&default_root) {
             let ws = Workspace::open(&default_root).await?;
@@ -192,9 +201,12 @@ pub fn router(state: Shared) -> Router {
         .route("/api/runs/{id}/diff", get(diff_run))
         .route("/api/runs/{id}/push", post(push_run))
         .route("/api/events", get(events))
+        .route("/api/remote", get(remote_status).post(set_remote))
+        .route("/api/remote/token", post(regenerate_remote_token))
+        .route("/api/remote/check", get(|| async { Json(json!({ "ok": true })) }))
         // Client-side-routed SPA: every other GET gets the same shell.
         .fallback(get(spa_index))
-        .layer(middleware::from_fn(local_only))
+        .layer(middleware::from_fn_with_state(state.clone(), local_only))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -208,7 +220,15 @@ fn is_local_host(host: &str) -> bool {
     matches!(name.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
 }
 
-async fn local_only(req: Request, next: Next) -> Response {
+/// Requests from this machine must name it as `Host` (and `Origin`, when
+/// state-changing). Requests from another machine go through the token
+/// gate in `remote`. Without `ConnectInfo` (in-process tests) the peer
+/// counts as local.
+async fn local_only(State(s): State<Shared>, req: Request, next: Next) -> Response {
+    let peer = req.extensions().get::<ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip().to_canonical());
+    if peer.is_some_and(|ip| !ip.is_loopback()) {
+        return remote::guard(&s.remote, req, next).await;
+    }
     let headers = req.headers();
     let host_ok = headers.get(header::HOST).and_then(|h| h.to_str().ok()).is_some_and(is_local_host);
     let origin_ok = match headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) {
@@ -1055,6 +1075,35 @@ async fn events(
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
+// ---- access from other devices ------------------------------------------------
+
+async fn remote_status(State(s): State<Shared>) -> Json<Value> {
+    Json(s.remote.status())
+}
+
+#[derive(Deserialize)]
+struct RemoteReq {
+    enabled: bool,
+}
+
+async fn set_remote(State(s): State<Shared>, Json(req): Json<RemoteReq>) -> ApiResult {
+    s.remote.set_enabled(req.enabled)?;
+    // Give the serve loop a moment to rebind so the answer shows the result.
+    for _ in 0..20 {
+        let st = s.remote.status();
+        if st["all_interfaces"] == req.enabled || !st["error"].is_null() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    Ok(Json(s.remote.status()))
+}
+
+async fn regenerate_remote_token(State(s): State<Shared>) -> ApiResult {
+    s.remote.regenerate()?;
+    Ok(Json(s.remote.status()))
+}
+
 async fn spa_index() -> impl IntoResponse {
     ([(header::CACHE_CONTROL, "no-store")], Html(INDEX_HTML))
 }
@@ -1159,5 +1208,80 @@ mod tests {
             call(&app, "POST", "/api/wizard/initialize", "127.0.0.1:7878", Some("http://localhost:7878"), json!({}))
                 .await;
         assert_eq!(code, 200);
+    }
+
+    /// Sends a request as if it came from another machine.
+    async fn call_remote(app: &Router, method: &str, uri: &str, headers: &[(&str, &str)]) -> Response {
+        let mut req = Request::builder().method(method).uri(uri).header("host", "203.0.113.7:7878");
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        let mut req = req.header("content-type", "application/json").body(Body::from("{}")).unwrap();
+        req.extensions_mut().insert(ConnectInfo(std::net::SocketAddr::from(([198, 51, 100, 9], 50000))));
+        app.clone().oneshot(req).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn other_devices_need_the_setting_and_the_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let remote = remote::Remote::open(Some(dir.path().join("server.yaml")));
+        let state = AppState::with_remote(dir.path().to_path_buf(), remote).await.unwrap();
+        let app = router(state.clone());
+
+        assert_eq!(call_remote(&app, "GET", "/api/remote/check", &[]).await.status(), 403, "off by default");
+        state.remote.set_enabled(true).unwrap();
+        let tok = state.remote.status()["token"].as_str().unwrap().to_string();
+        let bearer = format!("Bearer {tok}");
+        let cookie = format!("orchopork_token={tok}");
+
+        assert_eq!(call_remote(&app, "GET", "/api/remote/check", &[]).await.status(), 401);
+        assert_eq!(
+            call_remote(&app, "GET", "/api/remote/check", &[("authorization", "Bearer wrong")]).await.status(),
+            401
+        );
+        let login = call_remote(&app, "GET", "/", &[]).await;
+        assert_eq!(login.status(), 401);
+        let html = axum::body::to_bytes(login.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&html).contains("Access token"), "the page is the login form, not the app");
+
+        let ok = call_remote(&app, "GET", "/api/remote/check", &[("authorization", &bearer)]).await;
+        assert_eq!(ok.status(), 200);
+        assert!(
+            ok.headers()[header::SET_COOKIE].to_str().unwrap().contains("HttpOnly"),
+            "bearer login sets the cookie"
+        );
+        assert_eq!(call_remote(&app, "GET", "/api/state", &[("cookie", &cookie)]).await.status(), 200);
+
+        let link = call_remote(&app, "GET", &format!("/?token={tok}"), &[]).await;
+        assert_eq!(link.status(), 303);
+        assert_eq!(link.headers()[header::LOCATION], "/", "the token is dropped from the address bar");
+
+        let post = |origin: &'static str| {
+            let (app, cookie) = (app.clone(), cookie.clone());
+            async move {
+                call_remote(&app, "POST", "/api/wizard/initialize", &[("cookie", &cookie), ("origin", origin)])
+                    .await
+                    .status()
+            }
+        };
+        assert_eq!(post("http://evil.example").await, 403);
+        assert_eq!(post("http://203.0.113.7:7878").await, 200);
+
+        let regen = call_remote(&app, "POST", "/api/remote/token", &[("cookie", &cookie)]).await;
+        assert_eq!(regen.status(), 200);
+        let fresh = state.remote.status()["token"].as_str().unwrap().to_string();
+        assert!(
+            regen.headers()[header::SET_COOKIE].to_str().unwrap().contains(&fresh),
+            "the asking device stays signed in"
+        );
+        assert_eq!(
+            call_remote(&app, "GET", "/api/state", &[("cookie", &cookie)]).await.status(),
+            401,
+            "old token is dead"
+        );
+
+        state.remote.set_enabled(false).unwrap();
+        let c = format!("orchopork_token={fresh}");
+        assert_eq!(call_remote(&app, "GET", "/api/state", &[("cookie", &c)]).await.status(), 403);
     }
 }

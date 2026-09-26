@@ -263,12 +263,33 @@ orchopork sets `num_ctx` on every request; raise it if your hardware allows.
 
 `.orchopork/` is added to the repository's `.git/info/exclude` automatically.
 
+## Access from other devices
+
+By default only the machine running orchopork can open it. To use it from your phone, another computer or another
+network, turn on **Models & settings → Access from other devices**. It applies at once, no restart needed:
+
+- the server listens on all interfaces (same port, 7878 by default) instead of `127.0.0.1` only;
+- other devices get a sign-in page and need the **access token** shown on that card. You can also copy a sign-in
+  link (`http://<ip>:7878/?token=…`); it sets a cookie and removes the token from the address bar;
+- from another network, forward TCP 7878 on your router to the LAN address the card shows, then open
+  `http://<your public IP>:7878`.
+
+The setting is machine-wide and lives in `~/.config/orchopork/server.yaml` (`%APPDATA%\orchopork\server.yaml` on
+Windows, or `$ORCHOPORK_CONFIG_DIR`), mode 0600. **New token** signs out every other device. Anyone with the token
+can run commands on this machine through the agents, and plain HTTP sends it unencrypted, so on untrusted
+networks prefer a VPN (Tailscale, WireGuard) or an SSH tunnel (`ssh -L 7878:127.0.0.1:7878 you@host`), which
+need no port forwarding and leave this setting off.
+
 ## Security model
 
-- The server binds `127.0.0.1` only. It rejects requests whose `Host` is not local, and state-changing requests
-  whose `Origin` is not local. This blocks DNS-rebinding and cross-site requests; the API can run commands through
-  the agent, so no web page may reach it.
-- Secrets never pass through wizard state or any API response.
+- By default the server binds `127.0.0.1` only. It rejects requests whose `Host` is not local, and state-changing
+  requests whose `Origin` is not local. This blocks DNS-rebinding and cross-site requests; the API can run commands
+  through the agent, so no web page may reach it.
+- With access from other devices on, requests from other machines need the access token (an `HttpOnly`,
+  `SameSite=Strict` cookie or `Authorization: Bearer`), and state-changing ones must come from the same origin.
+  Requests from this machine keep the rules above.
+- API keys and the GitHub token never pass through wizard state or any API response. The only secret the API
+  returns is the remote access token, on the settings card.
 - Nothing is written to disk before you choose a workspace, and `git init` only happens when you ask for it.
 
 ## Development

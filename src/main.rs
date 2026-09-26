@@ -1,6 +1,7 @@
 //! Binary entry point: the local server + dashboard (`serve`, the default)
 //! and a CLI over the same `Workspace`/`Engine` the server uses.
 
+use std::future::IntoFuture;
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -316,10 +317,58 @@ async fn main() -> anyhow::Result<()> {
 async fn serve(root: PathBuf, port: u16) -> anyhow::Result<()> {
     let root = orchopork::fsutil::strip_verbatim(std::path::absolute(&root)?);
     let state = server::AppState::new(root).await?;
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    println!("orchopork is running at http://localhost:{port}");
-    axum::serve(listener, server::router(state)).with_graceful_shutdown(shutdown_signal()).await?;
-    Ok(())
+    let app = server::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let mut remote = state.remote.subscribe();
+    let mut first = true;
+    // Rebinds whenever "access from other devices" is switched. Dropping the
+    // old `serve` closes only its listener; open connections keep running.
+    loop {
+        let wanted = *remote.borrow_and_update();
+        let (listener, error) = if wanted {
+            match bind(std::net::Ipv4Addr::UNSPECIFIED, port).await {
+                Ok(l) => (l, None),
+                Err(e) => {
+                    tracing::error!("could not listen on all interfaces, port {port}: {e}");
+                    (bind(std::net::Ipv4Addr::LOCALHOST, port).await?, Some(e.to_string()))
+                }
+            }
+        } else {
+            (bind(std::net::Ipv4Addr::LOCALHOST, port).await?, None)
+        };
+        state.remote.set_listening(listener.local_addr()?, error);
+        if first {
+            println!("orchopork is running at http://localhost:{port}");
+            first = false;
+        }
+        if listener.local_addr()?.ip().is_unspecified() {
+            println!("access from other devices is on: http://<this machine's IP>:{port} (access token required)");
+        } else if !wanted {
+            tracing::info!("listening on this machine only");
+        }
+        let serve = axum::serve(listener, app.clone()).with_graceful_shutdown(shutdown_signal());
+        tokio::select! {
+            r = serve.into_future() => return Ok(r?),
+            changed = remote.changed() => {
+                if changed.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        }
+    }
+}
+
+/// Retries briefly: the previous listener on this port was just dropped.
+async fn bind(ip: std::net::Ipv4Addr, port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    let mut tries = 0;
+    loop {
+        match tokio::net::TcpListener::bind((ip, port)).await {
+            Err(e) if tries < 10 && e.kind() == std::io::ErrorKind::AddrInUse => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            r => return r,
+        }
+    }
 }
 
 async fn shutdown_signal() {

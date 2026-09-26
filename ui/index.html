@@ -340,6 +340,8 @@ const store = { get(k, d) { try { const v = localStorage.getItem("op." + k); ret
 async function api(path, opts = {}) {
   const res = await fetch(path, { method: opts.method || (opts.body !== undefined ? "POST" : "GET"),
     headers: { "content-type": "application/json" }, body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined });
+  // Signed out on another device (token changed or cookie expired): show the sign-in page.
+  if (res.status === 401) { location.reload(); await new Promise(() => {}); }
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error((body && body.error) || `HTTP ${res.status}`);
   return body;
@@ -1295,7 +1297,11 @@ async function viewChat(main, id) {
 }
 
 const resumeRun = guard(async (run) => { await api(`/api/runs/${run.id}/resume`, { body: {} }); S.view && S.view.refresh && S.view.refresh(); });
-const copy = (text, what) => navigator.clipboard.writeText(text).then(() => toast(`Copied ${what}`), () => toast("Could not copy: " + text, true));
+// Over plain HTTP from another device there is no Clipboard API; fall back to a selection copy.
+const copy = (text, what) => (navigator.clipboard ? navigator.clipboard.writeText(text) : new Promise((ok, fail) => {
+  const t = h("textarea", { style: { position: "fixed", opacity: "0" } }); t.value = text; document.body.append(t); t.select();
+  const done = document.execCommand("copy"); t.remove(); done ? ok() : fail();
+})).then(() => toast(`Copied ${what}`), () => toast("Could not copy: " + text, true));
 
 // Why a run stopped, with the obvious next step next to it.
 function errorBanner(run, active) {
@@ -1801,6 +1807,48 @@ async function viewModels(main) {
 
   const skills = h("div");
   let saveRow;
+
+  // Access from other devices: machine-wide and applied at once, not part of Save.
+  const remoteBox = h("div", {}, sk("sk-line w60"), sk("sk-line w40"));
+  const remoteCard = h("div", { class: "card" }, h("h3", { text: "Access from other devices" }), remoteBox);
+  const paintRemote = (r) => {
+    const toggle = h("input", { type: "checkbox", style: { width: "auto" }, checked: r.enabled, onchange: guard(async (e) => {
+      const on = e.target.checked;
+      if (on && !(await confirmBox({ title: "Open orchopork to other devices?",
+        text: "Anyone who has the access token can use orchopork from another device, including running shell commands and reading files on this machine through the agents. The connection is plain HTTP, so on untrusted networks prefer a VPN (e.g. Tailscale) or an SSH tunnel.",
+        ok: "Turn on", danger: true }))) { e.target.checked = false; return; }
+      try { const r2 = await api("/api/remote", { body: { enabled: on } }); paintRemote(r2); toast(on ? "Access from other devices is on" : "Access from other devices is off"); }
+      catch (x) { e.target.checked = !on; throw x; }
+    }) });
+    const rows = [
+      h("label", { class: "row", style: { color: "var(--text)", fontSize: "13.5px" } }, toggle, "Allow access from other devices (your network and, with port forwarding, the internet)"),
+      h("p", { class: "small muted", style: { margin: "4px 0 0" }, text: "Off: only this machine can open orchopork. On: it listens on all network interfaces and other devices must sign in with the access token." }),
+    ];
+    if (r.enabled) {
+      const port = r.port || location.port || 7878, lan = r.lan_ip || "<this machine's IP>";
+      const tokenIn = h("input", { class: "mono", type: "password", readOnly: true, value: r.token, onfocus: (e) => e.target.select() });
+      rows.push(
+        h("div", { class: "small " + (r.error ? "bad" : "ok"), style: { marginTop: "10px" },
+          text: r.error ? `Could not listen on the network (port ${port}): ${r.error}. Only this machine can connect right now.` : r.all_interfaces ? `✓ Listening on all interfaces, port ${port}` : "Switching…" }),
+        h("label", { text: "Access token" }),
+        h("div", { class: "row" }, tokenIn,
+          h("button", { class: "ghost", text: "Show", onclick: (e) => { const hid = tokenIn.type === "password"; tokenIn.type = hid ? "text" : "password"; e.target.textContent = hid ? "Hide" : "Show"; } }),
+          h("button", { text: "Copy", onclick: () => copy(r.token, "token") }),
+          h("button", { class: "ghost", style: { whiteSpace: "nowrap" }, text: "New token", title: "Every device has to sign in again", onclick: guard(async () => {
+            if (!(await confirmBox({ title: "Create a new access token?", text: "The current token stops working and every other device has to sign in again with the new one.", ok: "New token" }))) return;
+            paintRemote(await api("/api/remote/token", { body: {} })); toast("New token created");
+          }) })),
+        h("div", { class: "small muted", style: { marginTop: "10px", display: "grid", gap: "4px" } },
+          h("div", {}, "On your network: ", h("span", { class: "mono", text: `http://${lan}:${port}` })),
+          h("div", {}, "From the internet: ", h("span", { class: "mono", text: `http://<your public IP>:${port}` }), ` — forward TCP port ${port} on your router to ${lan}.`),
+          h("div", {}, "A sign-in link (keep it private): ", h("button", { class: "ghost small", style: { padding: "2px 6px" }, text: "Copy link",
+            onclick: () => copy(`http://${lan}:${port}/?token=${r.token}`, "sign-in link") }))),
+        h("div", { class: "small warn", style: { marginTop: "8px" }, text: "The token is sent unencrypted over plain HTTP. On public or shared networks use a VPN or an SSH tunnel instead." }));
+    }
+    if (!r.persisted) rows.push(h("div", { class: "small warn", style: { marginTop: "8px" }, text: "No config directory was found, so this setting lasts until orchopork restarts." }));
+    remoteBox.replaceChildren(...rows);
+  };
+  api("/api/remote").then(paintRemote).catch((x) => remoteBox.replaceChildren(h("div", { class: "small bad", text: x.message })));
   S.settingsDirty = false;
   const paintSkills = (list, errors) => skills.replaceChildren(...list.map((s) => h("label", { class: "row", style: { color: "var(--text)", fontSize: "13.5px", alignItems: "flex-start", gap: "10px" } },
     h("input", { type: "checkbox", style: { width: "auto", marginTop: "4px" }, checked: s.enabled, onchange: guard(async (e) => { try { await api("/api/skills/toggle", { body: { name: s.name, on: e.target.checked } }); } catch (x) { e.target.checked = !e.target.checked; throw x; } }) }),
@@ -1883,6 +1931,7 @@ async function viewModels(main) {
       h("label", { text: "Default model for the CLI" }), def),
     h("div", { class: "card" }, h("h3", { text: "Safety" }), limits,
       h("label", { class: "row", style: { color: "var(--text)", marginTop: "14px" } }, allow, "Allow agents to run shell commands")),
+    remoteCard,
     h("div", { class: "card" }, h("div", { class: "row" }, h("h3", { class: "grow", text: "Skills" }),
       h("button", { class: "ghost", text: "Reload", onclick: guard(async () => { const r = await api("/api/skills/reload", { body: {} }); paintSkills(r.skills, r.errors); }) })), skills),
     saveRow = h("div", { class: "row", style: { position: "sticky", bottom: "12px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: "14px", padding: "8px 8px 8px 14px", boxShadow: "var(--shadow)" } },
@@ -1902,8 +1951,9 @@ async function viewModels(main) {
     saveRow.firstChild.textContent = v ? "● Unsaved changes" : "Changes here are saved when you press Save.";
     saveRow.firstChild.className = "grow small " + (v ? "warn" : "muted");
   };
-  inner.addEventListener("input", (e) => { if (!skills.contains(e.target)) setDirty(true); });
-  inner.addEventListener("change", (e) => { if (!skills.contains(e.target)) setDirty(true); });
+  const ownSave = (t) => skills.contains(t) || remoteCard.contains(t);
+  inner.addEventListener("input", (e) => { if (!ownSave(e.target)) setDirty(true); });
+  inner.addEventListener("change", (e) => { if (!ownSave(e.target)) setDirty(true); });
   S.view.leave = () => !S.settingsDirty || confirm("Leave without saving your settings changes?");
 }
 

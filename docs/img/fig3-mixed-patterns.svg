@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 400" width="880" height="400">
+  <defs>
+    <marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 1L9 5L0 9" fill="none" stroke="#231f20" stroke-width="1.4"/>
+    </marker>
+    <style>
+      .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+      .sans{font-family:ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+      .ink{fill:#231f20}
+      .mute{fill:#8c8686}
+      .rule{stroke:#231f20;stroke-width:0.6}
+      .e{stroke:#231f20;stroke-width:1.25;fill:none}
+      .ea{stroke:#231f20;stroke-width:1.25;fill:none;marker-end:url(#h)}
+      .d{stroke:#231f20;stroke-width:1.25;fill:none;stroke-dasharray:3 4}
+      .n{fill:#f7f6f3;stroke:#231f20;stroke-width:1.25}
+      .acc{fill:#f7f6f3;stroke:#f37e8f;stroke-width:2}
+      .p{fill:#f37e8f}
+      .lbl{font-size:11px}
+    </style>
+  </defs>
+  <rect width="880" height="400" fill="#f7f6f3"/>
+
+  <!-- caption -->
+  <text class="mono mute" x="40" y="40" font-size="11">fig. 3</text>
+  <text class="mono ink" x="90" y="40" font-size="11">one goal, split into parts, each part run with the pattern that suits it</text>
+  <line class="rule" x1="40" y1="54" x2="840" y2="54"/>
+
+  <!-- goal bar -->
+  <rect x="40" y="74" width="4" height="34" class="p"/>
+  <text class="sans ink" x="56" y="90" font-size="15" font-weight="700">goal</text>
+  <text class="mono mute lbl" x="56" y="104">add a payments module</text>
+  <line class="rule" x1="40" y1="122" x2="840" y2="122"/>
+  <g class="rule">
+    <line x1="48" y1="122" x2="48" y2="136"/><line x1="253" y1="122" x2="253" y2="136"/>
+    <line x1="458" y1="122" x2="458" y2="136"/><line x1="663" y1="122" x2="663" y2="136"/>
+  </g>
+
+  <!-- part headers -->
+  <g class="lbl">
+    <text class="mono mute" x="40" y="152">01</text><text class="sans ink" x="62" y="153" font-size="14" font-weight="600">read the codebase</text>
+    <rect x="40" y="163" width="9" height="9" class="p"/><text class="mono mute" x="56" y="172">fan-out / fan-in</text>
+
+    <text class="mono mute" x="245" y="152">02</text><text class="sans ink" x="267" y="153" font-size="14" font-weight="600">design the API</text>
+    <rect x="245.5" y="163.5" width="8" height="8" fill="none" stroke="#231f20"/><text class="mono mute" x="261" y="172">debate</text>
+
+    <text class="mono mute" x="450" y="152">03</text><text class="sans ink" x="472" y="153" font-size="14" font-weight="600">build it</text>
+    <rect x="450" y="163" width="9" height="9" class="p"/><text class="mono mute" x="466" y="172">hierarchy</text>
+
+    <text class="mono mute" x="655" y="152">04</text><text class="sans ink" x="677" y="153" font-size="14" font-weight="600">harden it</text>
+    <rect x="655.5" y="163.5" width="8" height="8" fill="none" stroke="#231f20"/><text class="mono mute" x="671" y="172">evaluator loop</text>
+  </g>
+
+  <!-- 01 fan-out -->
+  <g class="e">
+    <line x1="80" y1="250" x2="127" y2="210"/><line x1="80" y1="250" x2="126" y2="250"/><line x1="80" y1="250" x2="127" y2="290"/>
+    <line x1="138" y1="210" x2="176" y2="246"/><line x1="138" y1="250" x2="174" y2="250"/><line x1="138" y1="290" x2="176" y2="254"/>
+  </g>
+  <circle class="n" cx="80" cy="250" r="8"/>
+  <circle class="n" cx="132" cy="210" r="6"/><circle class="n" cx="132" cy="250" r="6"/><circle class="n" cx="132" cy="290" r="6"/>
+  <circle class="acc" cx="184" cy="250" r="8"/>
+
+  <!-- 02 debate -->
+  <circle class="n" cx="296" cy="222" r="8"/><circle class="n" cx="380" cy="222" r="8"/>
+  <path class="ea" d="M305 216 Q 338 200 371 216"/><path class="ea" d="M371 229 Q 338 244 305 229"/>
+  <line class="d" x1="300" y1="231" x2="332" y2="282"/><line class="d" x1="376" y1="231" x2="344" y2="282"/>
+  <circle class="acc" cx="338" cy="290" r="8"/>
+
+  <!-- 03 hierarchy -->
+  <g class="e">
+    <line x1="546" y1="206" x2="514" y2="254"/><line x1="546" y1="206" x2="578" y2="254"/>
+    <line x1="514" y1="254" x2="498" y2="294"/><line x1="514" y1="254" x2="530" y2="294"/><line x1="578" y1="254" x2="578" y2="294"/>
+  </g>
+  <circle cx="546" cy="206" r="10" class="p"/>
+  <circle class="n" cx="514" cy="254" r="7"/><circle class="n" cx="578" cy="254" r="7"/>
+  <circle class="n" cx="498" cy="294" r="5"/><circle class="n" cx="530" cy="294" r="5"/><circle class="n" cx="578" cy="294" r="5"/>
+
+  <!-- 04 evaluator loop -->
+  <circle class="n" cx="712" cy="250" r="9"/><circle class="acc" cx="794" cy="250" r="9"/>
+  <path class="ea" d="M720 242 Q 753 214 786 242"/><path class="ea" d="M786 258 Q 753 286 720 258"/>
+
+  <!-- hand-offs between parts -->
+  <line class="ea" x1="198" y1="250" x2="282" y2="250"/>
+  <line class="ea" x1="394" y1="250" x2="486" y2="250"/>
+  <line class="ea" x1="592" y1="250" x2="698" y2="250"/>
+
+  <!-- foot -->
+  <line class="rule" x1="40" y1="330" x2="840" y2="330"/>
+  <text class="mono mute lbl" x="40" y="352">each part hands its result to the next; each can use its own models</text>
+  <rect x="40" y="366" width="9" height="9" class="p"/><text class="mono ink lbl" x="56" y="375">in orchopork</text>
+  <rect x="160.5" y="366.5" width="8" height="8" fill="none" stroke="#231f20"/><text class="mono ink lbl" x="176" y="375">planned</text>
+</svg>

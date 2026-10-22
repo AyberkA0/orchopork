@@ -79,6 +79,24 @@ orchopork has two goals:
 The point of having all of them in one harness is that they can be compared on equal terms: same tasks, same
 models, same accounting.
 
+### Mixing patterns within one goal
+
+A real goal is rarely one kind of work. Reading an unfamiliar codebase is wide and parallel; designing an API
+benefits from argument; building is a matter of delegation; hardening is a loop of attempts and checks. No single
+pattern is the best fit for all of that, so orchopork does not make you pick one for the whole job.
+
+<p align="center">
+  <img src="docs/img/fig3-mixed-patterns.svg" alt="One goal, add a payments module, split into four parts run in order: reading the codebase with fan-out / fan-in, designing the API with a debate, building it with a hierarchy, and hardening it with an evaluator loop" width="100%">
+</p>
+
+The goal is split into parts, and each part runs with the pattern (and the models) that suit it. Each part hands
+its result to the next. Metrics are recorded per agent, so you can see what each part cost and what it delivered,
+and swap a pattern out on the next run where it did not pay off.
+
+Today this works within the orchestra tree: every commander's subtree can take its own shape, such as a wide
+fan-out of readers under one commander and a deeper chain of command under another, each with its own models.
+Debate, voting, the router and the evaluator loop join the mix as they arrive in the pattern library.
+
 ## Metrics
 
 Every call is accounted for, per run and per agent:
@@ -95,7 +113,7 @@ cost of orchestration and what it buys are visible as numbers rather than impres
 ## Where it is going
 
 <p align="center">
-  <img src="docs/img/federation.svg" alt="A coordinating orchopork connected to orchopork nodes on a GPU server, a workstation, a cloud VM and a laptop, each running its own models" width="100%">
+  <img src="docs/img/fig4-federation.svg" alt="A coordinating orchopork connected to orchopork nodes on a GPU server, a workstation, a cloud VM and a laptop, each running its own models" width="100%">
 </p>
 
 The final version is distributed. An orchopork running on one machine will be able to orchestrate orchopork

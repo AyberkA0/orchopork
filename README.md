@@ -18,7 +18,7 @@ metrics on what each node cost and what it contributed. It is written in Rust, s
 embedded web UI, and does its work inside isolated git worktrees.
 
 <p align="center">
-  <img src="docs/img/overview.svg" alt="Many models feed into orchopork, which arranges them as a node graph and produces a git branch, metrics and evidence about whether the orchestration paid off" width="100%">
+  <img src="docs/img/fig1-single-vs-team.svg" alt="One goal run two ways: by a single agent, and by a team with a Claude lead and Qwen, DeepSeek, Mistral, Jev and Gemini members; both runs are measured side by side on tokens, cost, time, turns and outcome" width="100%">
 </p>
 
 ## Why this exists

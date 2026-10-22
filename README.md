@@ -8,6 +8,10 @@
   <strong>A harness built for orchestrating many different LLMs as one team, and for measuring whether that team is worth it.</strong>
 </p>
 
+<p align="center">
+  <a href="https://buymeabitcoffee.vercel.app/btc/bc1qhae9un6j8mel5xcrd4trajm65wfunlltkzelh7?identifier=Buy+Me+a+Coffee"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-f7931a?style=for-the-badge&logo=bitcoin&logoColor=white" alt="Buy Me a Coffee"></a>
+</p>
+
 orchopork lets Claude, Gemini, DeepSeek, ChatGPT, Mistral, Qwen and any other model, local or cloud, API or CLI
 agent, work together on the same task. You compose the orchestration out of nodes, run it, and get detailed
 metrics on what each node cost and what it contributed. It is written in Rust, ships as a single binary with an

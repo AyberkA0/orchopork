@@ -13,9 +13,11 @@
 </p>
 
 > [!NOTE]
-> **A personal research project.** I built orchopork because I needed it: for my own research into how well LLM
-> orchestration actually works, and for my own pipelines. It is shaped by that use first, and shared as open
-> source in case it helps others asking the same questions. See [why this exists](#why-this-exists).
+> **An unfinished personal research project.** I built orchopork because I needed it: for my own research into how
+> well LLM orchestration actually works, and for my own pipelines. It is shaped by that use first, and shared as
+> open source in case it helps others asking the same questions. It is still in progress: several patterns are not
+> built yet, and features, file formats and the CLI may change without notice. See
+> [why this exists](#why-this-exists) and [where it is going](#where-it-is-going).
 
 orchopork lets Claude, Gemini, DeepSeek, ChatGPT, Mistral, Qwen and any other model, local or cloud, API or CLI
 agent, work together on the same task. You compose the orchestration out of nodes, run it, and get detailed

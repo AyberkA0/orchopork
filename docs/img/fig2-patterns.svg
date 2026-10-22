@@ -62,7 +62,7 @@
   <text class="mono mute cap" x="256" y="264">loops back on failure</text>
 
   <!-- 03 fan-out -->
-  <rect x="456.5" y="72.5" width="9" height="9" fill="none" stroke="#231f20"/>
+  <rect x="456" y="72" width="10" height="10" class="p"/>
   <text class="mono mute num" x="474" y="81">03</text>
   <text class="sans ink name" x="496" y="82">fan-out / fan-in</text>
   <g class="e">
@@ -72,7 +72,7 @@
   <circle class="n" cx="480" cy="166" r="9"/>
   <circle class="n" cx="540" cy="118" r="7"/><circle class="n" cx="540" cy="166" r="7"/><circle class="n" cx="540" cy="214" r="7"/>
   <circle class="n" cx="606" cy="166" r="9" style="stroke:#f37e8f;stroke-width:2"/>
-  <text class="mono mute cap" x="456" y="264">parallel work, one merge</text>
+  <text class="mono mute cap" x="456" y="264">split, then merge back</text>
 
   <!-- 04 debate -->
   <rect x="656.5" y="72.5" width="9" height="9" fill="none" stroke="#231f20"/>
@@ -119,7 +119,7 @@
   <text class="mono mute cap" x="456" y="492">until the bar is met</text>
 
   <!-- 08 blackboard -->
-  <rect x="656.5" y="300.5" width="9" height="9" fill="none" stroke="#231f20"/>
+  <rect x="656" y="300" width="10" height="10" class="p"/>
   <text class="mono mute num" x="674" y="309">08</text>
   <text class="sans ink name" x="696" y="310">blackboard</text>
   <rect x="712" y="370" width="56" height="48" fill="none" stroke="#f37e8f" stroke-width="2"/>
@@ -129,5 +129,5 @@
   </g>
   <circle class="n" cx="680" cy="348" r="7"/><circle class="n" cx="800" cy="348" r="7"/>
   <circle class="n" cx="680" cy="440" r="7"/><circle class="n" cx="800" cy="440" r="7"/>
-  <text class="mono mute cap" x="656" y="492">shared state, take a turn</text>
+  <text class="mono mute cap" x="656" y="492">shared worktree and reports</text>
 </svg>

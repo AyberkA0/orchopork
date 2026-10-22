@@ -55,25 +55,26 @@ orchopork has two goals:
 - **Nodes.** A node is an agent: a model (any provider, or an external agent such as Claude Code), a role, a task
   and the tools it may use. Nodes do not care which vendor sits behind them; they all speak the same text
   protocol.
-- **Patterns.** Nodes are wired into an orchestration. Today that is a chain-of-command tree and the classic
-  plan-act-verify-review pipeline; the rest of the pattern library is on the roadmap.
+- **Patterns.** Nodes are wired into an orchestration. Today that is a chain-of-command tree, which
+  also gives fan-out / fan-in and a blackboard-style shared state, plus the classic plan-act-verify-review
+  pipeline; the rest of the pattern library is on the roadmap.
 
 ## Orchestration patterns
 
 <p align="center">
-  <img src="docs/img/patterns.svg" alt="Eight orchestration patterns: hierarchy and pipeline are available; fan-out, debate, ensemble voting, router, evaluator loop and blackboard are planned" width="100%">
+  <img src="docs/img/fig2-patterns.svg" alt="Eight orchestration patterns: hierarchy, pipeline, fan-out / fan-in and blackboard are available; debate, ensemble voting, router and evaluator loop are planned" width="100%">
 </p>
 
 | Pattern           | Status    | Shape                                                                         |
 |-------------------|-----------|-------------------------------------------------------------------------------|
 | Hierarchy         | available | A lead commands agents, who may command agents. Work flows bottom-up.          |
 | Pipeline          | available | plan, act, verify, review, with loops back on failure.                         |
-| Fan-out / fan-in  | planned   | Independent workers in parallel, one node merges.                              |
+| Fan-out / fan-in  | available | A commander splits the work among subordinates and merges their reports. Agents take turns; truly parallel branches are planned. |
 | Debate            | planned   | Agents critique each other for N rounds; a judge decides.                      |
 | Ensemble / vote   | planned   | The same task to several models; majority or a scorer picks.                  |
 | Router            | planned   | A cheap classifier sends each task to the cheapest model that can handle it.   |
 | Evaluator loop    | planned   | A maker and a judge iterate until a bar is met (reflection).                   |
-| Blackboard        | planned   | Agents read and write a shared state and act when they can contribute.         |
+| Blackboard        | available | Agents share one worktree and see each other's reports as they arrive. Turn order follows the tree; opportunistic turns are planned. |
 
 The point of having all of them in one harness is that they can be compared on equal terms: same tasks, same
 models, same accounting.
@@ -109,7 +110,9 @@ Roadmap, roughly in order:
 - [x] External agents over ACP (Claude Code, Gemini CLI, Codex)
 - [x] Prompt caching and per-agent token/cost metrics
 - [x] Agent contracts (owned files, acceptance criteria, verify commands) and team templates
-- [ ] Pattern library: fan-out, debate, voting, router, evaluator loop, blackboard
+- [x] Fan-out / fan-in and blackboard-style shared state, through the orchestra tree
+- [ ] Pattern library: debate, voting, router, evaluator loop
+- [ ] Parallel fan-out branches and opportunistic blackboard turns
 - [ ] Free-form node graph (any pattern, not only trees)
 - [ ] Benchmark mode: one goal, many orchestrations, a comparison report
 - [ ] Remote orchopork nodes and cross-server orchestration

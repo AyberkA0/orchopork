@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 470" width="880" height="470" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect width="880" height="470" rx="14" fill="#f7f6f3"/>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#6b6a66"/>
+    </marker>
+    <style>
+      .card{fill:#ffffff;stroke:#d8d5ce}
+      .t{font-size:14px;font-weight:600;fill:#1f1e1c}
+      .s{font-size:11px;fill:#8a8882}
+      .n{fill:#2e2c29;stroke:#c9a46b;stroke-width:1.5}
+      .m{fill:#c9a46b}
+      .e{stroke:#6b6a66;stroke-width:1.3;fill:none}
+      .ea{stroke:#6b6a66;stroke-width:1.3;fill:none;marker-end:url(#a)}
+      .tag{font-size:10px;font-weight:700;letter-spacing:.8px}
+    </style>
+  </defs>
+
+  <!-- row 1 -->
+  <!-- hierarchy (available) -->
+  <rect class="card" x="24" y="24" width="196" height="200" rx="10"/>
+  <text class="t" x="40" y="50">Hierarchy</text>
+  <text class="tag" x="204" y="50" text-anchor="end" fill="#3c7a4a">AVAILABLE</text>
+  <line class="e" x1="122" y1="92" x2="82" y2="142"/><line class="e" x1="122" y1="92" x2="162" y2="142"/>
+  <line class="e" x1="82" y1="142" x2="58" y2="188"/><line class="e" x1="82" y1="142" x2="106" y2="188"/><line class="e" x1="162" y1="142" x2="162" y2="188"/>
+  <circle class="n" cx="122" cy="92" r="13"/><circle class="n" cx="82" cy="142" r="10"/><circle class="n" cx="162" cy="142" r="10"/>
+  <circle class="n" cx="58" cy="188" r="8"/><circle class="n" cx="106" cy="188" r="8"/><circle class="n" cx="162" cy="188" r="8"/>
+  <text class="s" x="40" y="214">chain of command, bottom-up</text>
+
+  <!-- pipeline (available) -->
+  <rect class="card" x="236" y="24" width="196" height="200" rx="10"/>
+  <text class="t" x="252" y="50">Pipeline</text>
+  <text class="tag" x="416" y="50" text-anchor="end" fill="#3c7a4a">AVAILABLE</text>
+  <circle class="n" cx="262" cy="130" r="10"/><circle class="n" cx="310" cy="130" r="10"/><circle class="n" cx="358" cy="130" r="10"/><circle class="n" cx="406" cy="130" r="10"/>
+  <line class="ea" x1="273" y1="130" x2="297" y2="130"/><line class="ea" x1="321" y1="130" x2="345" y2="130"/><line class="ea" x1="369" y1="130" x2="393" y2="130"/>
+  <path class="ea" d="M406 142 C 406 172, 310 172, 310 144"/>
+  <text class="s" x="252" y="214">plan, act, verify, review</text>
+
+  <!-- fan-out (planned) -->
+  <rect class="card" x="448" y="24" width="196" height="200" rx="10"/>
+  <text class="t" x="464" y="50">Fan-out / fan-in</text>
+  <text class="tag" x="628" y="50" text-anchor="end" fill="#a06a1c">PLANNED</text>
+  <circle class="n" cx="480" cy="130" r="11"/>
+  <circle class="n" cx="546" cy="88" r="9"/><circle class="n" cx="546" cy="130" r="9"/><circle class="n" cx="546" cy="172" r="9"/>
+  <circle class="n" cx="612" cy="130" r="11"/>
+  <line class="e" x1="490" y1="125" x2="537" y2="92"/><line class="e" x1="491" y1="130" x2="537" y2="130"/><line class="e" x1="490" y1="135" x2="537" y2="168"/>
+  <line class="e" x1="555" y1="92" x2="602" y2="125"/><line class="e" x1="555" y1="130" x2="601" y2="130"/><line class="e" x1="555" y1="168" x2="602" y2="135"/>
+  <text class="s" x="464" y="214">parallel workers, one merger</text>
+
+  <!-- debate (planned) -->
+  <rect class="card" x="660" y="24" width="196" height="200" rx="10"/>
+  <text class="t" x="676" y="50">Debate</text>
+  <text class="tag" x="840" y="50" text-anchor="end" fill="#a06a1c">PLANNED</text>
+  <circle class="n" cx="712" cy="110" r="11"/><circle class="n" cx="804" cy="110" r="11"/>
+  <path class="ea" d="M724 104 C 750 88, 766 88, 792 104"/><path class="ea" d="M792 116 C 766 132, 750 132, 724 116"/>
+  <circle class="m" cx="758" cy="178" r="11"/>
+  <line class="e" x1="716" y1="121" x2="750" y2="170"/><line class="e" x1="800" y1="121" x2="766" y2="170"/>
+  <text class="s" x="676" y="214">rounds of critique, a judge</text>
+
+  <!-- row 2 -->
+  <!-- voting -->
+  <rect class="card" x="24" y="244" width="196" height="200" rx="10"/>
+  <text class="t" x="40" y="270">Ensemble / vote</text>
+  <text class="tag" x="204" y="270" text-anchor="end" fill="#a06a1c">PLANNED</text>
+  <circle class="n" cx="62" cy="320" r="9"/><circle class="n" cx="102" cy="320" r="9"/><circle class="n" cx="142" cy="320" r="9"/><circle class="n" cx="182" cy="320" r="9"/>
+  <rect class="m" x="104" y="384" width="36" height="20" rx="4"/>
+  <line class="e" x1="65" y1="329" x2="112" y2="384"/><line class="e" x1="104" y1="329" x2="118" y2="384"/><line class="e" x1="140" y1="329" x2="126" y2="384"/><line class="e" x1="179" y1="329" x2="132" y2="384"/>
+  <text class="s" x="40" y="434">same task, many models</text>
+
+  <!-- router -->
+  <rect class="card" x="236" y="244" width="196" height="200" rx="10"/>
+  <text class="t" x="252" y="270">Router</text>
+  <text class="tag" x="416" y="270" text-anchor="end" fill="#a06a1c">PLANNED</text>
+  <polygon class="m" points="280,350 298,332 316,350 298,368"/>
+  <circle class="n" cx="390" cy="306" r="9"/><circle class="n" cx="390" cy="350" r="9"/><circle class="n" cx="390" cy="394" r="9"/>
+  <line class="ea" x1="316" y1="346" x2="379" y2="309"/><line class="e" x1="316" y1="350" x2="380" y2="350" stroke-dasharray="3 3"/><line class="e" x1="316" y1="354" x2="380" y2="391" stroke-dasharray="3 3"/>
+  <text class="s" x="252" y="434">cheapest model that can do it</text>
+
+  <!-- evaluator-optimizer -->
+  <rect class="card" x="448" y="244" width="196" height="200" rx="10"/>
+  <text class="t" x="464" y="270">Evaluator loop</text>
+  <text class="tag" x="628" y="270" text-anchor="end" fill="#a06a1c">PLANNED</text>
+  <circle class="n" cx="500" cy="346" r="12"/><circle class="m" cx="594" cy="346" r="12"/>
+  <path class="ea" d="M510 336 C 530 306, 566 306, 584 334"/><path class="ea" d="M584 358 C 566 386, 530 386, 510 358"/>
+  <text class="s" x="487" y="410">maker</text><text class="s" x="576" y="410">judge</text>
+  <text class="s" x="464" y="434">reflect until the bar is met</text>
+
+  <!-- blackboard -->
+  <rect class="card" x="660" y="244" width="196" height="200" rx="10"/>
+  <text class="t" x="676" y="270">Blackboard</text>
+  <text class="tag" x="840" y="270" text-anchor="end" fill="#a06a1c">PLANNED</text>
+  <rect x="726" y="326" width="64" height="40" rx="4" fill="#efe7d8" stroke="#c9a46b"/>
+  <circle class="n" cx="700" cy="304" r="9"/><circle class="n" cx="816" cy="304" r="9"/><circle class="n" cx="700" cy="390" r="9"/><circle class="n" cx="816" cy="390" r="9"/>
+  <line class="e" x1="708" y1="310" x2="726" y2="328"/><line class="e" x1="808" y1="310" x2="790" y2="328"/><line class="e" x1="708" y1="384" x2="726" y2="364"/><line class="e" x1="808" y1="384" x2="790" y2="364"/>
+  <text class="s" x="676" y="434">shared state, opportunistic agents</text>
+</svg>

@@ -12,6 +12,11 @@
   <a href="https://buymeabitcoffee.vercel.app/btc/bc1qhae9un6j8mel5xcrd4trajm65wfunlltkzelh7?identifier=Buy+Me+a+Coffee"><img src="https://img.shields.io/badge/☕%20Buy%20Me%20a%20Coffee-Donate-f7931a?style=for-the-badge&logo=bitcoin&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
 
+> [!NOTE]
+> **A personal research project.** I built orchopork because I needed it: for my own research into how well LLM
+> orchestration actually works, and for my own pipelines. It is shaped by that use first, and shared as open
+> source in case it helps others asking the same questions. See [why this exists](#why-this-exists).
+
 orchopork lets Claude, Gemini, DeepSeek, ChatGPT, Mistral, Qwen and any other model, local or cloud, API or CLI
 agent, work together on the same task. You compose the orchestration out of nodes, run it, and get detailed
 metrics on what each node cost and what it contributed. It is written in Rust, ships as a single binary with an

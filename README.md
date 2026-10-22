@@ -37,6 +37,12 @@ orchopork has two goals:
    is not *"can a team of agents do this?"* but *"when does a team beat a single agent, by how much, and how do we
    make that gap bigger?"*
 
+orchopork started as a tool for my own research into these questions, built to run my experiments and my own
+pipelines. I am sharing it with the open-source community because the questions are not mine alone: anyone
+building with several models runs into them. If you use it to test an orchestration of your own, compare
+patterns, or find a case where a team clearly wins or clearly loses, I would like to hear about it; issues and
+pull requests are welcome.
+
 ## The idea in three layers
 
 ```text

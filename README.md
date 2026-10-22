@@ -1,6 +1,12 @@
-# orchopork
+<p align="center">
+  <img src="docs/img/logo.png" alt="orchopork logo" width="160">
+</p>
 
-**A harness built for orchestrating many different LLMs as one team, and for measuring whether that team is worth it.**
+<h1 align="center">orchopork</h1>
+
+<p align="center">
+  <strong>A harness built for orchestrating many different LLMs as one team, and for measuring whether that team is worth it.</strong>
+</p>
 
 orchopork lets Claude, Gemini, DeepSeek, ChatGPT, Mistral, Qwen and any other model, local or cloud, API or CLI
 agent, work together on the same task. You compose the orchestration out of nodes, run it, and get detailed

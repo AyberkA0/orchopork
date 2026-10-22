@@ -1,71 +1,86 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 400" width="880" height="400" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <rect width="880" height="400" rx="14" fill="#f7f6f3"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 400" width="880" height="400">
   <defs>
-    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0 0L10 5L0 10z" fill="#6b6a66"/>
-    </marker>
+    <style>
+      .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+      .sans{font-family:ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+      .ink{fill:#231f20}
+      .mute{fill:#8c8686}
+      .wire{stroke:#231f20;stroke-width:1.1;fill:none}
+      .edge{stroke:#231f20;stroke-width:1.25}
+      .node{fill:#f7f6f3;stroke:#231f20;stroke-width:1.25}
+    </style>
   </defs>
+  <rect width="880" height="400" fill="#f7f6f3"/>
 
-  <!-- left: models -->
-  <text x="40" y="44" font-size="13" font-weight="600" fill="#6b6a66" letter-spacing="1">MODELS AND AGENTS</text>
-  <g font-size="14" fill="#1f1e1c">
-    <rect x="40" y="62" width="180" height="34" rx="8" fill="#ffffff" stroke="#d8d5ce"/><text x="56" y="84">Claude</text><text x="206" y="84" text-anchor="end" font-size="11" fill="#8a8882">cloud</text>
-    <rect x="40" y="104" width="180" height="34" rx="8" fill="#ffffff" stroke="#d8d5ce"/><text x="56" y="126">Gemini</text><text x="206" y="126" text-anchor="end" font-size="11" fill="#8a8882">cloud</text>
-    <rect x="40" y="146" width="180" height="34" rx="8" fill="#ffffff" stroke="#d8d5ce"/><text x="56" y="168">DeepSeek</text><text x="206" y="168" text-anchor="end" font-size="11" fill="#8a8882">cloud</text>
-    <rect x="40" y="188" width="180" height="34" rx="8" fill="#ffffff" stroke="#d8d5ce"/><text x="56" y="210">ChatGPT / Mistral</text><text x="206" y="210" text-anchor="end" font-size="11" fill="#8a8882">api</text>
-    <rect x="40" y="230" width="180" height="34" rx="8" fill="#ffffff" stroke="#d8d5ce"/><text x="56" y="252">Qwen (Ollama)</text><text x="206" y="252" text-anchor="end" font-size="11" fill="#8a8882">local</text>
-    <rect x="40" y="272" width="180" height="34" rx="8" fill="#ffffff" stroke="#d8d5ce"/><text x="56" y="294">llama.cpp / vLLM</text><text x="206" y="294" text-anchor="end" font-size="11" fill="#8a8882">local</text>
-    <rect x="40" y="314" width="180" height="34" rx="8" fill="#ffffff" stroke="#d8d5ce"/><text x="56" y="336" font-size="13">Claude Code, Codex</text><text x="206" y="336" text-anchor="end" font-size="11" fill="#8a8882">ACP</text>
-  </g>
+  <!-- caption -->
+  <text class="mono mute" x="40" y="40" font-size="11">fig. 1</text>
+  <text class="mono ink" x="90" y="40" font-size="11">many models, one team</text>
+  <line x1="40" y1="54" x2="840" y2="54" stroke="#231f20" stroke-width="0.6"/>
 
-  <g stroke="#6b6a66" stroke-width="1.4" fill="none" marker-end="url(#a)">
-    <path d="M222 79 C 260 79, 262 200, 300 200"/>
-    <path d="M222 121 C 255 121, 262 200, 300 200"/>
-    <path d="M222 163 C 250 163, 262 200, 300 200"/>
-    <path d="M222 205 L 300 205"/>
-    <path d="M222 247 C 250 247, 262 210, 300 210"/>
-    <path d="M222 289 C 255 289, 262 210, 300 210"/>
-    <path d="M222 331 C 260 331, 262 210, 300 210"/>
+  <!-- models -->
+  <g class="mono ink" font-size="13">
+    <text x="40" y="96">claude</text>
+    <text x="40" y="126">gemini</text>
+    <text x="40" y="156">deepseek</text>
+    <text x="40" y="186">chatgpt</text>
+    <text x="40" y="216">mistral</text>
+    <text x="40" y="246">jev</text>
+    <text x="40" y="276">qwen</text>
+    <text x="40" y="306">llama.cpp</text>
+    <text x="40" y="336">claude code</text>
   </g>
+  <g class="wire">
+    <path d="M150 92 H 176 C 220 92, 232 196, 270 196"/>
+    <path d="M150 122 H 176 C 214 122, 232 197, 270 197"/>
+    <path d="M150 152 H 176 C 208 152, 232 198, 270 198"/>
+    <path d="M150 182 H 176 C 204 182, 236 199, 270 199"/>
+    <path d="M150 212 H 176 C 204 212, 236 201, 270 201"/>
+    <path d="M150 242 H 176 C 208 242, 232 202, 270 202"/>
+    <path d="M150 272 H 176 C 214 272, 232 203, 270 203"/>
+    <path d="M150 302 H 176 C 220 302, 232 204, 270 204"/>
+    <path d="M150 332 H 176 C 226 332, 232 205, 270 205"/>
+  </g>
+  <line class="edge" x1="270" y1="200" x2="424" y2="128"/>
+  <circle cx="270" cy="200" r="2.5" class="ink"/>
 
-  <!-- center: orchopork -->
-  <rect x="302" y="62" width="300" height="286" rx="14" fill="#1f1e1c"/>
-  <text x="452" y="94" text-anchor="middle" font-size="20" font-weight="700" fill="#f7f6f3">orchopork</text>
-  <text x="452" y="114" text-anchor="middle" font-size="12" fill="#b9b6ae">a harness built for orchestration</text>
+  <!-- graph -->
+  <g class="edge">
+    <line x1="440" y1="120" x2="384" y2="200"/>
+    <line x1="440" y1="120" x2="508" y2="200"/>
+    <line x1="384" y1="200" x2="344" y2="276"/>
+    <line x1="384" y1="200" x2="412" y2="276"/>
+    <line x1="508" y1="200" x2="480" y2="276"/>
+    <line x1="508" y1="200" x2="548" y2="276"/>
+  </g>
+  <circle cx="440" cy="120" r="18" fill="#f37e8f"/>
+  <circle class="node" cx="384" cy="200" r="11"/>
+  <circle class="node" cx="508" cy="200" r="11"/>
+  <circle class="node" cx="344" cy="276" r="7"/>
+  <circle class="node" cx="412" cy="276" r="7"/>
+  <circle class="node" cx="480" cy="276" r="7"/>
+  <circle class="node" cx="548" cy="276" r="7"/>
+  <text class="mono mute" x="466" y="116" font-size="11">lead</text>
 
-  <!-- small node graph -->
-  <g stroke="#c9a46b" stroke-width="1.6">
-    <line x1="452" y1="158" x2="392" y2="214"/>
-    <line x1="452" y1="158" x2="512" y2="214"/>
-    <line x1="392" y1="214" x2="352" y2="268"/>
-    <line x1="392" y1="214" x2="432" y2="268"/>
-    <line x1="512" y1="214" x2="552" y2="268"/>
-  </g>
-  <g fill="#2e2c29" stroke="#c9a46b" stroke-width="1.6">
-    <circle cx="452" cy="158" r="21"/>
-    <circle cx="392" cy="214" r="14"/>
-    <circle cx="512" cy="214" r="14"/>
-    <circle cx="352" cy="268" r="11"/>
-    <circle cx="432" cy="268" r="11"/>
-    <circle cx="552" cy="268" r="11"/>
-  </g>
-  <text x="452" y="163" text-anchor="middle" font-size="11" font-weight="700" fill="#f7f6f3">lead</text>
-  <text x="452" y="318" text-anchor="middle" font-size="12" fill="#b9b6ae">nodes  /  patterns  /  budget  /  checkpoints</text>
+  <text class="sans ink" x="446" y="334" font-size="18" font-weight="700" text-anchor="middle">orchopork</text>
+  <text class="mono mute" x="446" y="354" font-size="11" text-anchor="middle">nodes / budget / checkpoints</text>
 
-  <g stroke="#6b6a66" stroke-width="1.4" fill="none" marker-end="url(#a)">
-    <path d="M604 140 L 668 110"/>
-    <path d="M604 205 L 668 205"/>
-    <path d="M604 270 L 668 300"/>
+  <!-- outputs -->
+  <g class="wire">
+    <path d="M580 200 C 610 200, 610 110, 640 110"/>
+    <path d="M580 200 H 640"/>
+    <path d="M580 200 C 610 200, 610 290, 640 290"/>
   </g>
+  <circle cx="580" cy="200" r="2.5" class="ink"/>
 
-  <!-- right: outputs -->
-  <text x="672" y="44" font-size="13" font-weight="600" fill="#6b6a66" letter-spacing="1">WHAT YOU GET</text>
-  <g font-size="14" fill="#1f1e1c">
-    <rect x="672" y="78" width="170" height="62" rx="8" fill="#ffffff" stroke="#d8d5ce"/>
-    <text x="688" y="104" font-weight="600">Result</text><text x="688" y="124" font-size="12" fill="#6b6a66">a git branch to review</text>
-    <rect x="672" y="174" width="170" height="62" rx="8" fill="#ffffff" stroke="#d8d5ce"/>
-    <text x="688" y="200" font-weight="600">Metrics</text><text x="688" y="220" font-size="12" fill="#6b6a66">tokens, cache, cost, turns</text>
-    <rect x="672" y="270" width="170" height="62" rx="8" fill="#ffffff" stroke="#d8d5ce"/>
-    <text x="688" y="296" font-weight="600">Evidence</text><text x="688" y="316" font-size="12" fill="#6b6a66">did orchestration pay off?</text>
-  </g>
+  <rect x="650" y="94" width="4" height="34" fill="#f37e8f"/>
+  <text class="sans ink" x="666" y="108" font-size="14" font-weight="600">a branch</text>
+  <text class="mono mute" x="666" y="126" font-size="11">git, reviewable</text>
+
+  <rect x="650" y="184" width="4" height="34" fill="#f37e8f"/>
+  <text class="sans ink" x="666" y="198" font-size="14" font-weight="600">numbers</text>
+  <text class="mono mute" x="666" y="216" font-size="11">tokens, cache, cost, turns</text>
+
+  <rect x="650" y="274" width="4" height="34" fill="#f37e8f"/>
+  <text class="sans ink" x="666" y="288" font-size="14" font-weight="600">an answer</text>
+  <text class="mono mute" x="666" y="306" font-size="11">was the team worth it?</text>
 </svg>

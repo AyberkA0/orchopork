@@ -1,60 +1,67 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 330" width="880" height="330" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <rect width="880" height="330" rx="14" fill="#f7f6f3"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 360" width="880" height="360">
   <defs>
     <style>
-      .srv{fill:#ffffff;stroke:#d8d5ce}
-      .core{fill:#1f1e1c}
-      .t{font-size:14px;font-weight:600;fill:#1f1e1c}
-      .tw{font-size:14px;font-weight:700;fill:#f7f6f3}
-      .s{font-size:11px;fill:#8a8882}
-      .sw{font-size:11px;fill:#b9b6ae}
-      .link{stroke:#c9a46b;stroke-width:1.8;stroke-dasharray:6 5;fill:none}
-      .chip{fill:#efe7d8;stroke:#c9a46b}
-      .ct{font-size:11px;fill:#5a4a2c}
+      .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+      .sans{font-family:ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+      .ink{fill:#231f20}
+      .mute{fill:#8c8686}
+      .box{fill:#f7f6f3;stroke:#231f20;stroke-width:1.25}
+      .link{stroke:#231f20;stroke-width:1.1;stroke-dasharray:4 4;fill:none}
+      .slot{stroke:#231f20;stroke-width:0.6}
     </style>
   </defs>
+  <rect width="880" height="360" fill="#f7f6f3"/>
 
-  <text x="440" y="34" text-anchor="middle" font-size="13" font-weight="600" fill="#6b6a66" letter-spacing="1">FINAL GOAL: ORCHOPORK INSTANCES ORCHESTRATING EACH OTHER</text>
+  <text class="mono mute" x="40" y="40" font-size="11">fig. 3</text>
+  <text class="mono ink" x="90" y="40" font-size="11">where it is going: orchopork orchestrating orchopork</text>
+  <line x1="40" y1="54" x2="840" y2="54" stroke="#231f20" stroke-width="0.6"/>
 
   <!-- links -->
-  <path class="link" d="M340 170 L 228 108"/>
-  <path class="link" d="M340 190 L 228 250"/>
-  <path class="link" d="M540 170 L 652 108"/>
-  <path class="link" d="M540 190 L 652 250"/>
+  <path class="link" d="M230 126 H 300 V 190 H 360"/>
+  <path class="link" d="M230 266 H 300 V 214 H 360"/>
+  <path class="link" d="M650 126 H 580 V 190 H 520"/>
+  <path class="link" d="M650 266 H 580 V 214 H 520"/>
 
   <!-- coordinator -->
-  <rect class="core" x="340" y="130" width="200" height="100" rx="12"/>
-  <text class="tw" x="440" y="166" text-anchor="middle">orchopork</text>
-  <text class="sw" x="440" y="186" text-anchor="middle">coordinator</text>
-  <text class="sw" x="440" y="206" text-anchor="middle">plans across machines</text>
+  <rect x="360" y="160" width="160" height="84" fill="#f37e8f"/>
+  <text class="sans ink" x="440" y="198" font-size="16" font-weight="700" text-anchor="middle">orchopork</text>
+  <text class="mono ink" x="440" y="218" font-size="11" text-anchor="middle">coordinator</text>
 
-  <!-- servers -->
+  <!-- machine helper: header bar + model lines -->
   <g>
-    <rect class="srv" x="40" y="56" width="188" height="100" rx="10"/>
-    <text class="t" x="56" y="82">GPU server A</text>
-    <text class="s" x="56" y="100">orchopork node</text>
-    <rect class="chip" x="56" y="114" width="70" height="24" rx="5"/><text class="ct" x="91" y="130" text-anchor="middle">qwen 32b</text>
-    <rect class="chip" x="134" y="114" width="78" height="24" rx="5"/><text class="ct" x="173" y="130" text-anchor="middle">deepseek</text>
+    <rect class="box" x="40" y="80" width="190" height="92"/>
+    <line class="slot" x1="40" y1="104" x2="230" y2="104"/>
+    <text class="mono ink" x="52" y="97" font-size="12">gpu-server-a</text>
+    <circle cx="218" cy="92" r="3" fill="#f37e8f"/>
+    <text class="mono mute" x="52" y="128" font-size="11">- qwen 32b</text>
+    <text class="mono mute" x="52" y="146" font-size="11">- deepseek</text>
+    <text class="mono mute" x="52" y="164" font-size="11">- jev</text>
   </g>
   <g>
-    <rect class="srv" x="40" y="204" width="188" height="100" rx="10"/>
-    <text class="t" x="56" y="230">Workstation</text>
-    <text class="s" x="56" y="248">orchopork node</text>
-    <rect class="chip" x="56" y="262" width="70" height="24" rx="5"/><text class="ct" x="91" y="278" text-anchor="middle">mistral</text>
-    <rect class="chip" x="134" y="262" width="78" height="24" rx="5"/><text class="ct" x="173" y="278" text-anchor="middle">llama.cpp</text>
+    <rect class="box" x="40" y="220" width="190" height="92"/>
+    <line class="slot" x1="40" y1="244" x2="230" y2="244"/>
+    <text class="mono ink" x="52" y="237" font-size="12">workstation</text>
+    <circle cx="218" cy="232" r="3" fill="#f37e8f"/>
+    <text class="mono mute" x="52" y="268" font-size="11">- mistral</text>
+    <text class="mono mute" x="52" y="286" font-size="11">- llama.cpp</text>
   </g>
   <g>
-    <rect class="srv" x="652" y="56" width="188" height="100" rx="10"/>
-    <text class="t" x="668" y="82">Cloud VM</text>
-    <text class="s" x="668" y="100">orchopork node</text>
-    <rect class="chip" x="668" y="114" width="70" height="24" rx="5"/><text class="ct" x="703" y="130" text-anchor="middle">claude</text>
-    <rect class="chip" x="746" y="114" width="78" height="24" rx="5"/><text class="ct" x="785" y="130" text-anchor="middle">gemini</text>
+    <rect class="box" x="650" y="80" width="190" height="92"/>
+    <line class="slot" x1="650" y1="104" x2="840" y2="104"/>
+    <text class="mono ink" x="662" y="97" font-size="12">cloud-vm</text>
+    <circle cx="828" cy="92" r="3" fill="#f37e8f"/>
+    <text class="mono mute" x="662" y="128" font-size="11">- claude</text>
+    <text class="mono mute" x="662" y="146" font-size="11">- gemini</text>
+    <text class="mono mute" x="662" y="164" font-size="11">- chatgpt</text>
   </g>
   <g>
-    <rect class="srv" x="652" y="204" width="188" height="100" rx="10"/>
-    <text class="t" x="668" y="230">Laptop</text>
-    <text class="s" x="668" y="248">orchopork node</text>
-    <rect class="chip" x="668" y="262" width="86" height="24" rx="5"/><text class="ct" x="711" y="278" text-anchor="middle">claude code</text>
-    <rect class="chip" x="762" y="262" width="62" height="24" rx="5"/><text class="ct" x="793" y="278" text-anchor="middle">codex</text>
+    <rect class="box" x="650" y="220" width="190" height="92"/>
+    <line class="slot" x1="650" y1="244" x2="840" y2="244"/>
+    <text class="mono ink" x="662" y="237" font-size="12">laptop</text>
+    <circle cx="828" cy="232" r="3" fill="#f37e8f"/>
+    <text class="mono mute" x="662" y="268" font-size="11">- claude code</text>
+    <text class="mono mute" x="662" y="286" font-size="11">- codex</text>
   </g>
+
+  <text class="mono mute" x="440" y="336" font-size="11" text-anchor="middle">each machine runs its own orchopork and its own models</text>
 </svg>

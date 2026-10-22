@@ -133,8 +133,8 @@ impl Inner {
         let out = self.external_turn(cfg, run, model, &name, prompt).await?;
         let mut next = RunState { failures: 0, escalate: false, ..state };
         if !out.cancelled {
-            let skills = self.ws.skills.compose("")?;
-            next.phase = if !verify_commands(run, &skills).is_empty() {
+            let skills = self.ws.skills.compose_for("", &crate::skills::Scope::of(&["solo"]))?;
+            next.phase = if !verify_commands(cfg, run, &skills).is_empty() {
                 Phase::Verify
             } else if cfg.routing.critic.is_some() {
                 Phase::Review

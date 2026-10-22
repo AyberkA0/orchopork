@@ -10,11 +10,16 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("explain-like-principal.yaml", include_str!("../../assets/skills/explain-like-principal.yaml")),
     ("test-driven-loop.yaml", include_str!("../../assets/skills/test-driven-loop.yaml")),
     ("markdown-memory-sync.yaml", include_str!("../../assets/skills/markdown-memory-sync.yaml")),
+    ("team-bugfix.yaml", include_str!("../../assets/skills/team-bugfix.yaml")),
+    ("team-feature.yaml", include_str!("../../assets/skills/team-feature.yaml")),
+    ("team-refactor.yaml", include_str!("../../assets/skills/team-refactor.yaml")),
 ];
 
 /// Enabled on a workspace's first run. Kept short on purpose: every enabled
 /// modifier costs context on every call, which small local models feel.
-pub const DEFAULT_ENABLED: &[&str] = &["anti-sycophancy-terse", "test-driven-loop"];
+/// Team templates cost context only in the one team-design call.
+pub const DEFAULT_ENABLED: &[&str] =
+    &["anti-sycophancy-terse", "test-driven-loop", "team-bugfix", "team-feature", "team-refactor"];
 
 #[derive(Debug, Default)]
 pub struct LoadReport {

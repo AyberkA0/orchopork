@@ -40,6 +40,7 @@ use crate::error::{Error, Result};
 use crate::fsutil::clip;
 use crate::git::GitRepo;
 use crate::providers::{CallOutcome, CompletionRequest, Message, ProviderId};
+use crate::skills::{ComposedPrompt, Scope};
 use crate::storage::{NewStep, Phase, Run, RunMode, RunSpec, RunState, RunStatus, Step, StepKind, now_unix};
 use tools::{MAX_STORED_OUTPUT, ToolBox, run_shell};
 
@@ -499,7 +500,7 @@ impl Inner {
             }
         }
         let notes: Vec<&str> = steps.iter().filter(|s| s.kind == StepKind::Inject).map(|s| s.output.as_str()).collect();
-        let system = self.ws.skills.compose(prompts::PLANNER)?.system;
+        let system = self.ws.skills.compose_for(prompts::PLANNER, &Scope::of(&["planner"]))?.system;
         let input = prompts::planner_input(&run.goal, &notes, &files, &docs);
         let out = self.call(cfg, run, &model, system, vec![Message::user(input)]).await?;
         let next = RunState { phase: Phase::Act, ..state };
@@ -516,7 +517,7 @@ impl Inner {
         if model.provider == ProviderId::Acp {
             return self.act_external(cfg, run, steps, state, &model).await;
         }
-        let skills = self.ws.skills.compose("")?;
+        let skills = self.ws.skills.compose_for("", &Scope::of(&["solo"]))?;
         let toolbox = ToolBox::new(Path::new(&run.worktree), &cfg.limits, skills.tools.clone())?;
         let system =
             format!("{}\n\n{}", prompts::actor_system(&toolbox.describe()), skills.system).trim_end().to_string();
@@ -568,7 +569,7 @@ impl Inner {
                 }
                 Ok(a) if a.tool == "finish" => {
                     meta["tool"] = json!("finish");
-                    next.phase = if !verify_commands(run, &skills).is_empty() {
+                    next.phase = if !verify_commands(cfg, run, &skills).is_empty() {
                         Phase::Verify
                     } else if cfg.routing.critic.is_some() {
                         Phase::Review
@@ -626,29 +627,11 @@ impl Inner {
 
     /// Runs every verification command: (all passed, summary, details).
     async fn run_verification(&self, cfg: &Config, run: &Run) -> Result<(bool, String, String)> {
-        let skills = self.ws.skills.compose("")?;
-        let timeout = Duration::from_secs(cfg.limits.command_timeout_secs.max(1));
-        let mut summary = Vec::new();
-        let mut details = String::new();
-        let mut all_ok = true;
-        let commands = verify_commands(run, &skills);
-        let per_command = MAX_STORED_OUTPUT / commands.len().max(1);
-        for (label, cmd) in &commands {
-            let o = run_shell(Path::new(&run.worktree), cmd, &[], timeout).await;
-            let passed = o.success();
-            all_ok &= passed;
-            let status = match (o.timed_out, o.exit_code) {
-                (true, _) => "timed out".to_string(),
-                (_, Some(c)) => format!("exit {c}"),
-                _ => "killed".to_string(),
-            };
-            summary.push(format!("{} [{label}] {cmd} ({status})", if passed { "PASS" } else { "FAIL" }));
-            details.push_str(&format!("$ {cmd}\n[{status}]\n{}\n\n", clip(&o.output, per_command)));
-        }
-        if commands.is_empty() {
-            summary.push("no verification configured".into());
-        }
-        Ok((all_ok, summary.join("\n"), details.trim_end().to_string()))
+        let skills = self.ws.skills.compose_for("", &final_scope(&run.spec))?;
+        let commands = verify_commands(cfg, run, &skills);
+        let (all_ok, summary, details) = run_checks(cfg, Path::new(&run.worktree), &commands).await;
+        let summary = if commands.is_empty() { "no verification configured".to_string() } else { summary };
+        Ok((all_ok, summary, details))
     }
 
     async fn review(&self, cfg: &Config, run: &Run, steps: &[Step], state: RunState) -> Result<Option<Stop>> {
@@ -670,7 +653,7 @@ impl Inner {
             steps.iter().rev().find(|s| s.kind == StepKind::Verify).and_then(|s| s.observation.as_deref());
         let input =
             prompts::critic_input(&run.goal, plan, summary, verification, &stat, &patch, cfg.context_chars(&model));
-        let system = self.ws.skills.compose(prompts::CRITIC)?.system;
+        let system = self.ws.skills.compose_for(prompts::CRITIC, &Scope::of(&["critic"]))?.system;
         let out = self.call(cfg, run, &model, system, vec![Message::user(input)]).await?;
         let (approve, feedback) = protocol::parse_verdict(&out.text);
         let mut next = state.clone();
@@ -741,8 +724,54 @@ fn call_meta(out: &CallOutcome) -> serde_json::Value {
 
 /// (label, command) pairs gating `finish`: the run's own verify command,
 /// then every enabled validator skill's command.
-fn verify_commands(run: &Run, skills: &crate::skills::ComposedPrompt) -> Vec<(String, String)> {
-    run.verify_command.iter().map(|c| ("run".to_string(), c.clone())).chain(skills.verify_commands()).collect()
+/// Who the final `finish` belongs to: the solo actor, or an orchestra's lead.
+fn final_scope(spec: &RunSpec) -> Scope {
+    match (spec.mode, spec.root()) {
+        (RunMode::Orchestra, Some(r)) => {
+            Scope::agent(true, spec.children(&r.id).next().is_some(), &r.id, &r.name, &r.role)
+        }
+        _ => Scope::of(&["solo"]),
+    }
+}
+
+/// The commands gating the final `finish`: the run's own, the orchestra
+/// lead's `verify` (model-proposed, so only while commands are allowed),
+/// and the validator skills that apply to the final scope.
+fn verify_commands(cfg: &Config, run: &Run, skills: &ComposedPrompt) -> Vec<(String, String)> {
+    let lead = run
+        .spec
+        .root()
+        .filter(|_| run.spec.mode == RunMode::Orchestra && cfg.limits.allow_commands)
+        .and_then(|r| r.verify.as_ref().filter(|c| !c.trim().is_empty()).map(|c| (r.id.clone(), c.clone())));
+    run.verify_command
+        .iter()
+        .map(|c| ("run".to_string(), c.clone()))
+        .chain(lead)
+        .chain(skills.verify_commands())
+        .collect()
+}
+
+/// Runs `commands` in `dir` one after another: (all passed, one summary
+/// line per command, clipped outputs).
+async fn run_checks(cfg: &Config, dir: &Path, commands: &[(String, String)]) -> (bool, String, String) {
+    let timeout = Duration::from_secs(cfg.limits.command_timeout_secs.max(1));
+    let mut summary = Vec::new();
+    let mut details = String::new();
+    let mut all_ok = true;
+    let per_command = MAX_STORED_OUTPUT / commands.len().max(1);
+    for (label, cmd) in commands {
+        let o = run_shell(dir, cmd, &[], timeout).await;
+        let passed = o.success();
+        all_ok &= passed;
+        let status = match (o.timed_out, o.exit_code) {
+            (true, _) => "timed out".to_string(),
+            (_, Some(c)) => format!("exit {c}"),
+            _ => "killed".to_string(),
+        };
+        summary.push(format!("{} [{label}] {cmd} ({status})", if passed { "PASS" } else { "FAIL" }));
+        details.push_str(&format!("$ {cmd}\n[{status}]\n{}\n\n", clip(&o.output, per_command)));
+    }
+    (all_ok, summary.join("\n"), details.trim_end().to_string())
 }
 
 #[cfg(test)]

@@ -1571,6 +1571,9 @@ async function editAgent(ed, id, models) {
   const a = ed.agents.find((x) => x.id === id); if (!a) return;
   const name = h("input", { value: a.name }), role = h("input", { value: a.role, placeholder: "e.g. writes the parser" });
   const task = h("textarea", { rows: 6, value: a.task });
+  const owns = h("input", { value: (a.owns || []).join(", "), class: "mono", placeholder: "e.g. src/parser/, tests/parser.rs (empty: nothing reserved)" });
+  const doneWhen = h("input", { value: a.done_when || "", placeholder: "e.g. the parser tests pass" });
+  const verify = h("input", { value: a.verify || "", class: "mono", placeholder: a.parent ? "e.g. cargo test parser (must pass before the report is accepted)" : "e.g. cargo test (added to the final verification)" });
   const agents = ((S.models && S.models.agents) || []).filter((x) => x.available);
   const inherit = a.parent && ed.worker ? `Team model (${fmtRef(ed.worker)})` : "Inherit the lead model";
   const model = h("select", {}, h("option", { value: "", text: inherit }),
@@ -1593,6 +1596,9 @@ async function editAgent(ed, id, models) {
     h("div", { class: "row" }, h("h2", { class: "grow", text: "Edit agent" }), h("span", { class: "pill", text: rankOf(ed.agents, a.id)[1] })),
     h("label", { text: "Name" }), name, h("label", { text: "Role" }), role,
     h("label", { text: "Task definition" }), task,
+    h("label", { text: "Owns (files, folders/ or globs only this agent's unit may edit)" }), owns,
+    h("label", { text: "Done when" }), doneWhen,
+    h("label", { text: "Verify command (runs only while commands are allowed)" }), verify,
     h("div", { class: "row", style: { gap: "10px" } },
       h("div", { class: "grow" }, h("label", { text: "Model" }), model),
       a.parent && h("div", { class: "grow" }, h("label", { text: "Reports to" }), boss)),
@@ -1604,6 +1610,7 @@ async function editAgent(ed, id, models) {
       h("button", { class: "primary", text: "Save", onclick: () => {
         if (!name.value.trim() || !task.value.trim()) return toast("Name and task are required", true);
         ed.push(); a.name = name.value.trim(); a.role = role.value.trim(); a.task = task.value.trim();
+        a.owns = owns.value.split(/[,\n]/).map((x) => x.trim()).filter(Boolean); a.done_when = doneWhen.value.trim(); a.verify = verify.value.trim() || null;
         const [p, ...rest] = model.value.split(":"); a.model = model.value ? { provider: p, model: rest.join(":"), options: tunedOpts } : null;
         if (a.parent) a.parent = boss.value;
         ed.onChange(); close();
@@ -1775,7 +1782,7 @@ async function viewOrchestraRun(main, id) {
       h("div", { class: "ph" },
         h("div", { class: "row" }, h("b", { class: "grow", text: a.name }), h("span", { class: "pill", text: rankOf(run.spec.agents, a.id)[1] })),
         h("div", { class: "small muted", text: a.role }),
-        h("details", { class: "out" }, h("summary", { text: "task ▾" }), h("pre", { text: a.task })),
+        h("details", { class: "out" }, h("summary", { text: "task ▾" }), h("pre", { text: [a.task, (a.owns || []).length ? `Owns: ${a.owns.join(", ")}` : "", a.done_when ? `Done when: ${a.done_when}` : "", a.verify ? `Verify: ${a.verify}` : ""].filter(Boolean).join("\n\n") })),
         h("div", { class: "small faint", style: { marginTop: "6px" } }, `${st.turns || 0} turns · ${money(st.cost)} · `, h("span", { text: fmtRef(a.model || (a.parent && run.spec.worker_model) || run.spec.model) }),
           subs.length ? ` · commands ${subs.length}` : ""),
         st.tok && st.tok.inTok > 0 && h("div", { class: "small faint", title: "Input tokens read from the prompt cache are billed at a fraction of the normal price", text: statLine(st.tok) })),
@@ -1840,7 +1847,8 @@ async function viewModels(main) {
   S.settingsDirty = false;
   const paintSkills = (list, errors) => skills.replaceChildren(...list.map((s) => h("label", { class: "row", style: { color: "var(--text)", fontSize: "13.5px", alignItems: "flex-start", gap: "10px" } },
     h("input", { type: "checkbox", style: { width: "auto", marginTop: "4px" }, checked: s.enabled, onchange: guard(async (e) => { try { await api("/api/skills/toggle", { body: { name: s.name, on: e.target.checked } }); } catch (x) { e.target.checked = !e.target.checked; throw x; } }) }),
-    h("span", {}, h("b", { text: s.name }), " ", h("span", { class: "pill", text: s.type.replace("_", " ") }), h("div", { class: "small muted", text: s.description })))),
+    h("span", {}, h("b", { text: s.name }), " ", h("span", { class: "pill", text: s.type.replace("_", " ") }), h("div", { class: "small muted", text: s.description }),
+      (s.applies_to || []).length > 0 && h("div", { class: "small faint", text: `for: ${s.applies_to.join(", ")}` })))),
     ...(errors || []).map((x) => h("div", { class: "small bad", text: `${x.path}: ${x.error}` })));
   paintSkills(ws.skills, ws.skill_errors);
 

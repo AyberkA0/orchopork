@@ -11,6 +11,29 @@ pub enum SkillType {
     ToolDefinition,
     /// Checks the actor's replies and/or gates `finish` on a command.
     Validator,
+    /// A starting-point team the orchestra designer adapts when the mission
+    /// fits its `description`. Costs context only in the one design call.
+    TeamTemplate,
+}
+
+/// Who a skill is for. Every entry is a scope tag (`solo`, `planner`,
+/// `critic`, `designer`, `lead`, `commander`, `worker`) or `role:<text>`,
+/// which matches an orchestra agent whose id, name or role contains `<text>`
+/// (case-insensitive). A leading `!` excludes instead. An empty list means
+/// everyone.
+pub const SCOPE_TAGS: &[&str] = &["solo", "planner", "critic", "designer", "lead", "commander", "worker"];
+
+/// One agent of a `team_template`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TemplateAgent {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub task: String,
+    pub parent: Option<String>,
+    pub owns: Vec<String>,
+    pub done_when: String,
 }
 
 /// A tool the agent can call, implemented by a shell command you write.
@@ -62,6 +85,12 @@ pub struct Skill {
     pub tools: Vec<ToolSpec>,
     #[serde(default)]
     pub validator: Option<ValidatorSpec>,
+    /// Scopes this skill applies to (see `SCOPE_TAGS`); empty = all.
+    #[serde(default)]
+    pub applies_to: Vec<String>,
+    /// `team_template` only.
+    #[serde(default)]
+    pub team: Vec<TemplateAgent>,
 }
 
 fn default_priority() -> i32 {
@@ -85,6 +114,20 @@ impl Skill {
         }
         if self.version.trim().is_empty() {
             return Err(Error::Skill(format!("{}: empty version", self.name)));
+        }
+        for a in &self.applies_to {
+            let a = a.strip_prefix('!').unwrap_or(a);
+            let ok = match a.strip_prefix("role:") {
+                Some(r) => !r.trim().is_empty(),
+                None => SCOPE_TAGS.contains(&a),
+            };
+            if !ok {
+                return Err(Error::Skill(format!(
+                    "{}: unknown applies_to entry {a:?} (use {} or role:<text>)",
+                    self.name,
+                    SCOPE_TAGS.join(", ")
+                )));
+            }
         }
         match self.kind {
             SkillType::SystemModifier if self.prompt_injection.trim().is_empty() => {
@@ -120,6 +163,17 @@ impl Skill {
                     self.name
                 ))),
             },
+            SkillType::TeamTemplate => {
+                if self.team.iter().filter(|a| a.parent.is_none()).count() != 1
+                    || self.team.iter().any(|a| a.id.trim().is_empty() || a.task.trim().is_empty())
+                {
+                    return Err(Error::Skill(format!(
+                        "{}: team_template needs a team with exactly one lead (no parent) and an id and task for every agent",
+                        self.name
+                    )));
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

@@ -263,6 +263,7 @@ fn agent(id: &str, parent: Option<&str>, task: &str) -> crate::storage::AgentSpe
         task: task.into(),
         parent: parent.map(Into::into),
         model: None,
+        ..Default::default()
     }
 }
 
@@ -311,6 +312,54 @@ async fn orchestra_works_bottom_up_with_delegation_and_reports() {
             .any(|m| m.content.contains("Order from LEAD") && m.content.contains("also add bye.txt"))
     );
     assert!(Path::new(&run.worktree).join("bye.txt").exists());
+}
+
+#[tokio::test]
+async fn orchestra_enforces_ownership_and_gates_reports_on_verify() {
+    let (_d, engine) = setup(|_| {}).await;
+    let replies = [
+        r#"{"tool": "write_file", "args": {"path": "a.txt", "content": "a"}}"#,
+        r#"{"tool": "finish", "args": {"summary": "a done"}}"#,
+        r#"{"tool": "write_file", "args": {"path": "b/x.txt", "content": "x"}}"#,
+        r#"{"tool": "write_file", "args": {"path": "done.txt", "content": "ok"}}"#,
+        r#"{"tool": "finish", "args": {"summary": "a done, really"}}"#,
+        r#"{"tool": "finish", "args": {"summary": "b done"}}"#,
+        r#"{"tool": "finish", "args": {"summary": "mission complete"}}"#,
+    ];
+    let model = Scripted::new(ProviderId::Ollama, &replies);
+    register(&engine, &model);
+    let a = crate::storage::AgentSpec {
+        owns: vec!["a.txt".into()],
+        done_when: "a.txt and done.txt exist".into(),
+        verify: Some("test -f done.txt".into()),
+        ..agent("a", Some("lead"), "write a")
+    };
+    let b = crate::storage::AgentSpec { owns: vec!["b/".into()], ..agent("b", Some("lead"), "write b") };
+    let spec = RunSpec {
+        mode: RunMode::Orchestra,
+        model: Some(local("lead")),
+        agents: vec![agent("lead", None, "coordinate"), a, b],
+        ..Default::default()
+    };
+    let run = engine.create_run("make files", None, spec).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    let obs = |i: usize| steps[i].observation.clone().unwrap_or_default();
+    assert_eq!(steps[1].meta["tool"], "finish_rejected");
+    assert!(obs(1).contains("not accepted") && obs(1).contains("FAIL"), "{}", obs(1));
+    assert!(!steps[2].meta["ok"].as_bool().unwrap() && obs(2).contains("owned by B"), "{}", obs(2));
+    assert!(!Path::new(&run.worktree).join("b/x.txt").exists());
+    assert!(obs(3).contains("outside the files you own"), "{}", obs(3));
+    assert!(steps[4].meta["tool"] == "finish" && obs(4).contains("Checks passed"), "{}", obs(4));
+
+    let seen = model.seen.lock().unwrap();
+    let first = &seen[0].messages[0].content;
+    assert!(first.contains("Files you own: a.txt") && first.contains("Done when: a.txt and done.txt exist"));
+    assert!(first.contains("owns b/"), "teammates' files are listed");
+    let lead = seen.last().unwrap();
+    assert!(lead.messages.iter().any(|m| m.content.contains("Report from A") && m.content.contains("a done, really")));
+    assert!(!lead.messages.iter().any(|m| m.content.contains("Report from A") && m.content.contains("a done\n")));
 }
 
 #[tokio::test]

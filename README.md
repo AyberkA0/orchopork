@@ -112,7 +112,18 @@ Commanders read their subordinates' reports and can **`delegate`** work back to 
 a commander reviews from diffs instead of re-reading files. Teammates under the same commander see each other's
 reports (with the list of changed files) as they come in, so later agents build on earlier work instead of
 re-exploring it. When the lead finishes, the optional
-verification command gates completion. All agents share the run's worktree and act one at a time. The whole command
+verification command gates completion.
+
+Each agent's brief can also carry a contract (the lead drafts it, starting from an enabled team template when one
+fits, and you can edit it on the canvas):
+
+- **Owns**: files, `folders/` or globs (`src/**/*.rs`) that only this agent's unit may edit. An edit to a file another
+  unit owns is refused with the owner's name, so agents report what must change instead of overwriting each other;
+  shared files such as manifests are best left to the lead, who may edit anything.
+- **Done when**: the acceptance criterion its commander reviews the report against.
+- **Verify**: a command (e.g. a targeted test) that must exit 0 before the report is accepted; on failure the agent
+  gets the output and tries again. The lead's verify command joins the final verification. Being model-proposed,
+  verify commands run only while `allow_commands` is on. All agents share the run's worktree and act one at a time. The whole command
 state is checkpointed with every step, so pause, resume and rewind work exactly as they do for single runs.
 
 From the terminal (classic plan → act → verify → review pipeline):
@@ -215,8 +226,32 @@ validator:
   command: "cargo fmt --check"
 ```
 
-Bundled skills: `anti-sycophancy-terse` and `test-driven-loop` (enabled by default), plus `explain-like-principal`
-and `markdown-memory-sync` (off by default, because every enabled modifier costs context on every call).
+```yaml
+# team_template: a starting-point team the orchestra designer adapts when the
+# mission fits `description`. Costs context only in the one team-design call.
+name: "team-bugfix"
+version: "1.0.0"
+type: "team_template"
+description: "Fixing a reported bug: reproduce it with a failing test, fix the cause, prove the fix."
+team:
+  - {id: lead, role: integrates and reviews, task: "...", done_when: "..."}
+  - {id: reproducer, parent: lead, role: writes the failing test, task: "...", done_when: "..."}
+  - {id: fixer, parent: lead, role: fixes the cause, task: "...", owns: ["src/"]}
+```
+
+**Who a skill is for.** Any skill can say `applies_to: [...]`; without it, it applies everywhere. Entries are
+`solo` (the single-agent actor), `planner`, `critic`, `designer`, `lead`, `commander` (any orchestra agent with
+subordinates), `worker` (any agent below the lead), or `role:<text>` (an orchestra agent whose id, name or role
+contains the text). A leading `!` excludes: `applies_to: ["worker", "!role:doc"]` reaches every worker except the docs
+writer. This keeps, say, test-first rules away from the lead and the reviewer, and saves their context. A
+`validator` whose `command` should check one agent's report (e.g. a `role:test` validator running the test suite)
+gates that agent's `finish`; an unscoped validator only gates the final finish, so a full test suite is not rerun at
+every report.
+
+Bundled skills: `anti-sycophancy-terse`, `test-driven-loop` (for the solo actor and workers, not the docs writer)
+and the team templates `team-bugfix`, `team-feature` and `team-refactor` (enabled by default), plus
+`explain-like-principal` and `markdown-memory-sync` (solo actor and lead only), which are off by default because
+every enabled modifier costs context on every call.
 
 ## Adding models
 

@@ -49,7 +49,7 @@ pub enum RunMode {
 }
 
 /// One member of an orchestra. `parent == None` marks the single root.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentSpec {
     pub id: String,
     pub name: String,
@@ -61,6 +61,18 @@ pub struct AgentSpec {
     /// Overrides the run's lead model for this agent.
     #[serde(default)]
     pub model: Option<ModelRef>,
+    /// Paths, directories (`src/parser/`) or globs (`src/**/*.rs`) this
+    /// agent owns. Other agents outside its unit may not edit them.
+    #[serde(default)]
+    pub owns: Vec<String>,
+    /// The acceptance criterion its commander checks the report against.
+    #[serde(default)]
+    pub done_when: String,
+    /// A command that must exit 0 before this agent's report is accepted
+    /// (for the lead: part of the final verification). Runs only while
+    /// `limits.allow_commands` is on.
+    #[serde(default)]
+    pub verify: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -465,6 +477,7 @@ mod spec_tests {
             task: "t".into(),
             parent: parent.map(Into::into),
             model: None,
+            ..Default::default()
         }
     }
 

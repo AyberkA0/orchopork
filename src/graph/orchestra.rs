@@ -21,13 +21,14 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::{Engine, Inner, Stop, call_meta, prompts, protocol, verify_commands};
+use super::{Engine, Inner, Stop, call_meta, prompts, protocol, run_checks, verify_commands};
 use crate::config::{Config, ModelRef};
 use crate::error::{Error, Result};
 use crate::fsutil::clip;
 use crate::git::GitRepo;
 use crate::graph::tools::ToolBox;
 use crate::providers::{CompletionRequest, Message};
+use crate::skills::{ComposedPrompt, Scope};
 use crate::storage::{AgentSpec, Phase, Run, RunSpec, RunState, Step, StepKind};
 
 /// Decimal ranks by the number of agents under command (the whole subtree).
@@ -58,8 +59,13 @@ on a cheaper model than the lead. So put the reading and editing in leaf agents;
 reviewing (reports arrive with the diff of each agent's changes, so the lead rarely needs to re-read files). Name the
 files or modules each agent owns in its task, so agents do not explore or edit the same code twice. Prefer 2-3 leaf
 agents for typical tasks; add an agent only when its work is clearly separable.
+Brief every agent completely, because it sees only its own brief and the reports it receives: `task` says what to do
+and where it stops; `owns` lists the files, directories (ending in /) or globs it alone may edit (agents outside its
+unit cannot touch them; leave shared files such as manifests and lockfiles to the lead, who owns everything not
+listed); `done_when` is the checkable result its commander accepts; `verify` is an optional shell command (e.g. a
+targeted test) that must pass before its report is accepted, or null.
 Reply with only a JSON object:
-{\"agents\": [{\"id\": \"lead\", \"name\": \"Lead\", \"role\": \"short role\", \"task\": \"concrete, self-contained task\", \"parent\": null}, ...]}
+{\"agents\": [{\"id\": \"lead\", \"name\": \"Lead\", \"role\": \"short role\", \"task\": \"concrete, self-contained task\", \"parent\": null, \"owns\": [], \"done_when\": \"...\", \"verify\": null}, ...]}
 Ids are short snake_case; `parent` is the commander's id (null only for the lead).";
 
 impl Engine {
@@ -73,8 +79,9 @@ impl Engine {
         let ws = &self.inner.ws;
         let files = ws.repo.ls_files().await.unwrap_or_default();
         let input = format!("# Mission\n{goal}\n{}", prompts::file_overview(&files, 200));
+        let skills = ws.skills.compose_for(DESIGNER, &Scope::of(&["designer"]))?;
         let req = CompletionRequest {
-            system: DESIGNER.into(),
+            system: format!("{}{}", skills.system, skills.teams_note()),
             messages: vec![Message::user(input)],
             max_tokens: ws.config().limits.max_output_tokens,
             ..Default::default()
@@ -100,8 +107,7 @@ pub fn parse_team(text: &str, goal: &str) -> Vec<AgentSpec> {
             name: "Lead".into(),
             role: "does the whole mission".into(),
             task: goal.to_string(),
-            parent: None,
-            model: None,
+            ..Default::default()
         }]
     };
     let Some(list) = protocol::json_objects(text)
@@ -131,7 +137,25 @@ pub fn parse_team(text: &str, goal: &str) -> Vec<AgentSpec> {
         // same way or a valid parent looks unknown and gets reattached to
         // the root below.
         let parent = Some(sanitize_id(&s("parent"))).filter(|p| !p.is_empty() && p != "null");
-        agents.push(AgentSpec { id, name, role: s("role"), task, parent, model: None });
+        // `owns` as a list, or as one comma-separated string.
+        let owns: Vec<String> = match v.get("owns") {
+            Some(serde_json::Value::Array(a)) => a.iter().filter_map(|x| x.as_str()).map(str::to_string).collect(),
+            Some(serde_json::Value::String(t)) => t.split(',').map(str::to_string).collect(),
+            _ => vec![],
+        };
+        let owns = owns.into_iter().map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect();
+        let verify = Some(s("verify")).filter(|c| !c.is_empty() && c != "null");
+        agents.push(AgentSpec {
+            id,
+            name,
+            role: s("role"),
+            task,
+            parent,
+            owns,
+            done_when: s("done_when"),
+            verify,
+            model: None,
+        });
     }
     if agents.is_empty() {
         return fallback();
@@ -254,6 +278,8 @@ impl Inner {
         let wt = GitRepo::new(&run.worktree);
         let files = wt.ls_files_at(&run.base_commit).await?;
         let tail = turn_tail(spec, &me, &subordinates, &state, &wt.changed_names(&run.base_commit).await?);
+        let scope = Scope::agent(me.parent.is_none(), !subordinates.is_empty(), &me.id, &me.name, &me.role);
+        let skills = self.ws.skills.compose_for("", &scope)?;
 
         if model.provider == crate::providers::ProviderId::Acp {
             let mut pin = pinned(run, spec, &me, &subordinates, &files);
@@ -266,27 +292,49 @@ impl Inner {
             let out = self.external_turn(cfg, run, &model, &me.name, prompt).await?;
             let mut meta = super::external::meta(&model, &out);
             meta["agent"] = json!(me.id);
+            let prior_failures = state.failures;
             let mut next = RunState { failures: 0, escalate: false, ..state };
             let text =
                 if out.text.is_empty() { format!("({} finished without a report)", me.name) } else { out.text.clone() };
-            if !out.cancelled {
-                meta["summary"] = json!(clip(&text, 6_000));
-                if let Some(c) = unit_changes(run, spec, &me, steps, cfg.limits.tool_output_chars).await {
-                    meta["changes"] = c;
+            let mut obs = super::external::tool_lines(&out);
+            let gate = if out.cancelled { None } else { self.report_checks(cfg, run, &me, &skills).await };
+            match gate {
+                Some((false, summary, details)) => {
+                    // The report is held back: the agent's next turn sees
+                    // this step (with the failures) and tries again.
+                    meta["tool"] = json!("finish_rejected");
+                    meta["ok"] = json!(false);
+                    obs = format!("{obs}\n\n{}", rejected(&summary, &details)).trim_start().to_string();
+                    next.failures = prior_failures + 1;
                 }
-                next.done.push(me.id.clone());
-                next.stack.pop();
-                if me.parent.is_none() {
-                    let skills = self.ws.skills.compose("")?;
-                    next.phase = if verify_commands(run, &skills).is_empty() { Phase::Done } else { Phase::Verify };
+                _ if !out.cancelled => {
+                    meta["summary"] = json!(clip(&text, 6_000));
+                    if let Some((_, summary, _)) = gate {
+                        meta["checks"] = json!(summary);
+                    }
+                    if let Some(c) = unit_changes(run, spec, &me, steps, cfg.limits.tool_output_chars).await {
+                        meta["changes"] = c;
+                    }
+                    next.done.push(me.id.clone());
+                    next.stack.pop();
+                    if me.parent.is_none() {
+                        next.phase =
+                            if verify_commands(cfg, run, &skills).is_empty() { Phase::Done } else { Phase::Verify };
+                    }
                 }
+                _ => {}
             }
-            let obs = super::external::tool_lines(&out);
+            let failures = next.failures;
             self.append(run, StepKind::Act, &text, Some(&obs), meta, &next, 0.0).await?;
+            if failures >= cfg.limits.max_failures {
+                return Ok(Some(Stop::Paused(Some(format!(
+                    "{}'s checks failed {failures} times in a row; message them with guidance, then resume",
+                    me.name
+                )))));
+            }
             return Ok(out.cancelled.then_some(Stop::Paused(None)));
         }
 
-        let skills = self.ws.skills.compose("")?;
         let toolbox = ToolBox::new(Path::new(&run.worktree), &cfg.limits, skills.tools.clone())?;
         let mut tools = toolbox.describe();
         if !subordinates.is_empty() {
@@ -329,22 +377,37 @@ impl Inner {
                 Ok(a) if a.tool == "finish" => {
                     let summary = a.str_arg("summary").or_else(|| a.str_arg("report")).unwrap_or("").trim().to_string();
                     let summary = if summary.is_empty() { out.text.clone() } else { summary };
-                    meta["tool"] = json!("finish");
-                    meta["summary"] = json!(summary);
-                    if let Some(c) = unit_changes(run, spec, &me, steps, cfg.limits.tool_output_chars).await {
-                        meta["changes"] = c;
-                    }
-                    next.done.push(me.id.clone());
-                    next.stack.pop();
-                    let msg = match me.parent.as_deref().and_then(|p| spec.agent(p)) {
-                        Some(c) => format!("Report delivered to {}.", c.name),
-                        None => {
-                            next.phase =
-                                if verify_commands(run, &skills).is_empty() { Phase::Done } else { Phase::Verify };
-                            "Mission report delivered.".to_string()
+                    match self.report_checks(cfg, run, &me, &skills).await {
+                        Some((false, checks, details)) => {
+                            meta["tool"] = json!("finish_rejected");
+                            (rejected(&checks, &details), false)
                         }
-                    };
-                    (msg, true)
+                        gate => {
+                            meta["tool"] = json!("finish");
+                            meta["summary"] = json!(summary);
+                            if let Some(c) = unit_changes(run, spec, &me, steps, cfg.limits.tool_output_chars).await {
+                                meta["changes"] = c;
+                            }
+                            next.done.push(me.id.clone());
+                            next.stack.pop();
+                            let mut msg = match me.parent.as_deref().and_then(|p| spec.agent(p)) {
+                                Some(c) => format!("Report delivered to {}.", c.name),
+                                None => {
+                                    next.phase = if verify_commands(cfg, run, &skills).is_empty() {
+                                        Phase::Done
+                                    } else {
+                                        Phase::Verify
+                                    };
+                                    "Mission report delivered.".to_string()
+                                }
+                            };
+                            if let Some((_, checks, _)) = gate {
+                                msg.push_str(&format!("\nChecks passed:\n{checks}"));
+                                meta["checks"] = json!(checks);
+                            }
+                            (msg, true)
+                        }
+                    }
                 }
                 Ok(a) if a.tool == "delegate" => {
                     meta["tool"] = json!("delegate");
@@ -369,8 +432,17 @@ impl Inner {
                 }
                 Ok(a) => {
                     meta["tool"] = json!(a.tool);
-                    let r = toolbox.execute(&a).await;
-                    (r.output, r.ok)
+                    let edit = matches!(a.tool.as_str(), "write_file" | "edit_file");
+                    match edit.then(|| ownership(spec, &me, a.str_arg("path").unwrap_or(""))) {
+                        Some(Err(refusal)) => (refusal, false),
+                        check => {
+                            let r = toolbox.execute(&a).await;
+                            match check {
+                                Some(Ok(Some(note))) if r.ok => (format!("{}\n{note}", r.output), true),
+                                _ => (r.output, r.ok),
+                            }
+                        }
+                    }
                 }
             }
         };
@@ -393,6 +465,117 @@ impl Inner {
     }
 }
 
+impl Inner {
+    /// The checks gating a subordinate's report: the validator skills scoped
+    /// to it, then its own `verify` (model-proposed, so only while commands
+    /// are allowed). `None` when nothing gates it, and always for the lead,
+    /// whose finish goes through the run's verification instead.
+    async fn report_checks(
+        &self,
+        cfg: &Config,
+        run: &Run,
+        me: &AgentSpec,
+        skills: &ComposedPrompt,
+    ) -> Option<(bool, String, String)> {
+        me.parent.as_ref()?;
+        let mut commands = skills.report_gates();
+        if cfg.limits.allow_commands
+            && let Some(c) = me.verify.as_ref().filter(|c| !c.trim().is_empty())
+        {
+            commands.push((me.id.clone(), c.clone()));
+        }
+        if commands.is_empty() {
+            return None;
+        }
+        self.log(&run.id, format!("checking {}'s report", me.name));
+        Some(run_checks(cfg, Path::new(&run.worktree), &commands).await)
+    }
+}
+
+fn rejected(summary: &str, details: &str) -> String {
+    format!(
+        "Your report was not accepted: its checks failed. Fix the cause, then finish again.\n{summary}\n\n{details}"
+    )
+}
+
+/// Whether `me` may edit `path`. The lead may edit anything. Anyone else
+/// may edit what its unit (itself and its subordinates) owns and what
+/// nobody owns, but not what an agent outside its unit owns.
+/// `Ok(Some(note))` allows an edit outside the unit's files with a reminder.
+fn ownership(spec: &RunSpec, me: &AgentSpec, path: &str) -> std::result::Result<Option<String>, String> {
+    if me.parent.is_none() {
+        return Ok(None);
+    }
+    let path = norm_path(path);
+    let members = unit(spec, &me.id);
+    let ours: Vec<&str> = spec
+        .agents
+        .iter()
+        .filter(|a| members.contains(&a.id))
+        .flat_map(|a| a.owns.iter().map(String::as_str))
+        .collect();
+    if ours.iter().any(|p| owns_path(p, &path)) {
+        return Ok(None);
+    }
+    if let Some(o) = spec.agents.iter().find(|a| !members.contains(&a.id) && a.owns.iter().any(|p| owns_path(p, &path)))
+    {
+        return Err(format!(
+            "{path} is owned by {} ({}); do not edit it. If it must change, say exactly what and why in your report.",
+            o.name, o.id
+        ));
+    }
+    Ok((!ours.is_empty()).then(|| {
+        format!("Note: {path} is outside the files you own ({}); make sure no teammate is on it.", ours.join(", "))
+    }))
+}
+
+fn norm_path(p: &str) -> String {
+    let p = p.trim().replace('\\', "/");
+    let mut p = p.as_str();
+    while let Some(rest) = p.strip_prefix("./") {
+        p = rest;
+    }
+    p.trim_end_matches('/').to_string()
+}
+
+/// `pattern` is a file, a directory (everything under it) or a glob (`*`
+/// within one path segment, `**` across segments, `?` one character).
+fn owns_path(pattern: &str, path: &str) -> bool {
+    let pattern = norm_path(pattern);
+    if pattern.is_empty() {
+        return false;
+    }
+    if pattern.contains(['*', '?']) {
+        return glob(pattern.as_bytes(), path.as_bytes());
+    }
+    path == pattern || path.strip_prefix(&pattern).is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn glob(p: &[u8], s: &[u8]) -> bool {
+    match p {
+        [] => s.is_empty(),
+        [b'*', b'*', rest @ ..] => {
+            let rest = rest.strip_prefix(b"/").unwrap_or(rest);
+            (0..=s.len()).any(|i| glob(rest, &s[i..]))
+        }
+        [b'*', rest @ ..] => (0..=s.len()).take_while(|&i| i == 0 || s[i - 1] != b'/').any(|i| glob(rest, &s[i..])),
+        [b'?', rest @ ..] => s.first().is_some_and(|&c| c != b'/') && glob(rest, &s[1..]),
+        [c, rest @ ..] => s.first() == Some(c) && glob(rest, &s[1..]),
+    }
+}
+
+/// A brief line about an agent's files and acceptance criterion, if any.
+fn contract(a: &AgentSpec) -> String {
+    let mut s = String::new();
+    if !a.owns.is_empty() {
+        s.push_str(&format!(" Owns: {}.", a.owns.join(", ")));
+    }
+    if !a.done_when.trim().is_empty() {
+        s.push_str(&format!(" Done when: {}", a.done_when.trim()));
+    }
+    s
+}
+
 /// The stable first message of `me`'s turns: the mission and the
 /// repository as it was when the run started (shared by every agent, so
 /// cached once for all of them), then who `me` is. Anything that changes
@@ -407,6 +590,21 @@ fn pinned(run: &Run, spec: &RunSpec, me: &AgentSpec, subs: &[&AgentSpec], files:
         if me.role.is_empty() { "-" } else { &me.role },
         me.task.trim()
     );
+    if !me.owns.is_empty() {
+        s.push_str(&format!(
+            "Files you own: {}. Edit only these and files nobody owns; files another unit owns are refused.\n",
+            me.owns.join(", ")
+        ));
+    }
+    if !me.done_when.trim().is_empty() {
+        s.push_str(&format!("Done when: {}\n", me.done_when.trim()));
+    }
+    if me.parent.is_some() && me.verify.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+        s.push_str(&format!(
+            "Your report is accepted only once `{}` passes; run it yourself before you finish.\n",
+            me.verify.as_deref().unwrap_or("").trim()
+        ));
+    }
     match me.parent.as_deref().and_then(|p| spec.agent(p)) {
         Some(c) => s.push_str(&format!(
             "You report to {} ({}). Do your task only, then call finish with a short report: what you did, how you verified it, and anything they must know. The diff of your changes is attached to your report automatically, so do not paste code into it.\n",
@@ -419,17 +617,20 @@ fn pinned(run: &Run, spec: &RunSpec, me: &AgentSpec, subs: &[&AgentSpec], files:
     if !subs.is_empty() {
         s.push_str("\n# Your subordinates (their reports are below)\n");
         for c in subs {
-            s.push_str(&format!("- {} [{}]: {} — {}\n", c.id, c.name, c.role, clip(&c.task, 300)));
+            s.push_str(&format!("- {} [{}]: {} — {}{}\n", c.id, c.name, c.role, clip(&c.task, 300), contract(c)));
         }
         s.push_str(
-            "Each report comes with the diff of that agent's changes: review the work from the diffs and read files only for what a diff does not show. If something is wrong or missing, use delegate with a precise instruction instead of redoing it yourself; integrate and verify, then finish.\n",
+            "Each report comes with the diff of that agent's changes: review the work from the diffs (against its done-when, if it has one) and read files only for what a diff does not show. If something is wrong or missing, use delegate with a precise instruction instead of redoing it yourself; integrate and verify, then finish.\n",
         );
     }
     if let Some(p) = me.parent.as_deref() {
         let peers: Vec<String> = spec
             .children(p)
             .filter(|a| a.id != me.id)
-            .map(|a| format!("{} ({}: {})", a.name, a.role, clip(&a.task, 160)))
+            .map(|a| {
+                let owns = if a.owns.is_empty() { String::new() } else { format!("; owns {}", a.owns.join(", ")) };
+                format!("{} ({}: {}{owns})", a.name, a.role, clip(&a.task, 160))
+            })
             .collect();
         if !peers.is_empty() {
             s.push_str(&format!(
@@ -648,19 +849,69 @@ mod tests {
 
     #[test]
     fn ranks_follow_the_decimal_system() {
-        let mut agents = vec![AgentSpec {
-            id: "r".into(),
-            name: "r".into(),
-            role: String::new(),
-            task: "t".into(),
-            parent: None,
-            model: None,
-        }];
+        let mut agents = vec![AgentSpec { id: "r".into(), name: "r".into(), task: "t".into(), ..Default::default() }];
         for i in 0..12 {
             agents.push(AgentSpec { id: format!("s{i}"), parent: Some("r".into()), ..agents[0].clone() });
         }
         let spec = RunSpec { agents, ..Default::default() };
         assert_eq!(rank(&spec, "s0"), "private");
         assert_eq!(rank(&spec, "r"), "captain (company commander)");
+    }
+
+    #[test]
+    fn team_parsing_keeps_contracts() {
+        let t = r#"{"agents": [
+            {"id": "lead", "task": "t", "parent": null, "owns": ["Cargo.toml"]},
+            {"id": "a", "task": "ta", "parent": "lead", "owns": "src/a/, tests/a.rs", "done_when": "tests pass", "verify": "cargo test a"},
+            {"id": "b", "task": "tb", "parent": "lead", "verify": "null"}
+        ]}"#;
+        let a = parse_team(t, "goal");
+        assert_eq!(a[0].owns, ["Cargo.toml"]);
+        assert_eq!(a[1].owns, ["src/a/", "tests/a.rs"]);
+        assert_eq!(a[1].done_when, "tests pass");
+        assert_eq!(a[1].verify.as_deref(), Some("cargo test a"));
+        assert_eq!(a[2].verify, None);
+    }
+
+    #[test]
+    fn owned_paths_match_files_directories_and_globs() {
+        assert!(owns_path("src/a.rs", "src/a.rs"));
+        assert!(owns_path("./src/parser/", "src/parser/lex.rs"));
+        assert!(!owns_path("src/parser", "src/parser_old.rs"));
+        assert!(owns_path("src/*.rs", "src/a.rs") && !owns_path("src/*.rs", "src/x/a.rs"));
+        assert!(owns_path("src/**/*.rs", "src/a.rs") && owns_path("src/**/*.rs", "src/x/y/a.rs"));
+        assert!(owns_path("**", "anything/at/all"));
+        assert!(!owns_path("", "src/a.rs"));
+        assert_eq!(norm_path(".\\src\\a.rs"), "src/a.rs");
+    }
+
+    #[test]
+    fn ownership_guards_other_units_files() {
+        let ag = |id: &str, parent: Option<&str>, owns: &[&str]| AgentSpec {
+            id: id.into(),
+            name: id.into(),
+            task: "t".into(),
+            parent: parent.map(Into::into),
+            owns: owns.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        let spec = RunSpec {
+            agents: vec![
+                ag("lead", None, &["Cargo.toml"]),
+                ag("cmd", Some("lead"), &[]),
+                ag("a", Some("cmd"), &["src/a/"]),
+                ag("b", Some("lead"), &["src/b/"]),
+            ],
+            ..Default::default()
+        };
+        let me = |id: &str| spec.agent(id).unwrap().clone();
+        assert_eq!(ownership(&spec, &me("lead"), "src/a/x.rs"), Ok(None), "the lead may edit anything");
+        assert_eq!(ownership(&spec, &me("a"), "src/a/x.rs"), Ok(None));
+        assert_eq!(ownership(&spec, &me("cmd"), "src/a/x.rs"), Ok(None), "a commander owns its unit's files");
+        assert!(ownership(&spec, &me("a"), "src/b/x.rs").unwrap_err().contains("owned by b"));
+        assert!(ownership(&spec, &me("b"), "Cargo.toml").is_err(), "manifests stay with the lead");
+        assert!(ownership(&spec, &me("a"), "README.md").unwrap().unwrap().contains("outside the files you own"));
+        let free = AgentSpec { id: "c".into(), parent: Some("lead".into()), ..Default::default() };
+        assert_eq!(ownership(&spec, &free, "README.md"), Ok(None), "no owned files, no reminder");
     }
 }

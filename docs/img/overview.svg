@@ -1,86 +1,97 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 400" width="880" height="400">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 440" width="880" height="440">
   <defs>
+    <marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 1L9 5L0 9" fill="none" stroke="#231f20" stroke-width="1.4"/>
+    </marker>
     <style>
       .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
       .sans{font-family:ui-sans-serif,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
       .ink{fill:#231f20}
       .mute{fill:#8c8686}
-      .wire{stroke:#231f20;stroke-width:1.1;fill:none}
-      .edge{stroke:#231f20;stroke-width:1.25}
-      .node{fill:#f7f6f3;stroke:#231f20;stroke-width:1.25}
+      .e{stroke:#231f20;stroke-width:1.25;fill:none}
+      .ea{stroke:#231f20;stroke-width:1.25;fill:none;marker-end:url(#h)}
+      .n{fill:#f7f6f3;stroke:#231f20;stroke-width:1.25}
+      .rule{stroke:#231f20;stroke-width:0.6}
+      .lbl{font-size:11px}
     </style>
   </defs>
-  <rect width="880" height="400" fill="#f7f6f3"/>
+  <rect width="880" height="440" fill="#f7f6f3"/>
 
   <!-- caption -->
   <text class="mono mute" x="40" y="40" font-size="11">fig. 1</text>
-  <text class="mono ink" x="90" y="40" font-size="11">many models, one team</text>
-  <line x1="40" y1="54" x2="840" y2="54" stroke="#231f20" stroke-width="0.6"/>
+  <text class="mono ink" x="90" y="40" font-size="11">one goal, run alone and as a team of different models, measured the same way</text>
+  <line class="rule" x1="40" y1="54" x2="840" y2="54"/>
 
-  <!-- models -->
-  <g class="mono ink" font-size="13">
-    <text x="40" y="96">claude</text>
-    <text x="40" y="126">gemini</text>
-    <text x="40" y="156">deepseek</text>
-    <text x="40" y="186">chatgpt</text>
-    <text x="40" y="216">mistral</text>
-    <text x="40" y="246">jev</text>
-    <text x="40" y="276">qwen</text>
-    <text x="40" y="306">llama.cpp</text>
-    <text x="40" y="336">claude code</text>
+  <!-- goal -->
+  <rect x="40" y="212" width="104" height="56" fill="none" stroke="#231f20" stroke-width="1.25"/>
+  <text class="sans ink" x="56" y="237" font-size="15" font-weight="700">goal</text>
+  <text class="mono mute lbl" x="56" y="255">same task</text>
+  <path class="ea" d="M144 232 C 176 232, 176 130, 214 130"/>
+  <path class="ea" d="M144 248 C 176 248, 176 262, 290 262"/>
+
+  <!-- lane a: single agent -->
+  <text class="mono mute lbl" x="214" y="96">a</text>
+  <text class="mono ink lbl" x="230" y="96">single agent</text>
+  <circle class="n" cx="226" cy="130" r="11"/>
+  <text class="mono ink lbl" x="244" y="134">claude</text>
+  <path class="ea" d="M300 130 H 540"/>
+
+  <!-- lane b: orchestra -->
+  <text class="mono mute lbl" x="214" y="196">b</text>
+  <text class="mono ink lbl" x="230" y="196">orchestra</text>
+  <g class="e">
+    <line x1="302" y1="262" x2="252" y2="326"/>
+    <line x1="302" y1="262" x2="372" y2="326"/>
+    <line x1="252" y1="326" x2="226" y2="386"/>
+    <line x1="252" y1="326" x2="290" y2="386"/>
+    <line x1="372" y1="326" x2="372" y2="386"/>
   </g>
-  <g class="wire">
-    <path d="M150 92 H 176 C 220 92, 232 196, 270 196"/>
-    <path d="M150 122 H 176 C 214 122, 232 197, 270 197"/>
-    <path d="M150 152 H 176 C 208 152, 232 198, 270 198"/>
-    <path d="M150 182 H 176 C 204 182, 236 199, 270 199"/>
-    <path d="M150 212 H 176 C 204 212, 236 201, 270 201"/>
-    <path d="M150 242 H 176 C 208 242, 232 202, 270 202"/>
-    <path d="M150 272 H 176 C 214 272, 232 203, 270 203"/>
-    <path d="M150 302 H 176 C 220 302, 232 204, 270 204"/>
-    <path d="M150 332 H 176 C 226 332, 232 205, 270 205"/>
+  <circle cx="302" cy="262" r="13" fill="#f37e8f"/>
+  <circle class="n" cx="252" cy="326" r="9"/>
+  <circle class="n" cx="372" cy="326" r="9"/>
+  <circle class="n" cx="226" cy="386" r="7"/>
+  <circle class="n" cx="290" cy="386" r="7"/>
+  <circle class="n" cx="372" cy="386" r="7"/>
+  <g class="mono lbl">
+    <text class="ink" x="322" y="258">claude</text><text class="mute" x="322" y="272">lead</text>
+    <text class="ink" x="236" y="322" text-anchor="end">qwen</text><text class="mute" x="236" y="336" text-anchor="end">local</text>
+    <text class="ink" x="388" y="322">deepseek</text>
+    <text class="ink" x="226" y="410" text-anchor="middle">mistral</text>
+    <text class="ink" x="290" y="410" text-anchor="middle">jev</text>
+    <text class="ink" x="372" y="410" text-anchor="middle">gemini</text>
   </g>
-  <line class="edge" x1="270" y1="200" x2="424" y2="128"/>
-  <circle cx="270" cy="200" r="2.5" class="ink"/>
+  <path class="ea" d="M400 262 H 540"/>
 
-  <!-- graph -->
-  <g class="edge">
-    <line x1="440" y1="120" x2="384" y2="200"/>
-    <line x1="440" y1="120" x2="508" y2="200"/>
-    <line x1="384" y1="200" x2="344" y2="276"/>
-    <line x1="384" y1="200" x2="412" y2="276"/>
-    <line x1="508" y1="200" x2="480" y2="276"/>
-    <line x1="508" y1="200" x2="548" y2="276"/>
+  <!-- measurement panel -->
+  <line class="rule" x1="556" y1="80" x2="556" y2="412"/>
+  <text class="sans ink" x="576" y="98" font-size="15" font-weight="700">measured</text>
+  <rect x="690" y="88" width="10" height="10" fill="none" stroke="#231f20"/>
+  <text class="mono ink lbl" x="706" y="97">a</text>
+  <rect x="730" y="88" width="10" height="10" fill="#f37e8f"/>
+  <text class="mono ink lbl" x="746" y="97">b</text>
+
+  <g class="mono lbl">
+    <text class="ink" x="576" y="140">tokens</text>
+    <rect x="660" y="130" width="120" height="7" fill="none" stroke="#231f20"/>
+    <rect x="660" y="141" width="164" height="7" fill="#f37e8f"/>
+
+    <text class="ink" x="576" y="190">cost</text>
+    <rect x="660" y="180" width="150" height="7" fill="none" stroke="#231f20"/>
+    <rect x="660" y="191" width="92" height="7" fill="#f37e8f"/>
+
+    <text class="ink" x="576" y="240">time</text>
+    <rect x="660" y="230" width="128" height="7" fill="none" stroke="#231f20"/>
+    <rect x="660" y="241" width="110" height="7" fill="#f37e8f"/>
+
+    <text class="ink" x="576" y="290">turns</text>
+    <rect x="660" y="280" width="96" height="7" fill="none" stroke="#231f20"/>
+    <rect x="660" y="291" width="140" height="7" fill="#f37e8f"/>
+
+    <text class="ink" x="576" y="340">outcome</text>
+    <text class="mute" x="660" y="340">tests, review, diff</text>
   </g>
-  <circle cx="440" cy="120" r="18" fill="#f37e8f"/>
-  <circle class="node" cx="384" cy="200" r="11"/>
-  <circle class="node" cx="508" cy="200" r="11"/>
-  <circle class="node" cx="344" cy="276" r="7"/>
-  <circle class="node" cx="412" cy="276" r="7"/>
-  <circle class="node" cx="480" cy="276" r="7"/>
-  <circle class="node" cx="548" cy="276" r="7"/>
-  <text class="mono mute" x="466" y="116" font-size="11">lead</text>
 
-  <text class="sans ink" x="446" y="334" font-size="18" font-weight="700" text-anchor="middle">orchopork</text>
-  <text class="mono mute" x="446" y="354" font-size="11" text-anchor="middle">nodes / budget / checkpoints</text>
-
-  <!-- outputs -->
-  <g class="wire">
-    <path d="M580 200 C 610 200, 610 110, 640 110"/>
-    <path d="M580 200 H 640"/>
-    <path d="M580 200 C 610 200, 610 290, 640 290"/>
-  </g>
-  <circle cx="580" cy="200" r="2.5" class="ink"/>
-
-  <rect x="650" y="94" width="4" height="34" fill="#f37e8f"/>
-  <text class="sans ink" x="666" y="108" font-size="14" font-weight="600">a branch</text>
-  <text class="mono mute" x="666" y="126" font-size="11">git, reviewable</text>
-
-  <rect x="650" y="184" width="4" height="34" fill="#f37e8f"/>
-  <text class="sans ink" x="666" y="198" font-size="14" font-weight="600">numbers</text>
-  <text class="mono mute" x="666" y="216" font-size="11">tokens, cache, cost, turns</text>
-
-  <rect x="650" y="274" width="4" height="34" fill="#f37e8f"/>
-  <text class="sans ink" x="666" y="288" font-size="14" font-weight="600">an answer</text>
-  <text class="mono mute" x="666" y="306" font-size="11">was the team worth it?</text>
+  <line class="rule" x1="576" y1="366" x2="840" y2="366"/>
+  <text class="sans ink" x="576" y="392" font-size="14" font-weight="600">was the team worth it?</text>
+  <text class="mono mute lbl" x="576" y="410">answered with numbers, not impressions</text>
 </svg>

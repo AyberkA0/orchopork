@@ -16,6 +16,7 @@
 //! | cursor  | `cursor-agent -p --output-format stream-json`       | JSON lines   |
 //! | copilot | `copilot -p`                                        | text         |
 //! | aider   | `aider --message-file … --yes-always`               | text         |
+//! | antigravity | `agy -p --input-format stream-json --output-format stream-json` | JSON lines |
 //! | generic | the command as written                              | text         |
 //!
 //! One lenient reader handles every JSON dialect: event shapes differ
@@ -42,7 +43,10 @@ fn s(v: &[&str]) -> Vec<String> {
 
 /// Whether the dialect's output is JSON lines (else plain text).
 fn json_output(d: Dialect) -> bool {
-    matches!(d, Dialect::Claude | Dialect::Codex | Dialect::Gemini | Dialect::Qwen | Dialect::Cursor)
+    matches!(
+        d,
+        Dialect::Claude | Dialect::Codex | Dialect::Gemini | Dialect::Qwen | Dialect::Cursor | Dialect::Antigravity
+    )
 }
 
 /// The full argument list: the agent's own args (with the prompt
@@ -111,6 +115,18 @@ pub fn build_args(
                 tail.push("--no-suggest-shell-commands".into());
             }
         }
+        Dialect::Antigravity => {
+            // The task goes in as one stream-json message on stdin (see
+            // `stdin_payload`): no command-line length or quoting limits.
+            lead.extend(s(&["-p", "--input-format", "stream-json", "--output-format", "stream-json"]));
+            // Reads and writes inside the workspace are always allowed;
+            // agy has no flag that allows only shell commands, so with
+            // commands on every tool call is approved. With them off,
+            // your own `permissions.allow` rules in agy's settings apply.
+            if policy.allow_execute {
+                tail.push("--dangerously-skip-permissions".into());
+            }
+        }
         Dialect::Generic => {}
     }
     let mut out = lead;
@@ -140,6 +156,15 @@ pub fn build_args(
     out
 }
 
+/// What goes to stdin: the task as is, or wrapped as one stream-json
+/// message for CLIs that only read stdin in that form.
+fn stdin_payload(d: Dialect, prompt: &str) -> String {
+    match d {
+        Dialect::Antigravity => format!("{}\n", json!({ "event": "user", "message": { "content": prompt } })),
+        _ => prompt.to_string(),
+    }
+}
+
 fn prompt_in_args(agent: &ExternalAgent) -> bool {
     agent.args.iter().any(|a| a.contains("{prompt}") || a.contains("{prompt_file}"))
 }
@@ -158,6 +183,7 @@ pub fn choices(d: Dialect) -> Vec<Value> {
             sel("model", "Model", "model", &[("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]),
             sel("effort", "Effort", "thought_level", &efforts),
         ],
+        Dialect::Antigravity => vec![sel("effort", "Effort", "thought_level", &efforts[..3])],
         Dialect::Codex => vec![sel(
             "effort",
             "Effort",
@@ -220,14 +246,18 @@ pub async fn run(
     if let Some(f) = &file {
         tokio::fs::write(f, prompt).await?;
     }
-    let args = build_args(agent, options, policy, file.as_deref(), prompt);
+    let mut args = build_args(agent, options, policy, file.as_deref(), prompt);
+    if agent.dialect == Dialect::Antigravity {
+        // agy gives up after 5 minutes by default; orchopork's own limit rules.
+        args.extend(["--print-timeout".into(), format!("{}m", timeout.as_secs().div_ceil(60).max(1))]);
+    }
     let direct = agent.args.iter().any(|a| a.contains("{prompt}"));
     let mut child = spawn(agent, cwd, &args, direct)?;
     let stderr = stderr_tail(&mut child);
     let mut stdin = child.stdin.take().expect("piped");
     let stdout = child.stdout.take().expect("piped");
     let feed = !prompt_in_args(agent);
-    let body = prompt.to_string();
+    let body = stdin_payload(agent.dialect, prompt);
     // Written concurrently with reading, so a large prompt cannot deadlock
     // against a full stdout pipe.
     let writer = tokio::spawn(async move {
@@ -244,7 +274,14 @@ pub async fn run(
     loop {
         tokio::select! {
             line = lines.next_line() => match line {
-                Ok(Some(l)) => reader.line(&l, &mut on_update),
+                Ok(Some(l)) => {
+                    reader.line(&l, &mut on_update);
+                    // agy's `result` closes the turn; it may keep waiting
+                    // for more stream input, so stop reading there.
+                    if reader.ended && agent.dialect == Dialect::Antigravity {
+                        break;
+                    }
+                }
                 Ok(None) => break,
                 Err(e) => { kill_tree(&mut child); return Err(e.into()) }
             },
@@ -266,7 +303,16 @@ pub async fn run(
         let _ = child.wait().await;
         return Ok(reader.finish("cancelled", true));
     }
-    let status = child.wait().await?;
+    let grace = Duration::from_secs(if reader.ended { 3 } else { 10 });
+    let status = match tokio::time::timeout(grace, child.wait()).await {
+        Ok(s) => s?,
+        Err(_) => {
+            // Finished its turn but did not exit (only after a `result`).
+            kill_tree(&mut child);
+            child.wait().await?
+        }
+    };
+    let status_ok = status.success() || reader.ended;
     let err = stderr.await.unwrap_or_default();
     let err = err.trim();
     let failed = |why: String| {
@@ -281,10 +327,10 @@ pub async fn run(
     if let Some(e) = reader.error.clone() {
         return failed(e);
     }
-    if !status.success() && reader.final_text().is_empty() {
+    if !status_ok && reader.final_text().is_empty() {
         return failed(if err.is_empty() { format!("exited with {status}") } else { err.to_string() });
     }
-    Ok(reader.finish(if status.success() { "end_turn" } else { "error" }, false))
+    Ok(reader.finish(if status_ok { "end_turn" } else { "error" }, false))
 }
 
 /// Reads an agent's stdout, line by line.
@@ -303,6 +349,8 @@ pub struct Stream {
     settings: BTreeMap<String, String>,
     /// A failure the agent reported in-band.
     error: Option<String>,
+    /// A final `result` event was read.
+    pub ended: bool,
 }
 
 fn tool_kind(name: &str) -> &'static str {
@@ -352,6 +400,7 @@ impl Stream {
             usage: Usage::default(),
             settings: BTreeMap::new(),
             error: None,
+            ended: false,
         }
     }
 
@@ -388,6 +437,11 @@ impl Stream {
             return;
         }
         let Ok(v) = serde_json::from_str::<Value>(line.trim()) else { return };
+        // Antigravity names its events `event`, with the payload under the
+        // same key.
+        if let Some(ev) = v["event"].as_str() {
+            return self.antigravity(ev, &v[ev], on);
+        }
         let ty = v["type"].as_str().unwrap_or("");
         match ty {
             // ---- Claude Code and Cursor (stream-json) ----
@@ -439,6 +493,7 @@ impl Stream {
                 }
             }
             "result" => {
+                self.ended = true;
                 if let Some(r) = v["result"].as_str() {
                     self.result = Some(r.to_string());
                 }
@@ -510,6 +565,59 @@ impl Stream {
             }
             "turn.failed" => {
                 self.error = Some(v["error"]["message"].as_str().unwrap_or("the turn failed").to_string());
+            }
+            _ => {}
+        }
+    }
+
+    /// Antigravity CLI (`agy`) stream-json: `init`, `step_update`s, `result`.
+    fn antigravity(&mut self, ev: &str, p: &Value, on: &mut dyn FnMut(Update)) {
+        match ev {
+            "init" => {
+                if let Some(m) = p["model"].as_str() {
+                    self.settings.insert("Model".into(), m.into());
+                }
+            }
+            "step_update" => {
+                let done = p["state"] == "DONE";
+                let id = format!("step-{}", p["step_index"]);
+                match p["step_type"].as_str().unwrap_or("") {
+                    "agent_response" => {
+                        if let Some(t) = p["text_delta"].as_str() {
+                            self.text(t, on);
+                        }
+                    }
+                    "tool" => {
+                        let info = &p["tool_info"];
+                        let name = info["name"].as_str().or(p["tool_name"].as_str()).unwrap_or("tool");
+                        let failed = info.get("error").is_some_and(|e| !e.is_null());
+                        let status = match (done, failed) {
+                            (false, _) => "pending",
+                            (true, true) => "failed",
+                            (true, false) => "completed",
+                        };
+                        let title = tool_title(name, &info["parameters"]);
+                        let kind = tool_kind(name);
+                        self.tool(&id, title, kind, status, on);
+                    }
+                    _ => {}
+                }
+            }
+            "result" => {
+                self.ended = true;
+                if let Some(r) = p["response"].as_str() {
+                    self.result = Some(r.to_string());
+                }
+                let status = p["status"].as_str().unwrap_or("SUCCESS");
+                if status != "SUCCESS" && status != "CANCELED" {
+                    self.error = Some(p["error"].as_str().map(str::to_string).unwrap_or(format!("status {status}")));
+                }
+                let u = &p["usage"];
+                if u.is_object() {
+                    self.usage.prompt_tokens = n(&u["input_tokens"]);
+                    self.usage.completion_tokens = n(&u["output_tokens"]) + n(&u["thinking_tokens"]);
+                    self.usage.cache_read_tokens = n(&u["cache_read_tokens"]);
+                }
             }
             _ => {}
         }
@@ -728,6 +836,48 @@ mod tests {
     }
 
     #[test]
+    fn reads_antigravity_stream_json() {
+        let (st, seen) = read(
+            true,
+            &[
+                r#"{"event":"init","conversation_id":"c","init":{"cwd":"/w","tools":[],"permission_mode":"always-proceed","model":"gemini-3-pro"}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":0,"state":"DONE","step_type":"user_input"}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":1,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"cargo test"}}}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":1,"state":"DONE","step_type":"tool","tool_info":{"name":"run_command","parameters":{"CommandLine":"cargo test"},"output":"ok"}}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":2,"state":"DONE","step_type":"tool","tool_info":{"name":"write_to_file","parameters":{"TargetFile":"a.rs"},"error":{"type":"x","message":"denied"}}}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":3,"state":"ACTIVE","step_type":"agent_response","text_delta":"All "}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":3,"state":"ACTIVE","step_type":"agent_response","text_delta":"good."}}"#,
+                r#"{"event":"result","result":{"conversation_id":"c","status":"SUCCESS","response":"All good.","num_turns":1,"usage":{"input_tokens":10415,"output_tokens":657,"thinking_tokens":616,"cache_read_tokens":8113,"total_tokens":11072}}}"#,
+            ],
+        );
+        assert_eq!(seen, ["execute:run_command", "edit:write_to_file"]);
+        assert!(st.ended && st.error.is_none());
+        let out = st.finish("end_turn", false);
+        assert_eq!(out.text, "All good.");
+        assert_eq!(out.settings["Model"], "gemini-3-pro");
+        assert_eq!(out.tool_calls[0].status, "completed");
+        assert_eq!(out.tool_calls[1].status, "failed");
+        assert_eq!(
+            (out.usage.prompt_tokens, out.usage.completion_tokens, out.usage.cache_read_tokens),
+            (10415, 1273, 8113)
+        );
+        let (bad, _) =
+            read(true, &[r#"{"event":"result","result":{"status":"ERROR","error":"authentication required"}}"#]);
+        assert_eq!(bad.error.as_deref(), Some("authentication required"));
+
+        let agy = ExternalAgent::new("g", "G", "agy", &[]).cli(Dialect::Antigravity);
+        let a = build_args(&agy, &BTreeMap::new(), Policy { allow_execute: false }, None, "x");
+        assert_eq!(a, ["-p", "--input-format", "stream-json", "--output-format", "stream-json"]);
+        assert!(
+            build_args(&agy, &BTreeMap::new(), Policy { allow_execute: true }, None, "x")
+                .contains(&"--dangerously-skip-permissions".to_string())
+        );
+        let line = stdin_payload(Dialect::Antigravity, "fix \"it\"\nnow");
+        let v: Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["message"]["content"], "fix \"it\"\nnow");
+    }
+
+    #[test]
     fn builds_flags_from_policy_and_options() {
         let claude = ExternalAgent::new("c", "C", "claude", &["--add-dir", "../shared"]).cli(Dialect::Claude);
         let opts: BTreeMap<String, String> =
@@ -772,6 +922,15 @@ import json, sys
 args = sys.argv[1:]
 if "--version" in args:
     print("fake 1.2.3"); sys.exit(0)
+if "--input-format" in args:
+    # Like agy: one stream-json message in, events out, then it waits.
+    import time
+    msg = json.loads(sys.stdin.readline())
+    task = msg["message"]["content"]
+    print(json.dumps({"event": "init", "init": {"model": "agy-fake"}}), flush=True)
+    print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": "got " + str(len(task)),
+        "usage": {"input_tokens": 3, "output_tokens": 4}}}), flush=True)
+    time.sleep(60); sys.exit(0)
 task = sys.stdin.read()
 if "fail" in task:
     sys.stderr.write("Please run /login\n"); sys.exit(1)
@@ -900,5 +1059,28 @@ exec \"{}\" \"{}\" \"$@\"
         .await
         .unwrap();
         assert!(out.cancelled);
+
+        let agy = ExternalAgent::new("g", "Agy", &exe.to_string_lossy(), &[]).cli(Dialect::Antigravity);
+        let task = format!(
+            "multi
+line \"task\" {}",
+            "y".repeat(100_000)
+        );
+        let started = Instant::now();
+        let out = run(
+            &agy,
+            d.path(),
+            &task,
+            &BTreeMap::new(),
+            Policy { allow_execute: true },
+            Duration::from_secs(60),
+            &never,
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.text, format!("got {}", task.chars().count()));
+        assert_eq!(out.settings["Model"], "agy-fake");
+        assert!(started.elapsed() < Duration::from_secs(20), "a CLI that keeps waiting after its result is stopped");
     }
 }

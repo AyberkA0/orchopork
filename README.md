@@ -139,7 +139,7 @@ Roadmap, roughly in order:
 - [x] Single agent and hierarchical orchestra with a visual team editor
 - [x] Hybrid local/cloud routing, escalation and a hard monthly budget
 - [x] External agents over ACP (Claude Code, Gemini CLI, Codex, Qwen Code, Cursor, Copilot, OpenCode, Goose)
-- [x] Headless CLI agents that run with your installed setup (`claude -p`, `codex exec`, `gemini`, `cursor-agent`, `copilot`, `aider`)
+- [x] Headless CLI agents that run with your installed setup (`claude -p`, `codex exec`, `gemini`, `cursor-agent`, `copilot`, `agy`, `aider`)
 - [x] Prompt caching and per-agent token/cost metrics
 - [x] Agent contracts (owned files, acceptance criteria, verify commands) and team templates
 - [x] Fan-out / fan-in and blackboard-style shared state, through the orchestra tree
@@ -250,7 +250,7 @@ before it is saved.
 | LM Studio, vLLM, llama.cpp               | local | Local OpenAI-compatible servers; free and never budget-limited.         |
 | Claude, Gemini, DeepSeek                 | cloud | API key; the model list is fetched live from the provider.              |
 | OpenAI, Mistral, OpenRouter, Groq, xAI, Together, ... | cloud | Any OpenAI-compatible endpoint: base URL + key, optional price per 1M tokens. Models appear as `compat:<endpoint>/<model>`. |
-| Claude Code, Codex, Gemini CLI, Qwen Code, Cursor, Copilot, OpenCode, Goose, Aider | agent | Your installed CLI, run headless, or any [Agent Client Protocol](https://agentclientprotocol.com) agent. Detected automatically; one click to add. |
+| Claude Code, Codex, Gemini CLI, Antigravity, Qwen Code, Cursor, Copilot, OpenCode, Goose, Aider | agent | Your installed CLI, run headless, or any [Agent Client Protocol](https://agentclientprotocol.com) agent. Detected automatically; one click to add. |
 
 Models are written `provider:model`, e.g. `ollama:qwen2.5-coder:14b`. Prices live in `src/providers/pricing.rs` and
 match model ids by longest prefix. Unknown models are priced high, so the budget guard over-estimates rather than
@@ -284,9 +284,15 @@ There are two ways to connect one, and several tools offer both:
 | Qwen Code     | `qwen --output-format stream-json --approval-mode …`        | `qwen --acp`                                   |
 | Cursor        | `cursor-agent -p --output-format stream-json "<task>"`      | `cursor-agent acp`                             |
 | Copilot       | `copilot -p "<task>"`                                       | `copilot --acp --stdio`                        |
+| Antigravity   | `agy -p --input-format stream-json --output-format stream-json` | —                                          |
 | Aider         | `aider --message-file <task file> --yes-always --no-auto-commits` | —                                        |
 | OpenCode      | —                                                           | `opencode acp`                                 |
 | Goose         | —                                                           | `goose acp`                                    |
+
+Antigravity is installed with Google's own script (see [antigravity.google/cli](https://antigravity.google/docs/cli/headless/))
+and signed in once by running `agy` in a terminal. agy has no switch that allows only shell commands: with
+`allow_commands` on, orchopork passes `--dangerously-skip-permissions`; with it off, reads and writes in the worktree
+still work and anything else follows your own `permissions.allow` rules in `~/.gemini/antigravity-cli/settings.json`.
 
 **Add a model** lists every agent it finds on this machine (on PATH, and in the usual install folders such as
 `~/.local/bin` or npm's global folder, which a GUI-started process often does not have on PATH), with a guided
@@ -304,7 +310,7 @@ external_agents:
     command: claude
     args: [--add-dir, ../shared]   # your own flags; orchopork adds -p, the output format and permissions
     protocol: cli                  # or acp (the default)
-    dialect: claude                # claude | codex | gemini | qwen | cursor | copilot | aider | generic
+    dialect: claude                # claude | codex | gemini | qwen | cursor | copilot | antigravity | aider | generic
     inherit_config: true           # false: --setting-sources project,local --strict-mcp-config
     env: {CLAUDE_CODE_MAX_OUTPUT_TOKENS: "32000"}
 ```

@@ -61,6 +61,9 @@ const CURSOR: Setup =
     Setup { cli: "cursor-agent", install: &[], login: "cursor-agent login", key_env: "CURSOR_API_KEY" };
 const GOOSE: Setup = Setup { cli: "goose", install: &[], login: "goose configure", key_env: "" };
 const AIDER: Setup = Setup { cli: "aider", install: &[], login: "aider", key_env: "" };
+// Installed with Google's own script (antigravity.google/cli), which
+// orchopork does not run for you.
+const ANTIGRAVITY: Setup = Setup { cli: "agy", install: &[], login: "agy", key_env: "" };
 
 /// One launch recipe for a known agent.
 #[derive(Debug, Clone)]
@@ -127,6 +130,11 @@ pub fn catalog() -> Vec<Preset> {
             acp("copilot", "GitHub Copilot", "copilot", &["--acp", "--stdio"]),
             COPILOT,
             "Over ACP, built into Copilot CLI",
+        ),
+        p(
+            cli("antigravity-cli", "Antigravity (CLI)", "agy", &[], Dialect::Antigravity),
+            ANTIGRAVITY,
+            "Your installed Google Antigravity CLI (`agy -p`), with your Google sign-in",
         ),
         p(acp("opencode", "OpenCode", "opencode", &["acp"]), OPENCODE, "Over ACP, built into OpenCode"),
         p(acp("goose", "Goose", "goose", &["acp"]), GOOSE, "Over ACP, built into Goose"),

@@ -59,6 +59,7 @@ pub enum Dialect {
     Cursor,
     Copilot,
     Aider,
+    Antigravity,
 }
 
 fn yes() -> bool {

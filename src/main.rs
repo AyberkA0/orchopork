@@ -343,14 +343,22 @@ async fn serve(root: PathBuf, host: std::net::IpAddr, port: u16, token: Option<S
         Access::local_only()
     } else {
         let token = access::load_or_create(token)?;
+        let settings = access::settings_file();
+        let require = access::load_require_token(settings.as_deref());
         let shown = if host.is_unspecified() { access::lan_ip().unwrap_or(host) } else { host };
         let shown = if shown.is_ipv6() { format!("[{shown}]") } else { shown.to_string() };
-        println!("From other machines: http://{shown}:{port}/?token={token}");
-        println!("Anyone with this link can run commands on this machine through the agents; keep it private.");
-        if let Some(f) = access::token_file() {
-            println!("(token kept in {}; delete it to issue a new one)", f.display());
+        let base = format!("http://{shown}:{port}");
+        if require {
+            println!("From other machines: {base}/?token={token}");
+            println!("Anyone with this link can run commands on this machine through the agents; keep it private.");
+            if let Some(f) = access::token_file() {
+                println!("(token kept in {}; delete it to issue a new one)", f.display());
+            }
+        } else {
+            println!("From other machines: {base} (no access token: turn it on in Settings → Remote access)");
+            println!("Anyone who can reach this port can run commands on this machine through the agents.");
         }
-        Access::with_token(token)
+        Access::remote(token, require).saved_in(settings).reachable_at(base)
     };
     let app = server::router_with(state, access).into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;

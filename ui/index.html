@@ -2530,6 +2530,30 @@ async function viewModels(main) {
   const cap = h("input", { type: "number", min: "0", value: cfg.monthly_cap_usd });
   const numCtx = h("input", { type: "number", value: cfg.ollama_num_ctx });
   const allow = h("input", { type: "checkbox", style: { width: "auto" }, checked: cfg.limits.allow_commands });
+  // Remote access: whether other machines need the access token. Applies at
+  // once (it is a server setting, not part of this workspace's config).
+  const remoteBox = h("div", { class: "small muted", text: "Checking…" });
+  const paintRemote = (a) => {
+    if (!a.remote) {
+      remoteBox.replaceChildren(h("div", { class: "small muted", text: "Only this computer can open orchopork. Start it with --host 0.0.0.0 to let other devices in." }));
+      return;
+    }
+    const box = h("input", { type: "checkbox", style: { width: "auto" }, checked: a.require_token, onchange: guard(async (e) => {
+      e.target.disabled = true;
+      try { paintRemote(await api("/api/access", { method: "PUT", body: { require_token: e.target.checked } })); toast(e.target.checked ? "Access token required" : "Access token off"); }
+      catch (x) { e.target.checked = !e.target.checked; throw x; }
+      finally { e.target.disabled = false; }
+    }) });
+    const link = a.require_token ? a.link : a.url;
+    remoteBox.replaceChildren(
+      h("label", { class: "row", style: { color: "var(--text)" } }, box, "Require an access token for other devices"),
+      h("p", { class: "small muted", text: a.require_token
+        ? "Other devices open the link below once; it keeps the token in that browser. Anyone with the link can run commands on this computer through the agents."
+        : "Any device that can reach this port can use orchopork, and run commands on this computer through the agents. Turn the token on for networks you do not fully trust." }),
+      link && h("div", { class: "row" }, h("code", { class: "grow mono small", style: { overflowWrap: "anywhere" }, text: link }),
+        h("button", { class: "ghost small", text: "Copy", onclick: () => navigator.clipboard.writeText(link).then(() => toast("Copied")) })));
+  };
+  api("/api/access").then(paintRemote).catch((e) => remoteBox.replaceChildren(h("div", { class: "small bad", text: e.message })));
   const lim = (k, label) => { const i = h("input", { type: "number", value: cfg.limits[k] }); i.dataset.k = k; return h("div", {}, h("label", { text: label }), i); };
   const limits = h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" } },
     lim("steps_per_session", "Steps before pausing for a check"), lim("max_failures", "Failed turns before pausing"),
@@ -2629,6 +2653,7 @@ async function viewModels(main) {
       h("label", { text: "Default model for the CLI" }), def),
     h("div", { class: "card" }, h("h3", { text: "Safety" }), limits,
       h("label", { class: "row", style: { color: "var(--text)", marginTop: "14px" } }, allow, "Allow agents to run shell commands")),
+    h("div", { class: "card" }, h("h3", { text: "Remote access" }), remoteBox),
     h("div", { class: "card" }, h("div", { class: "row" }, h("h3", { class: "grow", text: "Skills" }),
       h("button", { class: "ghost", text: "Reload", onclick: guard(async () => { const r = await api("/api/skills/reload", { body: {} }); paintSkills(r.skills, r.errors); }) })), skills),
     saveRow = h("div", { class: "row", style: { position: "sticky", bottom: "12px", background: "var(--panel)", border: "1px solid var(--line)", borderRadius: "14px", padding: "8px 8px 8px 14px", boxShadow: "var(--shadow)" } },

@@ -166,7 +166,10 @@ pub fn router(state: Shared) -> Router {
 
 /// The router; non-local requests need `access`'s token.
 pub fn router_with(state: Shared, access: access::Access) -> Router {
+    let access_routes =
+        Router::new().route("/api/access", get(access::get_access).put(access::put_access)).with_state(access.clone());
     Router::new()
+        .merge(access_routes)
         .route("/api/state", get(get_state))
         .route("/api/wizard/initialize", post(wizard_initialize))
         .route("/api/wizard/workspace", post(wizard_workspace))
@@ -1213,7 +1216,29 @@ mod tests {
         assert_eq!(remote(&local, "GET", "/api/state", h, &[]).await.status(), 403);
         assert_eq!(remote(&local, "GET", "/api/state", "localhost:7878", &[]).await.status(), 403);
 
-        let app = router_with(state, access::Access::with_token("s3cret-token"));
+        let open = router_with(state.clone(), access::Access::remote("s3cret-token", false));
+        assert_eq!(remote(&open, "GET", "/api/state", h, &[]).await.status(), 200, "token off: by IP, no token");
+        assert_eq!(remote(&open, "GET", "/api/state", "evil.example:7878", &[]).await.status(), 403, "no DNS names");
+        let evil = ("origin", "http://evil.example");
+        assert_eq!(remote(&open, "POST", "/api/wizard/initialize", h, &[evil]).await.status(), 403);
+        // Turning the token on from another machine keeps that machine in.
+        let mut req = Request::builder()
+            .method("PUT")
+            .uri("/api/access")
+            .header("host", h)
+            .header("origin", "http://192.168.1.10:7878")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"require_token": true}"#))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo("192.168.1.50:51000".parse::<std::net::SocketAddr>().unwrap()));
+        let r = open.clone().oneshot(req).await.unwrap();
+        assert_eq!(r.status(), 200);
+        assert!(r.headers()["set-cookie"].to_str().unwrap().starts_with("orchopork_token=s3cret-token;"));
+        assert_eq!(remote(&open, "GET", "/api/state", h, &[]).await.status(), 403, "now the token is required");
+        let c = ("cookie", "orchopork_token=s3cret-token");
+        assert_eq!(remote(&open, "GET", "/api/state", h, &[c]).await.status(), 200);
+
+        let app = router_with(state, access::Access::remote("s3cret-token", true));
         assert_eq!(remote(&app, "GET", "/api/state", h, &[]).await.status(), 403);
         assert_eq!(
             remote(&app, "GET", "/api/state", "localhost:7878", &[]).await.status(),

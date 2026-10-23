@@ -169,12 +169,15 @@ cd /path/to/your/repo
 ```
 
 orchopork only accepts requests from this machine. To reach it from another device, start it with
-`orchopork serve --host 0.0.0.0` (keep `--port` as you like): it prints a link such as
-`http://192.168.1.10:7878/?token=…`. Opening that link once stores the access token in a cookie; scripts can send it
-as `Authorization: Bearer <token>`. Requests from this machine still need no token. The token is kept in
+`orchopork serve --host 0.0.0.0` (keep `--port` as you like) and open `http://<this machine's IP>:7878` there.
+Anyone who can reach that port can then make the agents run commands on this machine, so allow the port through
+your firewall only on private networks. For more protection, turn on **Settings → Remote access → Require an access
+token**: other devices then open the link shown there (such as `http://192.168.1.10:7878/?token=…`) once, which keeps
+the token in that browser; scripts can send it as `Authorization: Bearer <token>`. Requests from this machine never
+need it. The setting is saved in `~/.orchopork/server.json` and is off by default. The token is kept in
 `~/.orchopork/access-token` (or pass `--token`, or set `ORCHOPORK_TOKEN`); delete that file to issue a new one.
-Anyone with the link can make the agents run commands on this machine, so share it only with devices you trust,
-and allow the port through your firewall only on private networks.
+Without a token, other devices must use the IP address, not a host name: that is what keeps web pages from reaching
+orchopork through DNS rebinding.
 
 The interface is a chat box. When you send a message, orchopork asks **"Activate an agent orchestra?"**
 

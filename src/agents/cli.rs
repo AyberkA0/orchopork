@@ -96,6 +96,12 @@ pub fn build_args(
         Dialect::Gemini | Dialect::Qwen => {
             lead.extend(s(&["--output-format", "stream-json"]));
             tail.extend(s(&["--approval-mode", if policy.allow_execute { "yolo" } else { "auto_edit" }]));
+            // Every run gets a fresh worktree that Gemini CLI has never seen;
+            // untrusted, it drops the approval mode back to "ask", which a
+            // headless run cannot answer. Trust it for this session only.
+            if agent.dialect == Dialect::Gemini {
+                tail.push("--skip-trust".into());
+            }
         }
         Dialect::Cursor => {
             lead.extend(s(&["-p", "--output-format", "stream-json"]));
@@ -906,6 +912,14 @@ mod tests {
             build_args(&aider, &BTreeMap::new(), Policy { allow_execute: false }, Some(Path::new("/tmp/t.md")), "x");
         assert_eq!(a[..2], ["--message-file", "/tmp/t.md"]);
         assert!(a.contains(&"--no-auto-commits".to_string()));
+        let gemini = ExternalAgent::new("g", "G", "gemini", &[]).cli(Dialect::Gemini);
+        let a = build_args(&gemini, &BTreeMap::new(), Policy { allow_execute: true }, None, "x");
+        assert_eq!(a, ["--output-format", "stream-json", "--approval-mode", "yolo", "--skip-trust"]);
+        let qwen = ExternalAgent::new("q", "Q", "qwen", &[]).cli(Dialect::Qwen);
+        assert!(
+            !build_args(&qwen, &BTreeMap::new(), Policy { allow_execute: true }, None, "x")
+                .contains(&"--skip-trust".into())
+        );
         let cursor = ExternalAgent::new("u", "U", "cursor-agent", &["{prompt}"]).cli(Dialect::Cursor);
         let a = build_args(&cursor, &BTreeMap::new(), Policy { allow_execute: true }, None, "do it");
         assert_eq!(a, ["-p", "--output-format", "stream-json", "do it", "--force"]);

@@ -246,7 +246,8 @@ async fn solo_runs_use_their_own_model_and_skip_planning() {
     let (_d, engine) = setup(|_| {}).await;
     let chosen = Scripted::new(ProviderId::Claude, &[WRITE, FINISH]);
     register(&engine, &chosen);
-    let spec = RunSpec { worker_model: None, mode: RunMode::Solo, model: Some(cloud()), agents: vec![] };
+    let spec =
+        RunSpec { worker_model: None, mode: RunMode::Solo, model: Some(cloud()), agents: vec![], ..Default::default() };
     let run = engine.create_run("create hello.txt", None, spec).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     let (_, steps) = engine.run_detail(&run.id).await.unwrap();
@@ -287,6 +288,7 @@ async fn orchestra_works_bottom_up_with_delegation_and_reports() {
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("lead", None, "coordinate"), agent("coder", Some("lead"), "write files")],
+        ..Default::default()
     };
     let run = engine.create_run("make files", Some("test -f bye.txt"), spec).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
@@ -387,6 +389,7 @@ async fn orchestra_workers_share_reports_and_diffs_and_keep_a_cacheable_prefix()
             agent("a", Some("lead"), "write a.txt"),
             agent("b", Some("lead"), "write b.txt"),
         ],
+        ..Default::default()
     };
     let run = engine.create_run("make files", None, spec).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
@@ -458,6 +461,7 @@ async fn inject_to_a_reported_agent_reopens_it_while_the_run_is_active() {
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("lead", None, "coordinate"), agent("coder", Some("lead"), "write files")],
+        ..Default::default()
     };
     let run = engine.create_run("make files", None, spec).await.unwrap();
 
@@ -485,6 +489,7 @@ async fn orchestra_trees_are_validated_on_create() {
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("a", None, "t"), agent("b", None, "t")],
+        ..Default::default()
     };
     assert!(matches!(engine.create_run("x", None, spec).await, Err(Error::InvalidRequest(_))));
 }
@@ -525,7 +530,8 @@ async fn solo_chat_with_an_external_acp_agent() {
     let agent = fake_acp(scripts.path(), "ext");
     let (_d, engine) = setup(|c| c.external_agents = vec![agent]).await;
     let model = ModelRef::new(ProviderId::Acp, "ext");
-    let spec = RunSpec { worker_model: None, mode: RunMode::Solo, model: Some(model), agents: vec![] };
+    let spec =
+        RunSpec { worker_model: None, mode: RunMode::Solo, model: Some(model), agents: vec![], ..Default::default() };
     let run = engine.create_run("write a file", Some("test -f ext.txt"), spec).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
     let (_, steps) = engine.run_detail(&run.id).await.unwrap();
@@ -552,6 +558,7 @@ async fn orchestra_mixes_internal_commanders_and_external_agents() {
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("lead", None, "coordinate"), coder],
+        ..Default::default()
     };
     let run = engine.create_run("make files", None, spec).await.unwrap();
     let run = wait_idle(&engine, &run.id).await;
@@ -598,6 +605,7 @@ async fn escalation_never_swaps_out_an_acp_agent() {
         mode: RunMode::Orchestra,
         model: Some(local("lead")),
         agents: vec![agent("lead", None, "coordinate"), coder, bad],
+        ..Default::default()
     };
     let run = engine.create_run("make files", None, spec).await.unwrap();
 
@@ -622,4 +630,77 @@ async fn escalation_never_swaps_out_an_acp_agent() {
     assert_eq!(steps[4].meta["model"], "acp:coder", "the ACP agent must not be swapped for the escalation model");
     assert_eq!(cloud_p.seen.lock().unwrap().len(), 1, "the escalation model is never called on coder's behalf");
     assert!(Path::new(&run.worktree).join("coder.txt").exists());
+}
+
+const ASK: &str =
+    r#"I need a decision. {"tool": "ask", "args": {"question": "Which greeting?", "options": ["hello", "hi"]}}"#;
+
+#[tokio::test]
+async fn a_question_waits_for_the_user_and_the_answer_reaches_the_agent() {
+    let (_d, engine) = setup(|_| {}).await;
+    let m = Scripted::new(ProviderId::Ollama, &[ASK, WRITE, FINISH]);
+    register(&engine, &m);
+    let spec = RunSpec { mode: RunMode::Solo, model: Some(local("a")), ..Default::default() };
+    let run = engine.create_run("greet", None, spec).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Waiting);
+    assert_eq!(run.error.as_deref(), Some("The agent asks: Which greeting?"));
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!((steps[0].meta["tool"].as_str(), steps[0].meta["route"].as_str()), (Some("ask"), Some("user")));
+    assert_eq!(steps[0].meta["options"], json!(["hello", "hi"]));
+
+    // Resuming without an answer keeps waiting; it does not re-ask.
+    engine.start(&run.id).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!((run.status, run.step_count), (RunStatus::Waiting, 1));
+
+    engine.answer(&run.id, 0, "hello").await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    let seen = m.seen.lock().unwrap();
+    let last = &seen[1].messages.last().unwrap().content;
+    assert!(last.contains("Answer from the user:\nhello"), "{last}");
+}
+
+#[tokio::test]
+async fn the_commander_answers_when_questions_go_up_the_chain() {
+    let (_d, engine) = setup(|_| {}).await;
+    // coder asks, lead answers (a side call), coder writes and finishes, lead finishes.
+    let m = Scripted::new(ProviderId::Ollama, &[ASK, "Use hello.", WRITE, FINISH, FINISH]);
+    register(&engine, &m);
+    let spec = RunSpec {
+        mode: RunMode::Orchestra,
+        model: Some(local("lead")),
+        agents: vec![agent("lead", None, "coordinate"), agent("coder", Some("lead"), "write files")],
+        questions: crate::storage::QuestionRoute::Commander,
+        ..Default::default()
+    };
+    let run = engine.create_run("greet", None, spec).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!(steps[0].meta["route"], "commander");
+    assert_eq!((steps[1].kind, steps[1].output.as_str()), (StepKind::Inject, "Use hello."));
+    assert_eq!((steps[1].meta["from"].as_str(), steps[1].meta["agent"].as_str()), (Some("lead"), Some("coder")));
+    let seen = m.seen.lock().unwrap();
+    assert!(seen[1].messages.last().unwrap().content.contains("Question from your subordinate CODER"));
+    assert!(seen[2].messages.iter().any(|x| x.content.contains("Answer from LEAD (lead):\nUse hello.")));
+}
+
+#[tokio::test]
+async fn a_commander_can_pass_a_question_on_to_the_user() {
+    let (_d, engine) = setup(|_| {}).await;
+    let m = Scripted::new(ProviderId::Ollama, &[ASK, "ASK_USER"]);
+    register(&engine, &m);
+    let spec = RunSpec {
+        mode: RunMode::Orchestra,
+        model: Some(local("lead")),
+        agents: vec![agent("lead", None, "coordinate"), agent("coder", Some("lead"), "write files")],
+        questions: crate::storage::QuestionRoute::Commander,
+        ..Default::default()
+    };
+    let run = engine.create_run("greet", None, spec).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Waiting);
+    assert_eq!(run.error.as_deref(), Some("CODER asks: Which greeting?"));
 }

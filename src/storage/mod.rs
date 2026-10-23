@@ -9,7 +9,9 @@ use std::str::FromStr;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
-pub use checkpoint::{AgentSpec, NewStep, Phase, Run, RunMode, RunSpec, RunState, RunStatus, Step, StepKind};
+pub use checkpoint::{
+    AgentSpec, NewStep, Phase, QuestionRoute, Run, RunMode, RunSpec, RunState, RunStatus, Step, StepKind,
+};
 
 use crate::error::Result;
 

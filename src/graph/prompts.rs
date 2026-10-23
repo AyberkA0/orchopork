@@ -144,7 +144,11 @@ pub fn actor_messages(
                     Message::user(format!("Result of {tool} ({status}):\n{}", clip(obs, obs_chars))),
                 ]);
             }
-            StepKind::Inject => groups.push(vec![Message::user(format!("Message from the user:\n{}", s.output))]),
+            StepKind::Inject => {
+                let from =
+                    if s.meta.get("answer_to").is_some() { "Answer from the user" } else { "Message from the user" };
+                groups.push(vec![Message::user(format!("{from}:\n{}", s.output))])
+            }
             StepKind::Verify => groups.push(vec![Message::user(format!(
                 "Verification after your finish:\n{}\n\n{}",
                 s.output,

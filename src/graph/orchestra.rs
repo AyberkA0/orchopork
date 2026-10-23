@@ -18,9 +18,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::time::Instant;
 
 use serde_json::json;
 
+use super::ask::{self, Question};
 use super::{Engine, Inner, Stop, call_meta, prompts, protocol, run_checks, verify_commands};
 use crate::config::{Config, ModelRef};
 use crate::error::{Error, Result};
@@ -29,7 +31,7 @@ use crate::git::GitRepo;
 use crate::graph::tools::ToolBox;
 use crate::providers::{CompletionRequest, Message};
 use crate::skills::{ComposedPrompt, Scope};
-use crate::storage::{AgentSpec, Phase, Run, RunSpec, RunState, Step, StepKind};
+use crate::storage::{AgentSpec, Phase, QuestionRoute, Run, RunSpec, RunState, Step, StepKind};
 
 /// Decimal ranks by the number of agents under command (the whole subtree).
 pub fn rank(spec: &RunSpec, id: &str) -> &'static str {
@@ -46,7 +48,19 @@ fn subtree_size(spec: &RunSpec, id: &str) -> usize {
     spec.children(id).map(|c| 1 + subtree_size(spec, &c.id)).sum()
 }
 
-const EXTERNAL_SUFFIX: &str = "\n\n---\nWork directly in the current directory (the shared git working tree). Do only your task. When you are done, end with a concise report for your commander: what you did, how you verified it, and anything left open. The diff of your changes is attached to your report automatically, so do not paste code.";
+const EXTERNAL_SUFFIX: &str = "\n\n---\nWork directly in the current directory (the shared git working tree). Do only your task. When you are done, end with a concise report for your commander: what you did, how you verified it, and anything left open. The diff of your changes is attached to your report automatically, so do not paste code.\n";
+
+/// The model `me` runs on: its own, else the team's worker model (below
+/// the lead), else the lead's model, else the workspace default.
+pub(super) fn model_for(cfg: &Config, spec: &RunSpec, me: &AgentSpec) -> Result<ModelRef> {
+    let worker = me.parent.as_ref().and(spec.worker_model.clone());
+    me.model
+        .clone()
+        .or(worker)
+        .or_else(|| spec.model.clone())
+        .or_else(|| cfg.routing.actor.clone())
+        .ok_or_else(|| Error::InvalidRequest(format!("no model for agent {}", me.name)))
+}
 
 const DESIGNER: &str = "You design teams of AI agents for software tasks, organised like a decimal military chain of
 command: exactly one lead agent at the top; any agent may command subordinates; keep each commander's direct reports
@@ -263,11 +277,8 @@ impl Inner {
             state.escalate = false;
         }
 
-        // Own model, else the team's worker model (below the lead), else the
-        // lead's model, else the workspace default.
-        let worker = me.parent.as_ref().and(spec.worker_model.clone());
-        let base = me.model.clone().or(worker).or_else(|| spec.model.clone()).or_else(|| cfg.routing.actor.clone());
-        let base = base.ok_or_else(|| Error::InvalidRequest(format!("no model for agent {}", me.name)))?;
+        let base = model_for(cfg, spec, &me)?;
+        let t0 = Instant::now();
         // Escalation swaps in a different (internal) model, so it never
         // applies when the agent's own model is an external ACP agent.
         let (model, escalated) = match (&cfg.routing.escalation, state.escalate) {
@@ -288,10 +299,20 @@ impl Inner {
             }
             let groups = transcript(spec, &me, &root, steps, cfg.limits.tool_output_chars);
             let messages = prompts::windowed(pin, groups, cfg.limits.cloud_context_chars);
-            let prompt = format!("{}\n\n{tail}{}", super::external::as_prompt(&messages), EXTERNAL_SUFFIX);
+            let prompt =
+                format!("{}\n\n{tail}{}{}", super::external::as_prompt(&messages), EXTERNAL_SUFFIX, ask::EXTERNAL_HOW);
             let out = self.external_turn(cfg, run, &model, &me.name, prompt).await?;
             let mut meta = super::external::meta(&model, &out);
             meta["agent"] = json!(me.id);
+            meta["ms"] = json!(t0.elapsed().as_millis() as u64);
+            if !out.cancelled
+                && let Some(q) = ask::from_text(&out.text)
+            {
+                meta["tool"] = json!("ask");
+                let next = RunState { failures: 0, escalate: false, ..state };
+                let obs = super::external::tool_lines(&out);
+                return self.route_question(cfg, run, steps, &me, q, &out.text, &obs, meta, next, 0.0).await;
+            }
             let prior_failures = state.failures;
             let mut next = RunState { failures: 0, escalate: false, ..state };
             let text =
@@ -361,6 +382,8 @@ impl Inner {
         let mut meta = call_meta(&out);
         meta["agent"] = json!(me.id);
         meta["escalated"] = json!(escalated);
+        let call_ms = t0.elapsed().as_millis() as u64;
+        meta["ms"] = json!(call_ms);
         let mut next = state.clone();
         let violations = skills.check_output(&out.text);
         let (observation, ok) = if !violations.is_empty() {
@@ -409,6 +432,16 @@ impl Inner {
                         }
                     }
                 }
+                Ok(a) if a.tool == "ask" => match ask::from_args(&a.args) {
+                    Some(q) => {
+                        meta["tool"] = json!("ask");
+                        let next = RunState { failures: 0, escalate: false, ..next };
+                        return self
+                            .route_question(cfg, run, steps, &me, q, &out.text, "", meta, next, out.cost_usd)
+                            .await;
+                    }
+                    None => ("ask needs a non-empty \"question\"".into(), false),
+                },
                 Ok(a) if a.tool == "delegate" => {
                     meta["tool"] = json!("delegate");
                     let wanted = a.str_arg("agent").or_else(|| a.str_arg("to")).unwrap_or("").trim().to_lowercase();
@@ -447,6 +480,7 @@ impl Inner {
             }
         };
         meta["ok"] = json!(ok);
+        meta["tool_ms"] = json!((t0.elapsed().as_millis() as u64).saturating_sub(call_ms));
         if ok {
             next.failures = 0;
             next.escalate = false;
@@ -466,6 +500,65 @@ impl Inner {
 }
 
 impl Inner {
+    /// Records `me`'s question (`meta` already describes the turn) and
+    /// routes it: to its commander, who answers at once, or to the user,
+    /// for whom the run waits.
+    #[allow(clippy::too_many_arguments)]
+    async fn route_question(
+        &self,
+        cfg: &Config,
+        run: &Run,
+        steps: &[Step],
+        me: &AgentSpec,
+        q: Question,
+        output: &str,
+        observation: &str,
+        mut meta: serde_json::Value,
+        next: RunState,
+        cost: f64,
+    ) -> Result<Option<Stop>> {
+        let spec = &run.spec;
+        for (k, v) in q.meta().as_object().into_iter().flatten() {
+            meta[k] = v.clone();
+        }
+        meta["ok"] = json!(true);
+        let commander =
+            me.parent.as_deref().and_then(|p| spec.agent(p)).filter(|_| spec.questions == QuestionRoute::Commander);
+        let answer = match commander {
+            Some(c) => {
+                self.log(&run.id, format!("{} asks {}: {}", me.name, c.name, clip(&q.text, 120)));
+                self.commander_answer(cfg, run, steps, me, c, &q).await?.map(|a| (c, a))
+            }
+            None => None,
+        };
+        let obs = |line: String| format!("{observation}\n\n{line}").trim().to_string();
+        match answer {
+            Some((c, (text, mut ameta, acost))) => {
+                meta["route"] = json!("commander");
+                meta["answered_by"] = json!(c.id);
+                let obs = obs(format!("Question sent to {}; their answer follows.", c.name));
+                let asked = self.append(run, StepKind::Act, output, Some(&obs), meta, &next, cost).await?;
+                if let Some(m) = ameta.as_object_mut() {
+                    m.remove("tool");
+                    m.remove("external");
+                    m.remove("ok");
+                }
+                ameta["agent"] = json!(me.id);
+                ameta["from"] = json!(c.id);
+                ameta["answer_to"] = json!(asked.seq);
+                self.append(run, StepKind::Inject, &text, None, ameta, &next, acost).await?;
+                Ok(None)
+            }
+            None => {
+                meta["route"] = json!("user");
+                let why = if commander.is_some() { " (their commander passed it on)" } else { "" };
+                let obs = obs(format!("Question sent to the user{why}; wait for the answer."));
+                let asked = self.append(run, StepKind::Act, output, Some(&obs), meta, &next, cost).await?;
+                Ok(Some(Stop::Waiting(ask::status_line(&asked, &me.name))))
+            }
+        }
+    }
+
     /// The checks gating a subordinate's report: the validator skills scoped
     /// to it, then its own `verify` (model-proposed, so only while commands
     /// are allowed). `None` when nothing gates it, and always for the lead,
@@ -580,7 +673,13 @@ fn contract(a: &AgentSpec) -> String {
 /// repository as it was when the run started (shared by every agent, so
 /// cached once for all of them), then who `me` is. Anything that changes
 /// from turn to turn is in `turn_tail` instead.
-fn pinned(run: &Run, spec: &RunSpec, me: &AgentSpec, subs: &[&AgentSpec], files: &[String]) -> prompts::Pinned {
+pub(super) fn pinned(
+    run: &Run,
+    spec: &RunSpec,
+    me: &AgentSpec,
+    subs: &[&AgentSpec],
+    files: &[String],
+) -> prompts::Pinned {
     let shared = format!("# Mission (from the user)\n{}\n{}\n", run.goal.trim(), prompts::file_overview(files, 150));
     let mut s = format!(
         "# You\n{} (id {}), rank {}. Role: {}\nYour task: {}\n",
@@ -750,7 +849,13 @@ fn report_text(s: &Step, with_patch: bool) -> String {
 /// its direct subordinates (with their diffs), reports from teammates under
 /// the same commander, user messages for it, and (lead only) verification
 /// results.
-fn transcript(spec: &RunSpec, me: &AgentSpec, root: &str, steps: &[Step], obs_chars: usize) -> Vec<Vec<Message>> {
+pub(super) fn transcript(
+    spec: &RunSpec,
+    me: &AgentSpec,
+    root: &str,
+    steps: &[Step],
+    obs_chars: usize,
+) -> Vec<Vec<Message>> {
     let mut groups = Vec::new();
     let name = |id: &str| spec.agent(id).map(|a| a.name.clone()).unwrap_or_else(|| id.to_string());
     for s in steps {
@@ -793,7 +898,19 @@ fn transcript(spec: &RunSpec, me: &AgentSpec, root: &str, steps: &[Step], obs_ch
                 ))]);
             }
             StepKind::Inject if agent == me.id => {
-                groups.push(vec![Message::user(format!("Message from the user:\n{}", s.output))]);
+                let from = match s.meta["from"].as_str() {
+                    Some(f) => format!("Answer from {} ({f})", name(f)),
+                    None if s.meta.get("answer_to").is_some() => "Answer from the user".to_string(),
+                    None => "Message from the user".to_string(),
+                };
+                groups.push(vec![Message::user(format!("{from}:\n{}", s.output))]);
+            }
+            StepKind::Inject if s.meta["from"].as_str() == Some(me.id.as_str()) => {
+                groups.push(vec![Message::user(format!(
+                    "(You answered a question from {} ({agent}): {})",
+                    name(agent),
+                    clip(&s.output, 2_000)
+                ))]);
             }
             StepKind::Verify if me.id == root => groups.push(vec![Message::user(format!(
                 "Verification after your finish:\n{}\n\n{}",

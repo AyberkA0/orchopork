@@ -4,20 +4,29 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>orchopork</title>
+<link rel="icon" href="/logo.png">
+<script>try { document.documentElement.dataset.theme = JSON.parse(localStorage.getItem("op.theme")) || "dark"; } catch { document.documentElement.dataset.theme = "dark"; }</script>
 <style>
-:root {
-  --bg: #fbfaf8; --bg2: #f3f2ee; --panel: #ffffff; --line: #e4e2dc; --text: #17181a; --muted: #6e7076; --faint: #a3a5aa;
-  --accent: #5b5bd6; --accent2: #0ea5a0; --accent-ink: #fff; --ok: #1a8a4a; --warn: #b26b00; --bad: #c2362b;
-  --glow: rgba(91, 91, 214, .16); --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 28px rgba(0,0,0,.06);
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+/* The look of the README's figures: paper and ink, hairline frames, square
+   corners, round nodes, one coral accent, lowercase mono labels. Dark is
+   the default; light is the figures' own paper. */
+:root, :root[data-theme="dark"] {
+  --bg: #161413; --bg2: #1d1a19; --panel: #1e1b1a; --line: rgba(239,235,228,.13); --frame: rgba(239,235,228,.62);
+  --text: #efebe4; --muted: #a39c96; --faint: #6f6964;
+  --accent: #f37e8f; --accent2: #f37e8f; --accent-ink: #231f20; --ok: #8cc79a; --warn: #e9b65c; --bad: #ff8a6b;
+  --glow: rgba(243,126,143,.16); --shadow: none; --paper-dots: rgba(239,235,228,.09);
+  --surface: #262220; --surface2: #302b28; --hair: rgba(239,235,228,.06);
+  --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  color-scheme: dark;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0d0e11; --bg2: #14161a; --panel: #17191e; --line: #262930; --text: #ececf0; --muted: #9194a0; --faint: #5d606a;
-    --accent: #8b8cff; --accent2: #2dd4bf; --accent-ink: #0d0e11; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
-    --glow: rgba(139, 140, 255, .18); --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
-  }
+:root[data-theme="light"] {
+  --bg: #f7f6f3; --bg2: #f0eee9; --panel: #fdfcfa; --line: rgba(35,31,32,.13); --frame: #231f20;
+  --text: #231f20; --muted: #8c8686; --faint: #b1abaa;
+  --accent: #f37e8f; --accent2: #f37e8f; --accent-ink: #231f20; --ok: #2f7d4b; --warn: #a3620a; --bad: #b8402c;
+  --glow: rgba(243,126,143,.2); --shadow: none; --paper-dots: rgba(35,31,32,.12);
+  --surface: #ebe8e2; --surface2: #e2ded7; --hair: rgba(35,31,32,.07);
+  color-scheme: light;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14.5px/1.55 var(--sans); }
@@ -293,7 +302,226 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .toast.act { pointer-events: auto; cursor: pointer; }
 .toast.act u { text-decoration: none; opacity: .75; margin-left: 8px; }
 
+/* waiting for an answer */
+.pill.waiting { color: var(--warn); border-color: var(--warn); }
+.sdot.waiting { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+.qcard { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; margin: 12px 0; background: var(--panel); }
+.qcard.open { border-color: var(--warn); box-shadow: 0 0 0 3px rgba(178,107,0,.12); }
+.qcard .qh { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+.qcard .qi { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font: 700 12px var(--sans); background: var(--warn); color: #fff; flex: none; }
+.qcard .qt { margin: 6px 0 2px 28px; font-size: 14px; }
+.qcard .qopts { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 0 28px; }
+.qcard .qopts button { font-weight: 500; }
+.qcard .qa { margin: 8px 0 4px 28px; align-items: flex-end; }
+.qcard .qa textarea { min-height: 38px; }
+.qcard > .row.small { margin-left: 28px; }
+.qbanner { display: flex; gap: 10px; align-items: center; margin: 0 16px 8px; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 12px; background: var(--panel); font-size: 13px; cursor: pointer; }
+.qbanner b { color: var(--warn); }
+.ans-from { display: flex; margin: 10px 0; }
+.ans-from > div { border-left: 3px solid var(--accent2); padding: 4px 12px; font-size: 13.5px; }
+/* markdown */
+.md { white-space: normal; }
+.md p { margin: 6px 0; white-space: pre-wrap; } .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 12px 0 4px; font-size: 14.5px; }
+.md ul, .md ol { margin: 4px 0; padding-left: 22px; } .md li { margin: 2px 0; }
+.md code { font: 12.5px var(--mono); background: var(--bg2); border: 1px solid var(--line); border-radius: 5px; padding: 0 4px; }
+.md blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
+/* outputs */
+.outputs { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; margin: 16px 0 6px; background: var(--panel); }
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
+.thumb { position: relative; padding: 0; height: 120px; overflow: hidden; border-radius: 10px; background: repeating-conic-gradient(var(--bg2) 0 25%, var(--panel) 0 50%) 0 0 / 16px 16px; }
+.thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.thumb iframe { width: 400%; height: 400%; transform: scale(.25); transform-origin: 0 0; border: 0; pointer-events: none; background: #fff; }
+.thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 8px; font: 500 11px var(--sans); background: rgba(0,0,0,.55); color: #fff; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.fchip { display: inline-flex; gap: 6px; align-items: center; font: 500 12px var(--sans); padding: 4px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+.fic { font-size: 12px; color: var(--muted); } .fic.added { color: var(--ok); } .fic.deleted { color: var(--bad); }
+.modal.xwide { width: min(1200px, 100%); height: 86vh; display: flex; flex-direction: column; }
+.fviewer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.fgrid { display: grid; grid-template-columns: 260px 1fr; gap: 12px; flex: 1; min-height: 0; margin-top: 8px; }
+.flist { border: 1px solid var(--line); border-radius: 12px; overflow-y: auto; }
+.fit { display: flex; gap: 8px; align-items: center; padding: 7px 10px; cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--line); }
+.fit:hover { background: var(--bg2); } .fit.on { background: var(--glow); }
+.fit .fnm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fright { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.fbar { padding-bottom: 8px; }
+.fpane { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 12px; overflow: auto; display: flex; flex-direction: column; }
+.fimg { flex: 1; display: grid; place-items: center; padding: 16px; background: repeating-conic-gradient(var(--bg2) 0 25%, var(--panel) 0 50%) 0 0 / 20px 20px; }
+.fimg img { max-width: 100%; max-height: 70vh; }
+.fframe { flex: 1; width: 100%; min-height: 60vh; border: 0; background: #fff; }
+.ftext { padding: 10px 12px; } .ftext.fmd { padding: 10px 18px; }
+.fempty { padding: 30px; text-align: center; color: var(--muted); }
+pre.code { margin: 0; font: 12px/1.55 var(--mono); white-space: pre; }
+pre.code .ln { display: inline-block; width: 42px; padding-right: 10px; text-align: right; color: var(--faint); user-select: none; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 5px 11px; background: var(--panel); font-weight: 500; }
+.seg button.on { background: var(--text); color: var(--bg); }
+a.button { display: inline-block; text-decoration: none; font: 600 13px var(--sans); padding: 6px 10px; border-radius: 9px; color: var(--muted); }
+a.button:hover { background: var(--bg2); color: var(--text); }
+/* measurements */
+.hstats { display: inline-flex; gap: 6px; align-items: center; font-weight: 500; color: var(--muted); padding: 5px 9px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; margin-top: 10px; }
+.tile { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--panel); }
+.tile .tl { font: 600 11px var(--sans); color: var(--faint); text-transform: uppercase; letter-spacing: .05em; }
+.tile .tv { font: 650 20px var(--sans); letter-spacing: -.02em; margin-top: 2px; }
+.tile .ts { font-size: 11.5px; color: var(--muted); }
+.tile.warnt .tv { color: var(--warn); } .tile.badt .tv { color: var(--bad); }
+.modal h4 { margin: 18px 0 6px; font: 600 11px var(--sans); color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+svg.tline { width: 100%; height: auto; display: block; }
+svg.tline .lab { font: 11px var(--sans); fill: var(--muted); }
+.mtable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mtable th { text-align: left; font: 600 11px var(--sans); color: var(--faint); padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.mtable td { padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.mtable td.nm { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.mtable .barc { width: 120px; } .mtable .bar { height: 6px; border-radius: 3px; background: linear-gradient(90deg, var(--accent2), var(--accent)); }
+.mtable.cmp td.best { color: var(--ok); font-weight: 650; }
+.mtable a { color: var(--text); text-decoration: none; } .mtable a:hover { text-decoration: underline; }
+.page .inner.wide { width: min(1080px, 100%); }
+.mgrp { padding: 10px 0; border-bottom: 1px dashed var(--line); } .mgrp:last-child { border-bottom: 0; }
+
+/* ---- figure style ---- */
+/* Rounded but flat: the figures' hairlines and palette, with soft corners. */
+* { box-shadow: none !important; }
+.modal { border-radius: 18px; } .card, .outputs, .qcard, .composer { border-radius: 16px; }
+.node, .tile, .rcard, .ext, .reserve, .deploy, .pop, .fpane, .flist, .fp, .mlist, .notice, .thumb { border-radius: 12px; }
+button, input, select, textarea, .fchip, .seg, .hitem, .mitem, .fit, .pal .it, .ext-badge, .kbd, a.button { border-radius: 9px; }
+.pill { border-radius: 99px; }
+.meter, .meter > div, .mtable .bar { border-radius: 99px; }
+.seg button { border-radius: 0; }
+.dot, .sdot, .ud, .qi, .send, .spin, .dots i, .node .add, .brand i, .orb, .lane-dot { border-radius: 50% !important; }
+body { letter-spacing: -.003em; }
+button { border-color: var(--line); background: transparent; font-weight: 600; }
+button:hover:not(:disabled) { border-color: var(--frame); }
+button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+button.accent { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.ghost, button.ghost:hover { border-color: transparent; }
+input, select, textarea { background: transparent; }
+input:focus, select:focus, textarea:focus { border-color: var(--frame); box-shadow: none; outline: 2px solid var(--glow); outline-offset: 0; }
+/* frames: what the figures draw as ink rectangles */
+.composer, .card, .modal, .node, .qcard, .outputs, .tile, .rcard, .ext, .reserve, .deploy, .pop, .fpane, .flist, .fp, .mlist, .notice, .hud button, .thumb, .fchip, .choice button, .addcard, .seg { border: 1.25px solid var(--frame); }
+.composer, .card, .modal, .node, .qcard, .outputs, .rcard, .reserve, .deploy, .pop { background: var(--panel); }
+.composer:focus-within { border-color: var(--accent); box-shadow: none; }
+.tile, .ext, .fchip { border-color: var(--line); }
+.modal { border-width: 1.25px; }
+.scrim { background: rgba(10,9,9,.55); }
+/* labels: lowercase mono, like the figures' captions */
+.hist h6, .mgroup, .card h3, .tile .tl, .modal h4, .reserve h6, .resume h6, .pal .grp, .mtable th, .node .rank, .pill, .kbd {
+  font-family: var(--mono); text-transform: lowercase; letter-spacing: 0; font-weight: 500;
+}
+.card h3, .modal h4 { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }
+.card h3::before, .modal h4::before { content: ""; width: 8px; height: 8px; background: var(--accent); flex: none; }
+.hist h6 { color: var(--muted); }
+.mgroup { background: var(--panel); }
+.pill { font-size: 10.5px; padding: 1px 7px; }
+.pill.running, .node .rank { color: var(--accent); border-color: var(--accent); }
+.tile .tv { font-family: var(--sans); font-weight: 700; }
+/* brand */
+.brand { font: 700 15px var(--sans); letter-spacing: -.02em; }
+.brand img { width: 22px; height: 22px; display: block; }
+.brand i { display: none; }
+/* no gradients: coral fills and ink outlines */
+.hero h1 { font-weight: 700; letter-spacing: -.03em; }
+.hero h1 span { background: none; color: var(--accent); -webkit-text-fill-color: currentColor; }
+.orb { background: var(--accent); box-shadow: none; outline: 1.25px solid var(--frame); outline-offset: 6px; width: 34px; height: 34px; }
+.meter { height: 6px; border: 1px solid var(--frame); background: transparent; }
+.meter > div, .mtable .bar { background: var(--accent); }
+.ext-badge { background: none; color: var(--text); border: 1px solid var(--frame); font: 600 9.5px var(--mono); letter-spacing: 0; padding: 1px 5px; }
+.send { background: var(--text); color: var(--bg); }
+.toast { background: var(--text); color: var(--bg); border: 1.25px solid var(--text); }
+.toast.err { background: var(--bad); border-color: var(--bad); color: #fff; }
+/* selection: a coral rule on the left instead of a raised card */
+.hitem.sel, .mitem.sel, .pal .it.on, .fit.on { background: var(--glow); }
+.hitem:hover, .mitem:hover { background: var(--bg2); }
+.choice button.hot, .addcard:hover { border-color: var(--accent); }
+/* the canvas: dotted paper, ink edges, round-cornerless nodes */
+.canvas { background-color: var(--bg); background-image: radial-gradient(var(--paper-dots) 1px, transparent 1px); }
+.edges path { stroke: var(--frame); stroke-width: 1.25; }
+.edges path.live { stroke: var(--accent); stroke-dasharray: 4 4; }
+.node.sel { border-color: var(--accent); outline: 2px solid var(--glow); }
+.node.active { border-color: var(--accent); } .node.active::after { border: 1.25px dashed var(--accent); inset: -6px; border-radius: 16px; }
+.node.reported { border-color: var(--ok); }
+.node.drop { border-color: var(--accent); outline: 4px solid var(--glow); }
+.ghost-drag { background: var(--accent); color: var(--accent-ink); }
+.qcard.open { border-color: var(--warn); }
+.qcard .qi { background: var(--accent); color: var(--accent-ink); }
+.ans-from > div { border-left-color: var(--accent); }
+.thinking .dots i, .dots i { background: var(--accent); }
+.seg button.on { background: var(--text); color: var(--bg); }
+.mtable td, .mtable th { border-bottom-color: var(--line); }
+.mtable.cmp td.best { color: var(--ok); }
+details.out pre, pre.block { background: var(--bg2); border-color: var(--line); }
+.verify-in { border-top-color: var(--line); }
+.theme-btn { padding: 6px 8px; font-size: 13px; }
+svg.ico { display: inline-block; vertical-align: -2px; flex: none; }
+/* An icon and its label sit side by side (text nodes do not count for
+   :last-child, so spacing comes from a flex gap). */
+button:has(> svg.ico), .pill:has(> svg.ico) { display: inline-flex; align-items: center; gap: 7px; }
+.pop button, .pop button:has(> svg.ico) { display: flex; align-items: center; gap: 9px; }
+.steptools button:has(> svg.ico) { gap: 5px; }
+.icon-btn { display: inline-grid; place-items: center; padding: 6px 8px; }
+/* nodes carry the figures' markers: a coral disc for the lead, an ink ring for the rest */
+.node .rank::before { content: ""; width: 9px; height: 9px; border: 1.25px solid var(--frame); border-radius: 50% !important; flex: none; }
+.node.lead .rank::before { background: var(--accent); border-color: var(--accent); }
+.node .rank .chev { display: none; }
+
+/* ---- borderless: surfaces and tone separate things, not lines ---- */
+*, *::before, *::after { border-color: transparent !important; }
+/* Only large containers keep an edge, thin and nearly transparent. */
+.modal, .composer, .side, .panel, .card, .outputs { border-color: var(--hair) !important; }
+.modal, .composer, .card, .outputs { border-width: 1px !important; border-style: solid !important; }
+/* fills instead of frames */
+button { background: var(--surface); }
+button:hover:not(:disabled) { background: var(--surface2); }
+button.ghost { background: transparent; } button.ghost:hover:not(:disabled) { background: var(--surface); }
+button.primary { background: var(--text); color: var(--bg); } button.primary:hover:not(:disabled) { background: var(--text); opacity: .88; }
+button.accent, button.accent:hover:not(:disabled) { background: var(--accent); color: var(--accent-ink); }
+button.danger { background: transparent; }
+input, select, textarea { background: var(--surface); }
+.composer textarea, .pal input, .qcard .qa textarea { background: transparent; }
+/* Text typed into the composer or the palette needs no ring of its own:
+   the composer shows focus on its edge. */
+.composer textarea:focus, .pal input:focus, .qcard .qa textarea:focus { outline: none; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--glow); }
+.composer:focus-within { border-color: rgba(243,126,143,.35) !important; }
+.pill, .kbd, .ext-badge, .fchip, .seg, .act .ic, .chip { background: var(--surface); }
+.pill.running { background: var(--glow); color: var(--accent); }
+.pill.done { background: rgba(140,199,154,.14); color: var(--ok); }
+.pill.paused, .pill.waiting { background: rgba(233,182,92,.14); color: var(--warn); }
+.seg button { background: transparent; } .seg button.on { background: var(--text); color: var(--bg); }
+.node, .tile, .rcard, .ext, .qcard, .reserve, .deploy, .pop, .fpane, .flist, .fp, .mlist, .notice, .hud button, .tpl, .addcard, .choice button { background: var(--panel); }
+.tile, .ext { background: var(--bg2); }
+.card .tile, .modal .tile, .modal .ext, .card .ext, .outputs .fchip { background: var(--surface); }
+.modal .mlist, .modal .flist, .modal .fpane, .modal .fp { background: var(--bg2); }
+.choice button.hot, .addcard:hover, .tpl:hover { background: var(--glow); }
+.msg-user > div:not(.steptools) { background: var(--surface); }
+details.out pre, pre.block, .md code { background: var(--surface); }
+.md blockquote { background: var(--bg2); padding: 6px 10px; border-radius: 8px; }
+.verify-in { background: var(--surface); border-radius: 9px; padding: 8px 10px; margin-top: 6px; }
+.meter { background: var(--surface); }
+.orb { outline: none; }
+.spin { border-color: var(--surface2) !important; border-top-color: var(--accent) !important; }
+/* states as tints */
+.qcard.open { background: rgba(233,182,92,.08); }
+.qbanner, .banner { background: rgba(233,182,92,.1); }
+.notice { background: rgba(233,182,92,.08); }
+.ans-from > div { background: var(--glow); border-radius: 12px; padding: 8px 12px; }
+.node.sel { background: var(--surface); outline: 2px solid var(--glow); }
+.node.active { background: var(--glow); } .node.active::after { display: none; }
+.node.drop { background: var(--glow); outline: 3px solid var(--glow); }
+.node .rank::before { background: var(--surface2); }
+.node.lead .rank::before { background: var(--accent); }
+/* tables and lists: rhythm instead of rules */
+.mtable { border-collapse: separate; border-spacing: 0; }
+.mtable td, .mtable th { padding: 7px 10px; border: 0 !important; }
+.mtable tr:nth-child(even) td { background: var(--hair); }
+.mtable tr td:first-child { border-radius: 8px 0 0 8px; } .mtable tr td:last-child { border-radius: 0 8px 8px 0; }
+.mitem, .fit { margin: 2px 4px; border-radius: 8px; }
+.mgrp { padding: 14px 0 6px; }
+.hist h6, .mgroup { background: transparent; }
+.toast { background: var(--text); color: var(--bg); }
+.thumb { background-color: var(--surface); }
+
 @media (max-width: 860px) {
+  .fgrid { grid-template-columns: 1fr; grid-template-rows: 160px 1fr; }
   .shell, .shell.collapsed { grid-template-columns: 1fr; }
   .side { position: fixed; left: 0; top: 0; bottom: 0; width: min(300px, 86vw); z-index: 40; transform: translateX(-102%); box-shadow: var(--shadow); transition: transform .25s cubic-bezier(.2,.8,.2,1); }
   .shell.mob .side { transform: none; }
@@ -330,6 +558,46 @@ const h = (tag, attrs = {}, ...kids) => {
   return n;
 };
 const $ = (s, el = document) => el.querySelector(s);
+// Solid icons: filled shapes (`f`, even-odd for holes) and a few heavy
+// strokes (`s`). The interface never uses emoji: they render differently on
+// every system and clash with the look.
+const ICONS = {
+  gear: { f: "M19.48 10.17 L21.89 10.51 L21.89 13.49 L19.48 13.83 L18.58 15.99 L20.05 17.93 L17.93 20.05 L15.99 18.58 L13.83 19.48 L13.49 21.89 L10.51 21.89 L10.17 19.48 L8.01 18.58 L6.07 20.05 L3.95 17.93 L5.42 15.99 L4.52 13.83 L2.11 13.49 L2.11 10.51 L4.52 10.17 L5.42 8.01 L3.95 6.07 L6.07 3.95 L8.01 5.42 L10.17 4.52 L10.51 2.11 L13.49 2.11 L13.83 4.52 L15.99 5.42 L17.93 3.95 L20.05 6.07 L18.58 8.01Z M15.2 12a3.2 3.2 0 1 0-6.4 0a3.2 3.2 0 1 0 6.4 0Z" },
+  chart: { f: "M3.5 19h17v2.5h-17z M5 11h3.5v6.5H5z M10.25 5h3.5v12.5h-3.5z M15.5 8.5H19v9h-3.5z" },
+  sun: { f: "M12 16.8a4.8 4.8 0 1 0 0-9.6 4.8 4.8 0 0 0 0 9.6Z", s: "M12 2.5v1.8M12 19.7v1.8M2.5 12h1.8M19.7 12h1.8M5.3 5.3l1.3 1.3M17.4 17.4l1.3 1.3M5.3 18.7l1.3-1.3M17.4 6.6l1.3-1.3" },
+  moon: { f: "M20.5 14.6A8.7 8.7 0 0 1 9.4 3.5a8.7 8.7 0 1 0 11.1 11.1Z" },
+  bell: { f: "M12 2.8a6.2 6.2 0 0 0-6.2 6.2v4.6l-2.1 3.3h16.6l-2.1-3.3V9A6.2 6.2 0 0 0 12 2.8Z M9.3 18.4a2.7 2.7 0 0 0 5.4 0Z" },
+  belloff: { f: "M12 2.8a6.2 6.2 0 0 0-6.2 6.2v4.6l-2.1 3.3h11.6L6.4 6.1A6 6 0 0 1 12 2.8Z M18.2 13.2V9a6.2 6.2 0 0 0-9.6-5.2Z M9.3 18.4a2.7 2.7 0 0 0 5.4 0Z", s: "M3.5 3.5l17 17" },
+  star: { f: "M12 2.8l2.85 5.9 6.45.9-4.7 4.5 1.15 6.4L12 17.4l-5.75 3.1 1.15-6.4-4.7-4.5 6.45-.9L12 2.8Z" },
+  agent: { f: "M13.5 2 4.5 13.6h6.2L9.6 22l9-11.6h-6.2L13.5 2Z" },
+  play: { f: "M7 4.2v15.6a1 1 0 0 0 1.5.86l12.4-7.8a1 1 0 0 0 0-1.72L8.5 3.34A1 1 0 0 0 7 4.2Z" },
+  pause: { f: "M6.5 4.5h4v15h-4z M13.5 4.5h4v15h-4z" },
+  trash: { f: "M9 2.5h6l1 2h4.5V7h-17V4.5H8l1-2Z M5 8.5h14l-1.1 12a1.5 1.5 0 0 1-1.5 1.4H7.6a1.5 1.5 0 0 1-1.5-1.4L5 8.5Z" },
+  compare: { f: "M10.9 2.5h2.2v15.5h4.4v2.7H6.5V18h4.4z M3.5 5h17v2.2h-17z M2 14 5.75 7.5 9.5 14a3.75 3.75 0 0 1-7.5 0Z M14.5 14l3.75-6.5L22 14a3.75 3.75 0 0 1-7.5 0Z" },
+  copy: { f: "M8.5 8h11.5a1 1 0 0 1 1 1v11.5a1 1 0 0 1-1 1H8.5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z M4 2.5h11a1 1 0 0 1 1 1v3H7a1.5 1.5 0 0 0-1.5 1.5v8.5H4a1 1 0 0 1-1-1v-12a1 1 0 0 1 1-1Z" },
+  retry: { f: "M21 3.5v7h-7z", s: "M19.6 9.5A8 8 0 1 0 20 14" },
+  rewind: { f: "M3 3.5v7h7z", s: "M4.4 9.5A8 8 0 1 1 4 14" },
+  push: { f: "M12 2.5l7 7.8h-4.5V17h-5v-6.7H5z M4.5 19h15v2.5h-15z" },
+  edit: { f: "M3.5 20.5l1.2-5.4L15.4 4.4a2.3 2.3 0 0 1 3.2 0l1 1a2.3 2.3 0 0 1 0 3.2L8.9 19.3l-5.4 1.2Z" },
+};
+function icon(name, { size = 14 } = {}) {
+  const NS = "http://www.w3.org/2000/svg", spec = ICONS[name] || {};
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("width", size); svg.setAttribute("height", size);
+  svg.setAttribute("class", "ico"); svg.setAttribute("aria-hidden", "true");
+  if (spec.f) {
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", spec.f); p.setAttribute("fill", "currentColor"); p.setAttribute("fill-rule", "evenodd");
+    svg.append(p);
+  }
+  if (spec.s) {
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", spec.s); p.setAttribute("fill", "none"); p.setAttribute("stroke", "currentColor");
+    p.setAttribute("stroke-width", "2.6"); p.setAttribute("stroke-linecap", "round"); p.setAttribute("stroke-linejoin", "round");
+    svg.append(p);
+  }
+  return svg;
+}
 const money = (x) => "$" + (x || 0).toFixed((x || 0) < 1 ? 3 : 2);
 const mref = (m) => (m ? `${m.provider}:${m.model}` : "");
 const firstLine = (s, n = 90) => { const l = (s || "").trim().split("\n")[0]; return l.length > n ? l.slice(0, n) + "…" : l; };
@@ -394,6 +662,14 @@ const skLines = (n, widths = ["w80", "w60", "w40"]) => Array.from({ length: n },
 const guard = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message, true); } };
 function autosize(t) { const f = () => { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 280) + "px"; }; t.addEventListener("input", f); setTimeout(f); }
 
+// ---------- theme: dark by default, light on request ----------
+const theme = () => document.documentElement.dataset.theme || "dark";
+function toggleTheme() {
+  const next = theme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next; store.set("theme", next);
+  if ($(".side")) replaceSide();
+}
+
 // ---------- app state ----------
 const S = { state: null, runs: null, models: null, view: null, detail: null, pending: null, es: null, sideOpen: store.get("side", true) };
 
@@ -415,20 +691,20 @@ function markSeen(run) {
   if (it) { it.classList.remove("unread"); it.querySelector(".ud")?.remove(); }
   updateTitle();
 }
-const isUnread = (r, seen = seenMap()) => r.status !== "running" && (seen[r.id] || 0) < r.updated_at && !(S.view && S.view.id === r.id);
+const isUnread = (r, seen = seenMap()) => r.status === "waiting" || (r.status !== "running" && (seen[r.id] || 0) < r.updated_at && !(S.view && S.view.id === r.id));
 function updateTitle() {
   const ws = S.state && S.state.workspace; if (!ws) { document.title = "orchopork"; return; }
   const runs = S.runs || [], seen = seenMap();
   const running = runs.filter((r) => r.status === "running").length, unread = runs.filter((r) => isUnread(r, seen)).length;
-  document.title = `${unread ? `(${unread}) ` : ""}${running ? "▶ " : ""}${baseName(ws.root)} · orchopork`;
+  document.title = `${unread ? `(${unread}) ` : ""}${running ? "running · " : ""}${baseName(ws.root)} · orchopork`;
 }
 const runHash = (r) => `#/${r.spec.mode === "orchestra" ? "o" : "c"}/${r.id}`;
 const pinned = () => pget("pins", []);
 function togglePin(id) { const p = pinned(); pset("pins", p.includes(id) ? p.filter((x) => x !== id) : [id, ...p]); replaceSide(); }
 const hasDraft = (id) => !!pget("draft:" + id, "");
 // Status of a run as one word: running, paused, done, or error.
-const runState = (r) => (r.status === "running" ? "running" : r.status === "done" ? "done" : r.error ? "error" : "paused");
-const STATE_LABEL = { running: "running", paused: "paused", done: "done", error: "stopped" };
+const runState = (r) => (r.status === "running" ? "running" : r.status === "waiting" ? "waiting" : r.status === "done" ? "done" : r.error ? "error" : "paused");
+const STATE_LABEL = { running: "running", waiting: "needs your answer", paused: "paused", done: "done", error: "stopped" };
 async function loadModels(force) { if (!S.models || force) S.models = await api("/api/models"); return S.models; }
 
 // ---------- router ----------
@@ -441,6 +717,7 @@ window.addEventListener("beforeunload", (e) => { if (S.view && S.view.kind === "
 function viewFor(hash) {
   const [, a, b] = hash.slice(1).split("/");
   if (a === "models") return viewModels;
+  if (a === "metrics") return (m) => viewMeasurements(m, b);
   if (a === "o" && b === "new") return viewOrchestraDraft;
   if (a === "o" && b) return (m) => viewOrchestraRun(m, b);
   if (a === "c" && b) return (m) => viewChat(m, b);
@@ -483,15 +760,16 @@ function histEl() {
       title: `${r.goal}\n${STATE_LABEL[st]} · ${r.spec.mode === "orchestra" ? "orchestra" : "single agent"} · ${r.branch}${r.error ? "\n" + r.error : ""}`,
       onclick: () => { go(runHash(r)); if (narrow()) toggleSide(false); } },
       h("span", { class: "sdot " + st }), h("span", { class: "ic", text: r.spec.mode === "orchestra" ? "⎇" : "›" }), h("span", { class: "t", text: r.goal }),
-      hasDraft(r.id) && h("span", { class: "dr", title: "Unsent draft", text: "✎" }),
+      hasDraft(r.id) && h("span", { class: "dr", title: "Unsent draft" }, icon("edit", { size: 11 })),
       unread ? h("span", { class: "ud", title: "Changed since you last looked" }) : h("span", { class: "when", text: ago(r.updated_at) }),
-      h("button", { class: "pin" + (pin ? " on" : ""), title: pin ? "Unpin" : "Pin to top", text: pin ? "★" : "☆", onclick: (e) => { e.stopPropagation(); togglePin(r.id); } }));
+      h("button", { class: "pin" + (pin ? " on" : ""), title: pin ? "Unpin" : "Pin to top", onclick: (e) => { e.stopPropagation(); togglePin(r.id); } }, icon("star", { size: 12, fill: pin })));
   };
   const used = new Set();
   const take = (pred) => runs.filter((r) => !used.has(r.id) && pred(r)).map((r) => (used.add(r.id), r));
   const byActivity = (a, b) => b.updated_at - a.updated_at;
   const sections = [
     ["Pinned", take((r) => pins.includes(r.id))],
+    ["Waiting for your answer", take((r) => r.status === "waiting").sort(byActivity)],
     ["Running", take((r) => r.status === "running")],
     ["Needs you", take((r) => isUnread(r, seen)).sort(byActivity)],
   ];
@@ -535,7 +813,7 @@ function sideEl() {
   const notifyOn = store.get("notify", false) && "Notification" in window && Notification.permission === "granted";
   return h("aside", { class: "side" },
     h("div", { class: "top" },
-      h("div", { class: "row" }, h("div", { class: "brand" }, h("i"), "orchopork"), h("span", { class: "grow" }),
+      h("div", { class: "row" }, h("div", { class: "brand" }, h("img", { src: "/logo.png", alt: "" }), "orchopork"), h("span", { class: "grow" }),
         h("button", { class: "ghost hide-side", title: "Hide sidebar", text: "⟨", onclick: () => toggleSide() })),
       h("button", { class: "ghost projbtn", title: ws.root + " — switch project", onclick: switchProject }, h("span", { text: "▣" }), h("span", { class: "n grow", text: baseName(ws.root) }), h("span", { class: "faint", text: "⇅" })),
       ws.vcs && !ws.vcs.is_repo && h("div", { class: "small warn", style: { padding: "6px 4px 0" } }, "Not a git repository yet. ", h("a", { href: "#", text: "Initialize", onclick: guard(async (e) => { e.preventDefault(); await api("/api/workspace", { body: { path: ws.root, git_init: true } }); await loadState(); refreshSide(); toast("Repository initialized"); }) })),
@@ -545,8 +823,10 @@ function sideEl() {
     h("div", { class: "foot" },
       h("div", { class: "row small" }, h("span", { class: "muted", text: `${money(b.spent_usd)} of ${money(b.cap_usd)}` }), h("span", { class: "grow" }), h("span", { class: "faint", text: "this month" })),
       h("div", { class: "meter" }, h("div", { style: { width: pct + "%" } })),
-      h("div", { class: "row" }, h("button", { class: "ghost", style: { padding: "6px 8px" }, onclick: () => go("#/models"), text: "⚙  Models & settings" }), h("span", { class: "grow" }),
-        "Notification" in window && h("button", { class: "ghost", style: { padding: "6px 8px", opacity: notifyOn ? 1 : .6 }, title: notifyOn ? "Desktop notifications on — click to turn off" : "Notify me when a task finishes or stops while this tab is in the background", text: notifyOn ? "🔔" : "🔕", onclick: toggleNotify })),
+      h("div", { class: "row" }, h("button", { class: "ghost", style: { padding: "6px 8px" }, onclick: () => go("#/models"), title: "Models & settings" }, icon("gear"), "Settings"),
+        h("button", { class: "ghost icon-btn", title: "Measurements: every run measured and compared", onclick: () => go("#/metrics") }, icon("chart")), h("span", { class: "grow" }),
+        h("button", { class: "ghost icon-btn", title: theme() === "dark" ? "Switch to light mode" : "Switch to dark mode", onclick: toggleTheme }, icon(theme() === "dark" ? "sun" : "moon")),
+        "Notification" in window && h("button", { class: "ghost icon-btn", style: { opacity: notifyOn ? 1 : .6 }, title: notifyOn ? "Desktop notifications on — click to turn off" : "Notify me when a task finishes or stops while this tab is in the background", onclick: toggleNotify }, icon(notifyOn ? "bell" : "belloff"))),
       h("div", { class: "small faint mono", title: ws.root, style: { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer" }, text: ws.root, onclick: switchProject })));
 }
 // The shell (sidebar + frame) persists across navigation; only the main
@@ -712,7 +992,7 @@ function composer({ placeholder, onSend, verify, running, onStop, big, draft }) 
 function viewHome(main) {
   const hour = new Date().getHours();
   const hi = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-  const c = composer({ placeholder: "Describe what you want built, fixed or explained…", verify: true, big: true, draft: "home",
+  const c = composer({ placeholder: "Describe what you want built, fixed or explained…", big: true, draft: "home",
     onSend: (goal, verify, clear) => askMode(goal, verify, clear) });
   if (S.prefill) { const p = S.prefill; S.prefill = null; setTimeout(() => c.setText(p.goal, p.verify)); }
   const ideas = ["Add tests for the least covered module", "Find and fix the most likely bug in this repo", "Write a README section explaining the architecture", "Refactor the largest function into smaller pieces"];
@@ -733,7 +1013,7 @@ function viewHome(main) {
       top.map((r) => { const st = runState(r); return h("div", { class: "rcard enter", title: r.error || r.goal, onclick: () => go(runHash(r)) },
         h("span", { class: "sdot " + st, style: { width: "8px", height: "8px", borderRadius: "50%", flex: "none" } }),
         h("span", { class: "t" }, isUnread(r, seen) ? h("b", { text: r.goal }) : r.goal),
-        hasDraft(r.id) && h("span", { class: "small faint", title: "Unsent draft", text: "✎" }),
+        hasDraft(r.id) && h("span", { class: "small faint", title: "Unsent draft" }, icon("edit", { size: 11 })),
         h("span", { class: "small faint", text: `${STATE_LABEL[st]} · ${ago(r.updated_at)}` })); })].flat().filter(Boolean));
   };
   paintResume();
@@ -799,7 +1079,7 @@ async function pickModel({ title, subtitle }) {
     const row = (m) => m.external
       ? h("div", { class: "mitem" + (m.available ? "" : " off") + (sel && mref(sel) === mref(m) ? " sel" : ""), title: m.available ? m.command : `Not found: ${m.command}`,
           onclick: () => { if (m.available) { sel = m; paint(); retune(); } }, ondblclick: () => { if (m.available) { sel = m; done(); } } },
-          h("span", { class: "ext-badge", text: "ACP" }), h("span", { class: "grow", text: m.name }),
+          h("span", { class: "ext-badge", text: m.kind || "ACP" }), h("span", { class: "grow", text: m.name }),
           h("span", { class: "pill", text: m.available ? "your login" : "not installed" }))
       : h("div", { class: "mitem" + (sel && mref(sel) === mref(m) ? " sel" : ""), onclick: () => { sel = m; paint(); retune(); }, ondblclick: () => { sel = m; done(); } },
           h("span", { class: "grow mono", text: m.endpoint ? m.model.replace(/^[^/]+\//, "") : m.model }), m.efforts && m.efforts.length > 0 && h("span", { class: "pill", text: "effort" }), m.local && h("span", { class: "pill", text: "free" }));
@@ -1170,13 +1450,13 @@ function openAddModel() {
 }
 
 const startSolo = guard(async (goal, verify, model) => {
-  const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "solo", model } });
+  const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "solo", model, retry_of: takeRetry(goal) } });
   markSeen(run); go(`#/c/${run.id}`);
   return true;
 });
 
 // ---------- chat view ----------
-const TOOL_ICON = { read_file: "◱", list_files: "☰", search: "⌕", write_file: "✎", edit_file: "✎", run_command: "$", finish: "✓", delegate: "↳" };
+const TOOL_ICON = { read_file: "◱", list_files: "☰", search: "⌕", write_file: "+", edit_file: "±", run_command: "$", finish: "✓", delegate: "↳" };
 function actLine(s, showAgent) {
   const m = s.meta || {}; const tool = m.tool || "?"; const a = parseArgs(s.output);
   const target = a.path || a.command || a.pattern || a.agent || "";
@@ -1184,7 +1464,11 @@ function actLine(s, showAgent) {
   return h("div", { class: "act" + (m.ok === false ? " fail" : "") },
     h("span", { class: "ic", text: m.ok === false ? "!" : TOOL_ICON[tool] || "•" }),
     h("div", { class: "body" },
-      h("div", { class: "tl" }, showAgent && h("b", { text: agentName(m.agent) + " · " }), h("b", { text: tool.replace("_", " ") }), target && [" ", h("span", { class: "mono small", text: firstLine(target, 70) })],
+      h("div", { class: "tl" }, showAgent && h("b", { text: agentName(m.agent) + " · " }), h("b", { text: tool.replace("_", " ") }),
+        target && [" ", (tool === "write_file" || tool === "edit_file") && S.detail && m.ok !== false
+          ? h("a", { href: "#", class: "mono small", title: "Preview this file", text: firstLine(target, 70), onclick: (e) => { e.preventDefault(); openFiles(S.detail.run, a.path); } })
+          : h("span", { class: "mono small", text: firstLine(target, 70) })],
+        m.ms != null && h("span", { class: "faint small", style: { marginLeft: "6px" }, title: "Model time" + (m.tool_ms ? ` + ${dur(m.tool_ms)} running the action` : ""), text: dur(m.ms + (m.tool_ms || 0)) }),
         m.escalated && h("span", { class: "pill", style: { marginLeft: "6px" }, text: "escalated" })),
       note && h("div", { class: "small", style: { color: "var(--text)" }, text: firstLine(note, 240) }),
       tool === "delegate" && a.instruction && h("div", { class: "small", text: "“" + a.instruction + "”" }),
@@ -1209,7 +1493,7 @@ function extBlock(s) {
   const agent = ((S.models && S.models.agents) || []).find((a) => a.model === name);
   const mark = (st) => (st === "completed" ? "✓" : st === "failed" ? "✗" : "·");
   return h("div", { class: "ext" },
-    h("div", { class: "ext-h" }, h("span", { class: "ext-badge", text: "ACP" }), h("b", { text: agent ? agent.name : name }),
+    h("div", { class: "ext-h" }, h("span", { class: "ext-badge", text: (agent && agent.kind) || "AGENT" }), h("b", { text: agent ? agent.name : name }),
       Object.entries(e.settings || {}).sort(([x]) => (x === "Model" ? -1 : 1)).map(([k, v]) => h("span", { class: "pill", title: k, text: v })),
       h("span", { text: `${calls.length} action${calls.length === 1 ? "" : "s"}` }), e.stop_reason === "cancelled" && h("span", { class: "warn", text: "stopped" })),
     calls.length > 0 && h("details", { class: "out" }, h("summary", { text: "actions ▾" }),
@@ -1217,12 +1501,24 @@ function extBlock(s) {
 }
 
 /// One rendered item (or null) per step, for the chat thread.
-function chatItem(s) {
+// Who asked: the orchestra agent, else the chat's model or agent.
+const askerName = (run, s) => (s.meta.agent ? agentName(s.meta.agent) : run.spec.model ? fmtRef(run.spec.model).split(" · ")[0] : "The agent");
+// Someone answered an agent's question, or you sent it a message.
+function injectItem(s) {
   const m = s.meta || {};
-  if (s.kind === "inject") return h("div", { class: "msg-user" }, h("div", { text: s.output }));
-  if (s.kind === "plan") return h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Plan" }), s.output);
-  if (s.kind === "act" && m.external) return h("div", {}, extBlock(s), h("div", { class: "msg-ai", text: s.output }));
-  if (s.kind === "act" && m.tool === "finish") return h("div", { class: "msg-ai", text: parseArgs(s.output).summary || s.output });
+  if (m.from) return h("div", { class: "ans-from" }, h("div", {}, h("div", { class: "small faint", text: `Answer from ${agentName(m.from)}` + (m.ms ? ` · ${dur(m.ms)}` : "") }), mdRender(s.output)));
+  return h("div", { class: "msg-user" }, h("div", {}, m.answer_to != null && h("div", { class: "small faint", text: "Your answer" }), s.output));
+}
+function chatItem(s, steps) {
+  const m = s.meta || {};
+  if (s.kind === "inject") return injectItem(s);
+  if (s.kind === "act" && m.tool === "ask") {
+    const lead = m.external ? s.output.split(/^\W*question:/im)[0].trim() : "";
+    return h("div", {}, m.external && extBlock(s), lead && h("div", { class: "msg-ai" }, mdRender(lead)), questionCard(S.detail.run, s, steps || S.detail.steps, askerName(S.detail.run, s)));
+  }
+  if (s.kind === "plan") return h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Plan" }), mdRender(s.output));
+  if (s.kind === "act" && m.external) return h("div", {}, extBlock(s), h("div", { class: "msg-ai" }, mdRender(s.output)));
+  if (s.kind === "act" && m.tool === "finish") return h("div", { class: "msg-ai" }, mdRender(parseArgs(s.output).summary || s.output));
   if (s.kind === "act") return actLine(s);
   if (s.kind === "verify") return h("div", { class: "sysline" }, h("span", { class: m.ok ? "ok" : "bad", text: m.ok ? "✓ verification passed" : "✗ verification failed" }), " · ", s.output.split("\n")[0]);
   if (s.kind === "review") return h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Review · " + (m.verdict || "") }), s.output);
@@ -1269,18 +1565,20 @@ function withStepTools(el, s, ctx) {
   const later = () => ctx.steps().filter((x) => x.seq > s.seq).length;
   const tools = h("div", { class: "steptools" },
     s.kind === "inject"
-      ? h("button", { title: "Take this message back, edit it and send it again. Everything after it is rewound.", text: "✎ Edit & resend", onclick: async (e) => {
+      ? h("button", { title: "Take this message back, edit it and send it again. Everything after it is rewound.", onclick: async (e) => {
           e.stopPropagation();
           if (await rewindTo(ctx.run(), s.seq - 1, { dropped: later() + 1, title: "Edit this message?", why: "Your message and everything after it are taken back; the text goes into the composer for you to change." })) ctx.edit(s.output);
-        } })
-      : h("button", { title: "Keep everything up to here and drop the rest", text: "↺ Rewind here", onclick: async (e) => { e.stopPropagation(); if (await rewindTo(ctx.run(), s.seq, { dropped: later() })) ctx.after && ctx.after(); } }));
+        } }, icon("edit", { size: 12 }), "Edit & resend")
+      : h("button", { title: "Keep everything up to here and drop the rest", onclick: async (e) => { e.stopPropagation(); if (await rewindTo(ctx.run(), s.seq, { dropped: later() })) ctx.after && ctx.after(); } }, icon("rewind", { size: 12 }), "Rewind here"));
   el.classList.add("stepwrap"); el.append(tools);
   if (s.created_at) el.title = new Date(s.created_at * 1000).toLocaleString();
   return el;
 }
 // Starts over as a new task with the same goal, e.g. to try a different
 // model, or a team instead of a single agent. The old run is kept.
-function retryAsNew(run) { S.prefill = { goal: run.goal, verify: run.verify_command || "" }; go("#/"); toast("Adjust the goal if you like, then send it."); }
+function retryAsNew(run) { S.prefill = { goal: run.goal, verify: run.verify_command || "" }; S.retryOf = run.spec.retry_of || run.id; go("#/"); toast("Adjust the goal if you like, then send it. Both runs show up side by side in Measurements."); }
+// The run a new task retries (set by "Retry as new"), once.
+const takeRetry = () => { const r = S.retryOf; S.retryOf = null; return r || null; };
 
 // Keyed, incremental chat: only new steps are added (animated), so live
 // updates never flicker or jump.
@@ -1288,13 +1586,14 @@ async function viewChat(main, id) {
   S.view = { kind: "chat", id };
   loadModels().catch(() => {});
   const head = h("div"), scroll = h("div", { class: "scroll" }), dock = h("div", { class: "dock" });
-  const banner = h("div"), thread = h("div", { class: "thread" });
-  scroll.append(banner, thread);
+  const banner = h("div"), thread = h("div", { class: "thread" }), outBox = h("div", { class: "thread", style: { paddingTop: 0 } });
+  scroll.append(banner, thread, outBox);
+  let filesKey = "";
   main.append(head, scroll, dock);
   head.append(topbar(h("span", { class: "grow" }, sk("sk-title"))));
   const skel = h("div", { class: "thread-skel" }, sk("sk-bubble"), skLines(3), sk("sk-block"), skLines(2));
   thread.append(skel);
-  const seen = new Map(); let lastActive = null, headKey = "", first = true, goalShown = false, comp = null;
+  const seen = new Map(); let lastActive = null, lastWaiting = null, headKey = "", first = true, goalShown = false, comp = null;
   const ctx = { run: () => S.detail.run, steps: () => S.detail.steps, edit: (text) => comp && comp.setText(text) };
 
   const send = guard(async (text, _v, clear) => {
@@ -1303,8 +1602,12 @@ async function viewChat(main, id) {
     const th = $("#thinking", thread); th ? thread.insertBefore(bubble, th) : thread.append(bubble);
     clear(); toBottom(scroll, true);
     try {
-      await api(`/api/runs/${id}/inject`, { body: { text } });
-      if (!(S.detail && S.detail.active)) await api(`/api/runs/${id}/resume`, { body: {} });
+      const q = S.detail && pendingQuestion(S.detail.steps);
+      if (q) await api(`/api/runs/${id}/answer`, { body: { seq: q.seq, text } });
+      else {
+        await api(`/api/runs/${id}/inject`, { body: { text } });
+        if (!(S.detail && S.detail.active)) await api(`/api/runs/${id}/resume`, { body: {} });
+      }
     } catch (e) { bubble.remove(); if (comp && !comp.textarea.value.trim()) comp.setText(text); throw e; } // never lose what you typed
     paint();
   });
@@ -1314,25 +1617,32 @@ async function viewChat(main, id) {
     if (!S.view || S.view.id !== id) return;
     const { run, steps, active } = d;
     const wasBottom = first || nearBottom(scroll);
-    const key = [active, run.status, run.cost_usd.toFixed(4), run.error].join("|");
+    const key = [active, run.status, run.cost_usd.toFixed(4), run.error, steps.length].join("|");
     if (key !== headKey) {
       headKey = key;
       head.replaceChildren(topbar(
         h("span", { class: "title grow", text: run.goal }),
-        h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "working" : run.status),
-        run.spec.model && h("span", { class: "pill", title: mref(run.spec.model), text: (run.spec.model.provider === "acp" ? "⚡ " : "") + fmtRef(run.spec.model) }),
+        h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "working" : STATE_LABEL[runState(run)]),
+        run.spec.model && h("span", { class: "pill", title: mref(run.spec.model) }, run.spec.model.provider === "acp" && icon("agent", { size: 11 }), fmtRef(run.spec.model)),
         run.verify_command && h("span", { class: "pill mono", title: "Must pass before the agent may finish: " + run.verify_command, text: "✓ " + firstLine(run.verify_command, 24) }),
-        (() => { const t = tokenStats(steps); return h("span", { class: "small faint", title: statLine(t), text: money(run.cost_usd) + (t.cached ? ` · ${t.pct}% cached` : "") }); })(),
+        headStats(run, steps, active),
         runMenu(run, active)));
-      banner.replaceChildren(errorBanner(run, active));
+      banner.replaceChildren(run.status === "waiting" ? "" : errorBanner(run, active));
+    }
+    // Answered questions close their card.
+    thread.querySelectorAll(".qcard.open").forEach((c) => { const q = steps.find((s) => s.seq === Number(c.dataset.seq)); if (q && answerOf(steps, q)) c.replaceWith(questionCard(run, q, steps, askerName(run, q))); });
+    const fk = [steps.length, active].join("|");
+    if (fk !== filesKey) {
+      filesKey = fk;
+      runFiles(id, true).then((files) => { if (S.view && S.view.id === id) { const atB = nearBottom(scroll); outBox.replaceChildren(outputsCard(run, files)); const b = head.querySelector(".files-n"); if (b) b.textContent = files.length ? ` ${files.length}` : ""; if (atB) toBottom(scroll); } }).catch(() => {});
     }
     thread.classList.toggle("busy", !!active);
     if (!document.hidden) markSeen(run);
     if (!goalShown) {
       skel.remove();
       const g = h("div", { class: "msg-user stepwrap" }, h("div", { text: run.goal }),
-        h("div", { class: "steptools" }, h("button", { title: "Keep the goal, drop every step and reset the branch", text: "↺ Start over", onclick: () => rewindTo(S.detail.run, -1, { dropped: S.detail.steps.length }) }),
-          h("button", { title: "Start a separate task with this goal (e.g. another model, or a team)", text: "⧉ Retry as new", onclick: () => retryAsNew(S.detail.run) })));
+        h("div", { class: "steptools" }, h("button", { title: "Keep the goal, drop every step and reset the branch", onclick: () => rewindTo(S.detail.run, -1, { dropped: S.detail.steps.length }) }, icon("rewind", { size: 12 }), "Start over"),
+          h("button", { title: "Start a separate task with this goal (e.g. another model, or a team)", onclick: () => retryAsNew(S.detail.run) }, icon("retry", { size: 12 }), "Retry as new")));
       thread.append(g); goalShown = true;
     }
     // A rewind removed steps: rebuild from scratch.
@@ -1345,17 +1655,17 @@ async function viewChat(main, id) {
         const pend = [...thread.querySelectorAll(".msg-user.pending")].find((b) => b.dataset.text === s.output.trim());
         if (pend) { pend.classList.remove("pending"); withStepTools(pend, s, ctx); seen.set(s.seq, pend); continue; }
       }
-      const el = withStepTools(chatItem(s), s, ctx);
+      const el = withStepTools(chatItem(s, steps), s, ctx);
       if (el && !first) el.classList.add("enter");
       seen.set(s.seq, el);
       if (el) th ? thread.insertBefore(el, th) : thread.append(el);
     }
     if (active && !th) thread.append(thinkingRow());
     if (!active && th) th.remove();
-    if (active !== lastActive) {
-      lastActive = active;
+    if (active !== lastActive || (run.status === "waiting") !== lastWaiting) {
+      lastActive = active; lastWaiting = run.status === "waiting";
       const prev = dock.querySelector("textarea");
-      const c = comp = composer({ placeholder: active ? "Message the agent (read on its next turn)…" : run.status === "done" ? "Follow up — this re-opens the task…" : "Reply to continue…", running: active, draft: id,
+      const c = comp = composer({ placeholder: active ? "Message the agent (read on its next turn)…" : run.status === "waiting" ? "Answer the question above, or send any message…" : run.status === "done" ? "Follow up — this re-opens the task…" : "Reply to continue…", running: active, draft: id,
         onStop: guard(async () => { await api(`/api/runs/${id}/pause`, { body: {} }); toast("Pausing after the current step"); }), onSend: send });
       if (prev && prev.value) c.textarea.value = prev.value;
       dock.replaceChildren(c);
@@ -1376,29 +1686,32 @@ const copy = (text, what) => navigator.clipboard.writeText(text).then(() => toas
 function errorBanner(run, active) {
   if (!run.error || active) return "";
   return h("div", { class: "banner enter" }, h("span", { class: "grow", style: { whiteSpace: "pre-wrap" }, text: run.error }),
-    run.status !== "done" && h("span", { class: "row", style: { flex: "none" } }, h("button", { text: "▶ Resume", onclick: () => resumeRun(run) })));
+    run.status !== "done" && h("span", { class: "row", style: { flex: "none" } }, h("button", { onclick: () => resumeRun(run) }, icon("play"), "Resume")));
 }
 
 function runMenu(run, active) {
   const pin = pinned().includes(run.id);
   const more = h("button", { class: "ghost", title: "More", text: "⋯", onclick: () => popMenu(more, [
-    { label: pin ? "★  Unpin" : "☆  Pin to top of the sidebar", run: () => { togglePin(run.id); } },
-    { label: "⧉  Retry as a new task…", title: "Same goal, fresh start: pick another model or use a team. This one is kept.", run: () => retryAsNew(run) },
-    !active && { label: "↺  Start over…", title: "Keep the goal, drop every step and reset the branch", run: () => rewindTo(run, -1, { dropped: run.step_count }) },
+    { label: [icon("star", { fill: pin }), pin ? "Unpin" : "Pin to top of the sidebar"], run: () => { togglePin(run.id); } },
+    { label: [icon("retry"), "Retry as a new task…"], title: "Same goal, fresh start: pick another model or use a team. This one is kept.", run: () => retryAsNew(run) },
+    { label: [icon("chart"), "Measurements"], run: () => showMetrics(run) },
+    { label: [icon("compare"), "Compare with other runs"], run: () => go(`#/metrics/${[run.spec.retry_of, run.id].filter(Boolean).join(",")}`) },
+    !active && { label: [icon("rewind"), "Start over…"], title: "Keep the goal, drop every step and reset the branch", run: () => rewindTo(run, -1, { dropped: run.step_count }) },
     "-",
-    { label: "⎘  Copy branch name", run: () => copy(run.branch, "branch name") },
-    { label: "⎘  Copy merge command", run: () => copy(`git merge ${run.branch}`, "merge command") },
-    { label: "⎘  Copy worktree path", run: () => copy(run.worktree, "worktree path") },
+    { label: [icon("push"), "Push the branch to origin"], run: guard(async () => { const r = await api(`/api/runs/${run.id}/push`, { body: {} }); toast(firstLine(r.output) || "Pushed"); }) },
+    { label: [icon("copy"), "Copy branch name"], run: () => copy(run.branch, "branch name") },
+    { label: [icon("copy"), "Copy merge command"], run: () => copy(`git merge ${run.branch}`, "merge command") },
+    { label: [icon("copy"), "Copy worktree path"], run: () => copy(run.worktree, "worktree path") },
     !active && "-",
-    !active && { label: "🗑  Delete…", danger: true, run: guard(async () => {
+    !active && { label: [icon("trash"), "Delete…"], danger: true, run: guard(async () => {
       if (!(await confirmBox({ title: "Delete this conversation?", text: `“${firstLine(run.goal, 120)}”\n\nIts worktree and the branch ${run.branch} are removed. Spending stays recorded.`, ok: "Delete", danger: true }))) return;
       await api(`/api/runs/${run.id}`, { method: "DELETE" }); pset("draft:" + run.id, null); go("#/");
     }) },
   ]) });
   return h("span", { class: "row" },
-    !active && run.status !== "done" && h("button", { class: "ghost", text: "▶ Resume", onclick: () => resumeRun(run) }),
+    !active && run.status !== "done" && run.status !== "waiting" && h("button", { class: "ghost", onclick: () => resumeRun(run) }, icon("play"), "Resume"),
+    h("button", { class: "ghost", title: "Browse and preview the files this run changed", onclick: () => openFiles(run) }, "Files", h("span", { class: "files-n faint" })),
     h("button", { class: "ghost", text: "Diff", onclick: guard(() => showDiff(run)) }),
-    h("button", { class: "ghost", text: "Push", onclick: guard(async () => { const r = await api(`/api/runs/${run.id}/push`, { body: {} }); toast(firstLine(r.output) || "Pushed"); }) }),
     more);
 }
 
@@ -1436,7 +1749,7 @@ function suggestWorker(lead) {
 }
 
 // ---------- orchestra: tree editor ----------
-const RANKS = [[0, "Private", ""], [10, "Corporal", "›"], [100, "Captain", "››"], [1000, "Major", "›››"], [Infinity, "General", "★"]];
+const RANKS = [[0, "Private", ""], [10, "Corporal", "›"], [100, "Captain", "››"], [1000, "Major", "›››"], [Infinity, "General", "»»»"]];
 const TEMPLATES = [
   ["Coder", "implements code changes", "Implement the changes assigned by your commander, with tests where sensible."],
   ["Tester", "writes and runs tests", "Write or extend tests for the work of your peers and run the test suite; report failures precisely."],
@@ -1491,10 +1804,10 @@ function treeCanvas(ed) {
     return [
       h("div", { class: "rank" }, h("span", { class: "chev", text: chev || "·" }), h("span", { text: !a.parent ? `Lead · ${rname}` : rname })),
       h("div", { class: "nm", text: a.name }), h("div", { class: "rl", text: a.role || "—" }), h("div", { class: "tk", text: a.task }),
-      st ? h("span", { class: "st " + (st.active ? "" : st.done ? "ok" : "faint"), text: st.active ? "● working" : st.done ? "✓ reported" : st.turns ? "◌ waiting" : "○ queued" })
-         : eff && h("span", { class: "st pill" + (a.model ? "" : " faint"), title: (a.model ? "" : "Team model: ") + fmtRef(eff), text: ((eff.provider === "acp" ? "⚡ " : "") + fmtRef(eff)).slice(0, 26) }),
-      st && ext && h("span", { class: "ext-badge", style: { position: "absolute", bottom: "9px", right: "10px" }, text: "ACP" }),
-      st && (st.turns || st.cost) ? h("div", { class: "small faint", style: { marginTop: "4px" }, title: statLine(st.tok), text: `${st.turns} turns · ${money(st.cost)}${st.tok.cached ? ` · ${st.tok.pct}% cached` : ""}` }) : null,
+      st ? h("span", { class: "st " + (st.asking ? "warn" : st.active ? "" : st.done ? "ok" : "faint"), text: st.asking ? "? asks you" : st.active ? "● working" : st.done ? "✓ reported" : st.turns ? "◌ waiting" : "○ queued" })
+         : eff && h("span", { class: "st pill" + (a.model ? "" : " faint"), title: (a.model ? "" : "Team model: ") + fmtRef(eff) }, eff.provider === "acp" && icon("agent", { size: 11 }), fmtRef(eff).slice(0, 24)),
+      st && ext && h("span", { class: "ext-badge", style: { position: "absolute", bottom: "9px", right: "10px" }, text: "AGENT" }),
+      st && (st.turns || st.cost) ? h("div", { class: "small faint", style: { marginTop: "4px" }, title: statLine(st.tok), text: `${st.turns} turns · ${dur(st.ms)} · ${money(st.cost)}${st.tok.inTok ? ` · ${kTok(st.tok.inTok + st.tok.outTok)} tok` : ""}` }) : null,
       !ed.readOnly && h("button", { class: "add", title: "Add a subordinate", text: "+", onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); addAgent(a.id); } }),
     ];
   }
@@ -1527,7 +1840,7 @@ function treeCanvas(ed) {
         requestAnimationFrame(() => requestAnimationFrame(() => n.classList.remove("noanim")));
       }
       n.className = "node" + (n.classList.contains("noanim") ? " noanim" : "") + (n.classList.contains("born") ? " born" : "")
-        + (ed.selected === a.id ? " sel" : "") + (st && st.active ? " active" : "") + (st && st.done ? " reported" : "");
+        + (ed.selected === a.id ? " sel" : "") + (st && st.active ? " active" : "") + (st && st.done ? " reported" : "") + (!a.parent ? " lead" : "");
       n.replaceChildren(...nodeKids(a).filter(Boolean));
       n.style.left = p.x + "px"; n.style.top = p.y + "px";
     }
@@ -1616,7 +1929,7 @@ async function editAgent(ed, id, models) {
   const agents = ((S.models && S.models.agents) || []).filter((x) => x.available);
   const inherit = a.parent && ed.worker ? `Team model (${fmtRef(ed.worker)})` : "Inherit the lead model";
   const model = h("select", {}, h("option", { value: "", text: inherit }),
-    agents.length > 0 && h("optgroup", { label: "Agents on this computer (ACP)" }, agents.map((x) => h("option", { value: mref(x), text: `⚡ ${x.name}`, selected: a.model && mref(a.model) === mref(x) }))),
+    agents.length > 0 && h("optgroup", { label: "Agents on this computer (ACP)" }, agents.map((x) => h("option", { value: mref(x), text: `${x.name} (agent)`, selected: a.model && mref(a.model) === mref(x) }))),
     h("optgroup", { label: "Models" }, models.map((m) => h("option", { value: mref(m), text: `${mref(m)}${m.local ? "  (local)" : ""}`, selected: a.model && mref(a.model) === mref(m) }))));
   models = [...models, ...agents];
   let tunedOpts = (a.model && a.model.options) || {};
@@ -1695,15 +2008,15 @@ async function viewOrchestraDraft(main) {
   if (!document.body.contains(main)) return; // navigated away while the lead was drafting
   body.remove();
   clear && clear(); S.pending = null; // the goal now lives in the team draft
-  orchestraEditor(main, { goal, verify, lead, worker: suggestWorker(lead), agents, models, suggested: true });
+  orchestraEditor(main, { goal, verify, lead, worker: suggestWorker(lead), agents, models, suggested: true, retry_of: takeRetry(goal) });
 }
 
-function orchestraEditor(main, { goal, verify, lead, worker = null, agents, models, restored, suggested }) {
+function orchestraEditor(main, { goal, verify, lead, worker = null, agents, models, restored, suggested, questions = "user", retry_of: retryOf = null }) {
   const history = [];
   // Every edit is saved, so a reload, a detour or a project switch never
   // throws away a team the lead was paid to design.
-  const persist = () => pset("orchDraft", { goal, verify, lead, worker: ed.worker, agents: ed.agents, at: Math.floor(Date.now() / 1000) });
-  const ed = { agents, worker, selected: agents[0] && agents[0].id,
+  const persist = () => pset("orchDraft", { goal, verify, lead, worker: ed.worker, agents: ed.agents, questions: ed.questions, retry_of: retryOf, at: Math.floor(Date.now() / 1000) });
+  const ed = { agents, worker, questions, selected: agents[0] && agents[0].id,
     push() { history.push(JSON.stringify(ed.agents)); if (history.length > 100) history.shift(); },
     onChange() { canvas.paint(); count.textContent = `${ed.agents.length} agent${ed.agents.length > 1 ? "s" : ""}`; persist(); },
     onEdit: (id) => editAgent(ed, id, models) };
@@ -1717,11 +2030,13 @@ function orchestraEditor(main, { goal, verify, lead, worker = null, agents, mode
       { label: "Same as the lead", run: () => setWorker(null) },
     ]) });
   const undo = () => { if (!history.length) return toast("Nothing to undo"); ed.agents = JSON.parse(history.pop()); ed.onChange(); };
+  const qBtn = h("button", { class: "ghost", title: Q_ROUTES[ed.questions].hint, text: Q_ROUTES[ed.questions].label, onclick: (e) => popMenu(e.currentTarget, Object.entries(Q_ROUTES).map(([k, v]) => ({
+    label: (k === ed.questions ? "✓ " : "   ") + v.label, title: v.hint, run: () => { ed.questions = k; qBtn.textContent = v.label; qBtn.title = v.hint; persist(); } }))) });
   const hud = h("div", { class: "hud" },
     h("button", { text: "＋ Agent", title: "Add a subordinate to the selected agent", onclick: () => canvas.addAgent(ed.selected || ed.agents[0].id) }),
     h("button", { text: "↶ Undo", onclick: undo }), h("button", { text: "⤢ Fit", onclick: () => canvas.fit() }),
     h("button", { class: "ghost", text: "Lead: " + fmtRef(lead), onclick: guard(async (e) => { const m = await pickModel({ title: "Lead model" }); if (m) { lead = m; e.target.textContent = "Lead: " + fmtRef(m); persist(); } }) }),
-    workerBtn);
+    workerBtn, qBtn);
   const reserve = h("div", { class: "reserve" }, h("h6", { text: "Reserve · drag onto an agent" }),
     TEMPLATES.map((t) => h("div", { class: "tpl", title: t[2], onpointerdown: (e) => canvas.dragTemplate(e, t) }, h("b", { text: t[0] }), h("div", { class: "small faint", text: t[1] }))));
   const deploy = h("div", { class: "deploy" }, count,
@@ -1734,7 +2049,7 @@ function orchestraEditor(main, { goal, verify, lead, worker = null, agents, mode
     h("button", { class: "accent", text: "Approve & deploy", onclick: guard(async (e) => {
       e.target.disabled = true;
       try {
-        const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "orchestra", model: lead, worker_model: ed.worker || null, agents: ed.agents } });
+        const { run } = await api("/api/runs", { body: { goal, verify_command: verify || null, mode: "orchestra", model: lead, worker_model: ed.worker || null, agents: ed.agents, questions: ed.questions, retry_of: retryOf } });
         S.pending = null; pset("orchDraft", null); markSeen(run); go(`#/o/${run.id}`);
       } finally { e.target.disabled = false; }
     }) }));
@@ -1776,9 +2091,14 @@ async function viewOrchestraRun(main, id) {
   function statusOf(steps, active) {
     const last = steps.length ? steps[steps.length - 1].state : { stack: [], done: [] };
     const st = {};
-    for (const a of data.run.spec.agents) st[a.id] = { turns: 0, cost: 0, done: (last.done || []).includes(a.id), active: false, tok: tokenStats([]) };
+    for (const a of data.run.spec.agents) st[a.id] = { turns: 0, cost: 0, ms: 0, done: (last.done || []).includes(a.id), active: false, asking: false, tok: tokenStats([]) };
     const mineBy = {};
-    for (const s of steps) { const a = s.meta && s.meta.agent; if (a && st[a] && s.kind === "act") { st[a].turns++; st[a].cost += s.cost_usd; (mineBy[a] ||= []).push(s); } }
+    for (const s of steps) {
+      const a = s.meta && (s.meta.from || s.meta.agent);
+      if (a && st[a] && (s.kind === "act" || s.meta.from)) { if (s.kind === "act") st[a].turns++; st[a].cost += s.cost_usd; st[a].ms += (s.meta.ms || 0) + (s.meta.tool_ms || 0); (mineBy[a] ||= []).push(s); }
+    }
+    const q = pendingQuestion(steps);
+    if (q && st[q.meta.agent || (data.run.spec.agents.find((a) => !a.parent) || {}).id]) st[q.meta.agent || data.run.spec.agents.find((a) => !a.parent).id].asking = true;
     for (const [a, list] of Object.entries(mineBy)) st[a].tok = tokenStats(list);
     if (active) {
       // The agent acting next: descend from the stack top to the first unfinished subordinate.
@@ -1793,20 +2113,27 @@ async function viewOrchestraRun(main, id) {
     const { run, steps, active } = data;
     const a = run.spec.agents.find((x) => x.id === ed.selected) || run.spec.agents.find((x) => !x.parent);
     if (!a) return;
-    const mine = steps.filter((s) => (s.meta && (s.meta.agent === a.id || s.meta.target === a.id)) || (!s.meta.agent && !a.parent && s.kind !== "act"));
+    const mine = steps.filter((s) => (s.meta && (s.meta.agent === a.id || s.meta.target === a.id || s.meta.from === a.id)) || (!s.meta.agent && !a.parent && s.kind !== "act"));
+    // A report: the agent's summary, the checks it passed and the diff it carried.
+    const reportItem = (s) => h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Report" + (s.meta.ms ? ` · ${dur(s.meta.ms)}` : "") }), mdRender(s.meta.summary || s.output),
+      s.meta.checks && h("div", { class: "small ok", style: { whiteSpace: "pre-wrap" }, text: s.meta.checks }),
+      s.meta.changes && s.meta.changes.stat && lazyOut("changes ▾ " + (s.meta.changes.stat.split("\n").pop() || "").trim(), s.meta.changes.stat + "\n\n" + (s.meta.changes.patch || "")));
     const subs = run.spec.agents.filter((x) => x.parent === a.id);
     const feed = h("div", { class: "feed" + (active ? " busy" : "") });
     const ctx = { run: () => data.run, steps: () => data.steps, edit: (text) => { const t = panel.querySelector("textarea"); if (t) { t.value = text; t.dispatchEvent(new Event("input")); t.focus(); } } };
     const add = (s, el) => feed.append(withStepTools(el, s, ctx));
     for (const s of mine) {
-      if (s.kind === "inject") add(s, h("div", { class: "msg-user" }, h("div", { text: s.output })));
+      if (s.kind === "inject") add(s, injectItem(s));
+      else if (s.meta.tool === "ask" && s.meta.agent === a.id) add(s, h("div", {}, s.meta.external && extBlock(s), questionCard(run, s, steps, a.name)));
       else if (s.kind === "verify") add(s, h("div", { class: "sysline" }, h("span", { class: s.meta.ok ? "ok" : "bad", text: s.meta.ok ? "✓ verification passed" : "✗ verification failed" })));
       else if (s.meta.tool === "delegate" && s.meta.target === a.id) add(s, h("div", { class: "msg-user" }, h("div", {}, h("div", { class: "small faint", text: "Order from " + agentName(s.meta.agent) }), s.meta.instruction)));
-      else if (s.meta.external && s.meta.agent === a.id) add(s, h("div", {}, extBlock(s), h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Report" }), s.meta.summary || s.output)));
-      else if (s.meta.tool === "finish" && s.meta.agent === a.id) add(s, h("div", { class: "msg-ai" }, h("div", { class: "small faint", text: "Report" }), s.meta.summary || s.output));
+      else if (s.meta.external && s.meta.agent === a.id) add(s, h("div", {}, extBlock(s), reportItem(s)));
+      else if (s.meta.tool === "finish" && s.meta.agent === a.id) add(s, reportItem(s));
       else if (s.meta.agent === a.id) add(s, actLine(s));
     }
     if (!mine.length) feed.append(h("div", { class: "small faint", style: { padding: "20px 0" }, text: ed.status[a.id] && ed.status[a.id].active ? "Starting…" : "Nothing yet. Agents act after all of their subordinates have reported." }));
+    // The lead answers to you: what the whole team produced sits under its feed.
+    if (!a.parent) { const ob = h("div"); feed.append(ob); runFiles(id).then((files) => ob.replaceChildren(outputsCard(run, files))).catch(() => {}); }
     const st = ed.status[a.id] || {};
     const c = composer({ placeholder: `Message ${a.name}…`, draft: `${id}:${a.id}`, onSend: guard(async (text, _v, clear) => {
       await api(`/api/runs/${id}/inject`, { body: { text, agent: a.id } }); clear();
@@ -1822,7 +2149,7 @@ async function viewOrchestraRun(main, id) {
         h("div", { class: "row" }, h("b", { class: "grow", text: a.name }), h("span", { class: "pill", text: rankOf(run.spec.agents, a.id)[1] })),
         h("div", { class: "small muted", text: a.role }),
         h("details", { class: "out" }, h("summary", { text: "task ▾" }), h("pre", { text: [a.task, (a.owns || []).length ? `Owns: ${a.owns.join(", ")}` : "", a.done_when ? `Done when: ${a.done_when}` : "", a.verify ? `Verify: ${a.verify}` : ""].filter(Boolean).join("\n\n") })),
-        h("div", { class: "small faint", style: { marginTop: "6px" } }, `${st.turns || 0} turns · ${money(st.cost)} · `, h("span", { text: fmtRef(a.model || (a.parent && run.spec.worker_model) || run.spec.model) }),
+        h("div", { class: "small faint", style: { marginTop: "6px" } }, `${st.turns || 0} turns · ${dur(st.ms || 0)} · ${money(st.cost)} · `, h("span", { text: fmtRef(a.model || (a.parent && run.spec.worker_model) || run.spec.model) }),
           subs.length ? ` · commands ${subs.length}` : ""),
         st.tok && st.tok.inTok > 0 && h("div", { class: "small faint", title: "Input tokens read from the prompt cache are billed at a fraction of the normal price", text: statLine(st.tok) })),
       feed, h("div", { class: "pc" }, c));
@@ -1838,16 +2165,23 @@ async function viewOrchestraRun(main, id) {
     ed.agents = run.spec.agents; ed.status = statusOf(steps, active);
     ed.leadExternal = !!(run.spec.model && run.spec.model.provider === "acp");
     ed.worker = run.spec.worker_model || null;
-    if (!ed.selected) ed.selected = (Object.entries(ed.status).find(([, s]) => s.active) || [run.spec.agents[0].id])[0];
+    if (!ed.selected) ed.selected = (Object.entries(ed.status).find(([, s]) => s.asking) || Object.entries(ed.status).find(([, s]) => s.active) || [run.spec.agents[0].id])[0];
     const done = Object.values(ed.status).filter((s) => s.done).length;
     head.replaceChildren(topbar(
       h("span", { class: "title grow", text: run.goal }),
-      h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "running" : run.status),
-      (() => { const t = tokenStats(steps); return h("span", { class: "small muted", title: statLine(t), text: `${done}/${run.spec.agents.length} reported · ${money(run.cost_usd)}${t.cached ? ` · ${t.pct}% cached` : ""}` }); })(),
-      active && h("button", { class: "ghost", text: "⏸ Pause", onclick: guard(async () => { await api(`/api/runs/${id}/pause`, { body: {} }); toast("Pausing after the current step"); }) }),
+      h("span", { class: "pill " + (active ? "running" : run.status) }, h("span", { class: "dot" }), active ? "running" : STATE_LABEL[runState(run)]),
+      h("span", { class: "small muted", text: `${done}/${run.spec.agents.length} reported` }),
+      headStats(run, steps, active), questionsToggle(run),
+      active && h("button", { class: "ghost", onclick: guard(async () => { await api(`/api/runs/${id}/pause`, { body: {} }); toast("Pausing after the current step"); }) }, icon("pause"), "Pause"),
       runMenu(run, active)));
     if (active) head.append(h("div", { class: "row small muted", style: { padding: "0 16px 8px", gap: "8px" } }, h("span", { class: "dots" }, h("i"), h("i"), h("i")), h("span", { class: "live-line", text: S.lastLive || "working…" })));
-    if (run.error && !active) head.append(errorBanner(run, active));
+    const pq = pendingQuestion(steps);
+    if (pq) {
+      const who = pq.meta.agent || (run.spec.agents.find((x) => !x.parent) || {}).id;
+      head.append(h("div", { class: "qbanner enter", onclick: () => { ed.selected = who; panelKey = ""; paintPanel(); canvas.paint(); } },
+        h("b", { text: `? ${agentName(who)} asks:` }), h("span", { class: "grow", text: firstLine(pq.meta.question, 160) }), h("button", { class: "primary small", text: "Answer" })));
+    } else if (run.error && !active) head.append(errorBanner(run, active));
+    runFiles(id).then((files) => { const b = head.querySelector(".files-n"); if (b) b.textContent = files.length ? ` ${files.length}` : ""; }).catch(() => {});
     cskel.remove();
     canvas.paint();
     const pk = [ed.selected, steps.length, active].join("|");
@@ -1859,6 +2193,330 @@ async function viewOrchestraRun(main, id) {
   S.view.refresh = refresh;
   loadModels().catch(() => {});
   await refresh();
+}
+
+// ---------- markdown (agents write it; rendered without innerHTML) ----------
+function mdInline(t) {
+  const out = []; const re = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\))/g; let last = 0, m;
+  while ((m = re.exec(t))) {
+    if (m.index > last) out.push(t.slice(last, m.index));
+    const x = m[0];
+    if (x[0] === "`") out.push(h("code", { text: x.slice(1, -1) }));
+    else if (x[0] === "*") out.push(h("b", { text: x.slice(2, -2) }));
+    else { const l = x.match(/\[([^\]]+)\]\(([^)\s]+)\)/); out.push(/^https?:\/\//.test(l[2]) ? h("a", { href: l[2], target: "_blank", rel: "noopener noreferrer", text: l[1] }) : l[1]); }
+    last = re.lastIndex;
+  }
+  out.push(t.slice(last));
+  return out;
+}
+function mdRender(src) {
+  const box = h("div", { class: "md" }); const lines = (src || "").split("\n"); let i = 0;
+  const isList = (l, ord) => (ord ? /^\s*\d+[.)]\s+/ : /^\s*[-*+]\s+/).test(l);
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) { const buf = []; i++; while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]); i++; box.append(h("pre", { class: "block", text: buf.join("\n") })); continue; }
+    const hm = l.match(/^(#{1,6})\s+(.*)/);
+    if (hm) { box.append(h("h" + Math.min(6, hm[1].length + 2), {}, mdInline(hm[2]))); i++; continue; }
+    let listed = false;
+    for (const ord of [false, true]) if (!listed && isList(l, ord)) {
+      const list = h(ord ? "ol" : "ul");
+      while (i < lines.length && isList(lines[i], ord)) list.append(h("li", {}, mdInline(lines[i++].replace(ord ? /^\s*\d+[.)]\s+/ : /^\s*[-*+]\s+/, ""))));
+      box.append(list); listed = true;
+    }
+    if (listed) continue;
+    if (/^\s*>/.test(l)) { const buf = []; while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, "")); box.append(h("blockquote", {}, mdInline(buf.join(" ")))); continue; }
+    if (!l.trim()) { i++; continue; }
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*```|\s*[-*+]\s|\s*\d+[.)]\s|\s*>)/.test(lines[i])) para.push(lines[i++]);
+    if (!para.length) { para.push(lines[i++]); }
+    box.append(h("p", {}, mdInline(para.join("\n"))));
+  }
+  return box;
+}
+
+// ---------- outputs: the files a run produced ----------
+const FILE_ICON = { image: "▨", html: "◫", markdown: "¶", pdf: "▤", audio: "♪", video: "▷", binary: "◼", text: "≡" };
+const fileUrl = (runId, path, dl) => `/api/runs/${runId}/raw/${path.split("/").map(encodeURIComponent).join("/")}?${dl ? "download=1" : ""}`;
+const fsize = (n) => (n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB");
+S.files = {};
+// The run's changed files; reused for a moment so several views asking at
+// once share one request.
+function runFiles(runId, fresh) {
+  const c = S.files[runId];
+  if (c && !fresh && Date.now() - c.at < 1500) return c.p;
+  const p = api(`/api/runs/${runId}/files`).then((r) => r.files);
+  S.files[runId] = { at: Date.now(), p };
+  p.catch(() => delete S.files[runId]);
+  return p;
+}
+function filePreview(runId, f) {
+  const url = fileUrl(runId, f.path) + "v=" + Date.now();
+  if (f.status === "deleted") return h("div", { class: "fempty", text: "This file was deleted in this run." });
+  if (f.kind === "image") return h("div", { class: "fimg" }, h("img", { src: url, alt: f.path }));
+  if (f.kind === "html") return h("iframe", { class: "fframe", src: url, sandbox: "allow-scripts allow-modals allow-popups", title: f.path });
+  if (f.kind === "pdf") return h("iframe", { class: "fframe", src: url, title: f.path });
+  if (f.kind === "audio") return h("div", { class: "fempty" }, h("audio", { controls: true, src: url }));
+  if (f.kind === "video") return h("video", { controls: true, src: url, style: { maxWidth: "100%" } });
+  if (f.kind === "binary") return h("div", { class: "fempty" }, `${fsize(f.size)} binary file. `, h("a", { href: fileUrl(runId, f.path, true), text: "Download" }));
+  const box = h("div", { class: "ftext" }, skLines(6));
+  fetch(url).then((r) => (r.ok ? r.text() : r.json().then((e) => Promise.reject(new Error(e.error))))).then((t) => {
+    if (f.kind === "markdown") { box.replaceChildren(mdRender(t)); box.classList.add("fmd"); return; }
+    const lines = t.split("\n"); const shown = lines.slice(0, 5000);
+    const pre = h("pre", { class: "code" });
+    shown.forEach((l, n) => pre.append(h("span", { class: "ln", text: String(n + 1) }), l + "\n"));
+    box.replaceChildren(pre, lines.length > shown.length ? h("div", { class: "small faint", text: `… ${lines.length - shown.length} more lines` }) : "");
+  }).catch((e) => box.replaceChildren(h("div", { class: "small bad", text: e.message })));
+  return box;
+}
+// The diff of one file, cut out of the run's whole diff.
+function fileDiff(patch, path) {
+  const parts = (patch || "").split(/^(?=diff --git )/m);
+  const mine = parts.find((p) => p.startsWith(`diff --git a/${path} `) || p.includes(` b/${path}\n`));
+  const pre = h("pre", { class: "block", style: { maxHeight: "none" } });
+  for (const line of (mine || "(no committed diff for this file yet)").split("\n")) {
+    const c = line.startsWith("+") && !line.startsWith("+++") ? "ok" : line.startsWith("-") && !line.startsWith("---") ? "bad" : line.startsWith("@@") ? "muted" : "";
+    pre.append(h("div", { class: c, text: line || " " }));
+  }
+  return pre;
+}
+// A browser for everything the run changed: list on the left, a live
+// preview (images, SVG, web pages, markdown, code) or the diff on the right.
+async function openFiles(run, focus) {
+  const list = h("div", { class: "flist" }, Array.from({ length: 5 }, () => sk("sk-row")));
+  const pane = h("div", { class: "fpane" });
+  const bar = h("div", { class: "row fbar" });
+  let files = [], cur = null, mode = "preview", patch = null;
+  const show = async (f) => {
+    cur = f; list.querySelectorAll(".fit").forEach((x) => x.classList.toggle("on", x.dataset.path === f.path));
+    bar.replaceChildren(...[h("b", { class: "grow mono small", style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, text: f.path }),
+      h("div", { class: "seg" }, ["preview", "diff"].map((m) => h("button", { class: mode === m ? "on" : "", text: m === "preview" ? "Preview" : "Diff", onclick: () => { mode = m; show(f); } }))),
+      f.status !== "deleted" && h("a", { class: "button ghost", href: fileUrl(run.id, f.path), target: "_blank", rel: "noopener", title: "Open in a new tab", text: "↗" }),
+      f.status !== "deleted" && h("a", { class: "button ghost", href: fileUrl(run.id, f.path, true), title: "Download", text: "⤓" })].filter(Boolean));
+    if (mode === "diff") {
+      pane.replaceChildren(h("div", { class: "ftext" }, skLines(5)));
+      if (!patch) patch = (await api(`/api/runs/${run.id}/diff`)).patch;
+      if (cur === f && mode === "diff") pane.replaceChildren(h("div", { class: "ftext" }, fileDiff(patch, f.path)));
+    } else pane.replaceChildren(filePreview(run.id, f));
+  };
+  const paintList = () => list.replaceChildren(...(files.length ? files.map((f) => h("div", { class: "fit", "data-path": f.path, title: f.path, onclick: () => show(f) },
+    h("span", { class: "fic " + f.status, text: FILE_ICON[f.kind] || "≡" }),
+    h("span", { class: "grow fnm" }, h("span", { text: f.path.split("/").pop() }), h("span", { class: "faint small", text: f.path.includes("/") ? "  " + f.path.replace(/\/[^/]+$/, "/") : "" })),
+    f.added != null && h("span", { class: "small ok", text: "+" + f.added }), f.removed ? h("span", { class: "small bad", text: "−" + f.removed }) : null))
+    : [h("div", { class: "small faint", style: { padding: "14px" }, text: "No files changed yet." })]));
+  modal(h("div", { class: "fviewer" }, h("div", { class: "row" }, h("h2", { class: "grow", text: "Files" }), h("span", { class: "small faint mono", text: run.branch })),
+    h("div", { class: "fgrid" }, list, h("div", { class: "fright" }, bar, pane))), { wide: true, cls: "xwide" });
+  try { files = await runFiles(run.id, true); } catch (e) { list.replaceChildren(h("div", { class: "small bad", text: e.message })); return; }
+  paintList();
+  const first = files.find((f) => f.path === focus) || files.find((f) => f.kind === "image" || f.kind === "html") || files[0];
+  if (first) show(first);
+}
+// What the run made, at a glance: thumbnails of pictures and pages, chips
+// for everything else. Lives under the conversation and updates with it.
+function outputsCard(run, files) {
+  if (!files.length) return "";
+  const visual = files.filter((f) => f.status !== "deleted" && (f.kind === "image" || f.kind === "html")).slice(0, 6);
+  const rest = files.filter((f) => !visual.includes(f));
+  const add = files.reduce((n, f) => n + (f.added || 0), 0), del = files.reduce((n, f) => n + (f.removed || 0), 0);
+  return h("div", { class: "outputs enter" },
+    h("div", { class: "row" }, h("b", { text: "Outputs" }), h("span", { class: "small faint", text: `${files.length} file${files.length > 1 ? "s" : ""} · ` }),
+      h("span", { class: "small ok", text: "+" + add }), h("span", { class: "small bad", text: "−" + del }), h("span", { class: "grow" }),
+      h("button", { class: "ghost small", text: "Browse files →", onclick: () => openFiles(run) })),
+    visual.length > 0 && h("div", { class: "thumbs" }, visual.map((f) => h("button", { class: "thumb", title: f.path, onclick: () => openFiles(run, f.path) },
+      f.kind === "image" ? h("img", { src: fileUrl(run.id, f.path) + "v=" + (f.size || 0), alt: f.path, loading: "lazy" })
+        : h("iframe", { src: fileUrl(run.id, f.path), sandbox: "", tabindex: "-1", scrolling: "no", title: f.path }),
+      h("span", { class: "cap", text: f.path.split("/").pop() })))),
+    rest.length > 0 && h("div", { class: "fchips" }, rest.slice(0, 24).map((f) => h("button", { class: "fchip", title: f.path, onclick: () => openFiles(run, f.path) },
+      h("span", { class: "fic " + f.status, text: FILE_ICON[f.kind] || "≡" }), f.path.split("/").pop()))));
+}
+
+// ---------- questions from agents ----------
+// The question the run waits on (same rule as the engine): the latest
+// `ask` routed to you with no message for that agent after it.
+function pendingQuestion(steps) {
+  const q = [...steps].reverse().find((s) => s.kind === "act" && s.meta.tool === "ask");
+  if (!q || q.meta.route !== "user") return null;
+  const answered = steps.some((s) => s.seq > q.seq && s.kind === "inject" && (!q.meta.agent || s.meta.agent === q.meta.agent));
+  return answered ? null : q;
+}
+const answerOf = (steps, q) => steps.find((s) => s.kind === "inject" && s.seq > q.seq && (s.meta.answer_to === q.seq || (!q.meta.agent || s.meta.agent === q.meta.agent)));
+const answerQuestion = guard(async (run, seq, text) => {
+  await api(`/api/runs/${run.id}/answer`, { body: { seq, text } });
+  toast("Answer sent; the agent continues");
+  S.view && S.view.refresh && S.view.refresh();
+});
+const NO_PREF = "No preference: use your best judgment and continue.";
+function questionCard(run, q, steps, who) {
+  const ans = answerOf(steps, q);
+  const open = !ans && q.meta.route === "user";
+  const card = h("div", { class: "qcard" + (open ? " open" : ""), "data-seq": q.seq },
+    h("div", { class: "qh" }, h("span", { class: "qi", text: "?" }), h("b", { text: `${who || "The agent"} asks` }),
+      q.meta.route === "commander" && h("span", { class: "pill", text: `→ ${agentName(q.meta.answered_by)}` }), h("span", { class: "grow" }),
+      !open && h("span", { class: "small faint", text: ans ? (ans.meta.from ? `answered by ${agentName(ans.meta.from)}` : "answered") : "" })),
+    h("div", { class: "qt" }, mdRender(q.meta.question || q.output)));
+  if (!open) return card;
+  const t = h("textarea", { rows: 2, placeholder: "Your answer…" });
+  autosize(t);
+  const send = (text) => { if (text.trim()) answerQuestion(run, q.seq, text.trim()); };
+  t.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(t.value); } });
+  card.append(...[
+    (q.meta.options || []).length > 0 && h("div", { class: "qopts" }, q.meta.options.map((o) => h("button", { text: o, onclick: () => send(o) }))),
+    h("div", { class: "row qa" }, t, h("button", { class: "primary", text: "Answer", onclick: () => send(t.value) })),
+    h("div", { class: "row small" }, h("span", { class: "grow faint", text: "The run waits for you. Your answer goes to this agent only." }),
+      h("button", { class: "ghost small", title: "Let the agent decide by itself", text: "Let it decide", onclick: () => send(NO_PREF) }))].filter(Boolean));
+  setTimeout(() => { if (document.activeElement === document.body) t.focus(); });
+  return card;
+}
+// Who answers the agents' questions in an orchestra.
+const Q_ROUTES = { user: { label: "Questions → you", hint: "Every agent's question stops the run until you answer." },
+  commander: { label: "Questions → commanders", hint: "An agent's commander answers its questions right away (the lead's questions still come to you); a commander can pass one on to you." } };
+function questionsToggle(run) {
+  const cur = run.spec.questions || "user";
+  const b = h("button", { class: "ghost small", title: Q_ROUTES[cur].hint, text: Q_ROUTES[cur].label, onclick: () => popMenu(b, Object.entries(Q_ROUTES).map(([k, v]) => ({
+    label: (k === cur ? "✓ " : "   ") + v.label, title: v.hint,
+    run: guard(async () => { await api(`/api/runs/${run.id}/questions`, { body: { route: k } }); toast(v.label); S.view && S.view.refresh && S.view.refresh(); }) }))) });
+  return b;
+}
+
+// ---------- measurements ----------
+const dur = (ms) => { if (ms == null) return "—"; const s = ms / 1000; if (s < 1) return Math.round(ms) + " ms"; if (s < 60) return s.toFixed(s < 10 ? 1 : 0) + " s"; const m = Math.floor(s / 60); if (m < 60) return `${m}m ${Math.round(s % 60)}s`; return `${Math.floor(m / 60)}h ${m % 60}m`; };
+const pct = (x) => Math.round((x || 0) * 100) + "%";
+const LANE_COLORS = ["var(--accent)", "var(--text)", "var(--muted)", "#c9a227", "#6f9bb3", "#86a874", "#b98bb0", "#d4875c"];
+function metricTiles(m) {
+  const t = m.total;
+  const tile = (label, value, sub, cls) => h("div", { class: "tile " + (cls || "") }, h("div", { class: "tl", text: label }), h("div", { class: "tv", text: value }), sub && h("div", { class: "ts", text: sub }));
+  return h("div", { class: "tiles" },
+    tile("Cost", money(m.spent_usd), t.reported_cost_usd ? `+ ${money(t.reported_cost_usd)} reported by agents` : "budget-counted"),
+    tile("Wall time", dur(m.wall_secs * 1000), `model ${dur(t.model_ms)} · tools ${dur(t.tool_ms)}`),
+    tile("Turns", String(t.turns), `${m.steps} steps · ${t.failures} failed`, t.failures ? "warnt" : ""),
+    tile("Tokens in", kTok(t.tokens.input), t.tokens.input ? `${pct(t.cache_hit)} from cache` : "—"),
+    tile("Tokens out", kTok(t.tokens.output), t.tokens.cache_write ? `${kTok(t.tokens.cache_write)} cache writes` : ""),
+    tile("Changes", `${m.changes.files} files`, `+${m.changes.added} −${m.changes.removed} lines`),
+    tile("Verification", m.verify.passed + m.verify.failed ? `${m.verify.passed}/${m.verify.passed + m.verify.failed} passed` : "—", m.review_rounds ? `${m.review_rounds} review rounds` : "", m.verify.failed && !m.verify.passed ? "badt" : ""),
+    tile("Interventions", String(t.questions + t.escalations), `${t.questions} questions · ${t.escalations} escalations`));
+}
+// One lane per agent, one bar per step, as long as the step took.
+function timelineChart(m) {
+  const steps = m.timeline.filter((s) => s.ms);
+  if (!steps.length) return h("div", { class: "small faint", text: "No timings recorded yet (runs from before this version have none)." });
+  const lanes = [...new Set(steps.map((s) => s.agent || "run"))];
+  const total = steps.reduce((n, s) => n + s.ms, 0);
+  const W = 720, LH = 22, PAD = 110, H = lanes.length * LH + 22;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "tline");
+  const el = (n, a, text) => { const e = document.createElementNS("http://www.w3.org/2000/svg", n); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); if (text != null) e.textContent = text; svg.append(e); return e; };
+  lanes.forEach((l, i) => el("text", { x: 0, y: i * LH + 15, class: "lab" }, (agentName(l) || l).slice(0, 16)));
+  let x = 0;
+  for (const s of steps) {
+    const i = lanes.indexOf(s.agent || "run"), w = Math.max(1.5, (s.ms / total) * (W - PAD));
+    const r = el("rect", { x: PAD + x, y: i * LH + 4, width: w, height: LH - 8, style: `fill:${s.ok === false ? "var(--bad)" : LANE_COLORS[i % LANE_COLORS.length]}` });
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    t.textContent = `#${s.seq} ${s.kind}${s.tool ? " · " + s.tool : ""} · ${dur(s.ms)}${s.tokens ? " · " + kTok(s.tokens) + " tok" : ""}${s.cost ? " · " + money(s.cost) : ""}`;
+    r.append(t);
+    x += w;
+  }
+  el("text", { x: PAD, y: H - 2, class: "lab" }, "0");
+  el("text", { x: W, y: H - 2, class: "lab", "text-anchor": "end" }, dur(total) + " of model + tool time");
+  return svg;
+}
+function breakdownTable(rows, nameOf) {
+  const entries = Object.entries(rows);
+  if (!entries.length) return "";
+  const max = Math.max(...entries.map(([, t]) => t.tokens.input + t.tokens.output), 1);
+  return h("table", { class: "mtable" },
+    h("tr", {}, ["", "Turns", "Time", "Tokens in", "cached", "out", "Cost", "Failed", ""].map((x) => h("th", { text: x }))),
+    entries.sort(([, a], [, b]) => b.tokens.input + b.tokens.output - (a.tokens.input + a.tokens.output)).map(([k, t]) => h("tr", {},
+      h("td", { class: "nm", title: k, text: nameOf(k) }), h("td", { text: String(t.turns) }), h("td", { text: dur(t.model_ms + t.tool_ms) }),
+      h("td", { text: kTok(t.tokens.input) }), h("td", { text: pct(t.cache_hit) }), h("td", { text: kTok(t.tokens.output) }),
+      h("td", { text: money(t.cost_usd) + (t.reported_cost_usd ? ` (+${money(t.reported_cost_usd)})` : "") }), h("td", { class: t.failures ? "warn" : "faint", text: String(t.failures) }),
+      h("td", { class: "barc" }, h("div", { class: "bar", style: { width: ((t.tokens.input + t.tokens.output) / max) * 100 + "%" } })))));
+}
+async function showMetrics(run) {
+  const body = h("div", {}, sk("sk-block"), sk("sk-block"));
+  const close = modal(h("div", {}, h("div", { class: "row" }, h("h2", { class: "grow", text: "Measurements" }),
+    h("button", { class: "ghost small", text: "Compare runs →", onclick: () => { close(); go(`#/metrics/${run.spec.retry_of ? run.spec.retry_of + "," : ""}${run.id}`); } })),
+    h("p", { class: "small muted", style: { marginTop: 0 }, text: firstLine(run.goal, 140) }), body), { wide: true });
+  try {
+    const m = await api(`/api/runs/${run.id}/metrics`);
+    const tools = Object.entries(m.total.tools).sort(([, a], [, b]) => b - a);
+    body.replaceChildren(...[metricTiles(m),
+      h("h4", { text: "Timeline" }), timelineChart(m),
+      Object.keys(m.agents).length > 1 && [h("h4", { text: "Per agent" }), breakdownTable(m.agents, (k) => agentName(k) || k)],
+      h("h4", { text: "Per model" }), breakdownTable(m.by_model, (k) => k.replace(/^acp:(.*)$/, "$1 (agent)")),
+      tools.length > 0 && [h("h4", { text: "Actions" }), h("div", { class: "fchips" }, tools.map(([k, n]) => h("span", { class: "fchip" }, h("b", { text: String(n) }), " " + k.replace("_", " "))))]].flat().filter(Boolean));
+  } catch (e) { body.replaceChildren(h("div", { class: "small bad", text: e.message })); }
+}
+// Small live figures for a run header: time so far and turns.
+function headStats(run, steps, active) {
+  const t = tokenStats(steps);
+  const turns = steps.filter((s) => s.kind === "act").length;
+  const end = active ? Date.now() / 1000 : (steps.length ? steps[steps.length - 1].created_at : run.updated_at);
+  return h("button", { class: "ghost small hstats", title: `${statLine(t)}\nClick for every measurement of this run`, onclick: () => showMetrics(run) },
+    h("span", { text: money(run.cost_usd) }), h("span", { class: "faint", text: "·" }), h("span", { text: dur(Math.max(0, end - run.created_at) * 1000) }),
+    h("span", { class: "faint", text: "·" }), h("span", { text: `${turns} turn${turns === 1 ? "" : "s"}` }),
+    t.inTok > 0 && [h("span", { class: "faint", text: "·" }), h("span", { text: `${kTok(t.inTok + t.outTok)} tok` + (t.cached ? ` (${t.pct}% cached)` : "") })], icon("chart", { size: 13 }));
+}
+
+// ---------- measurements page: every run, side by side ----------
+async function viewMeasurements(main, ids) {
+  S.view = { kind: "metrics" };
+  main.append(topbar(h("span", { class: "title grow", text: "Measurements" })));
+  const page = h("div", { class: "page" }), inner = h("div", { class: "inner wide" }, sk("sk-block"), sk("sk-block")); page.append(inner); main.append(page);
+  const all = (await api("/api/metrics").catch((e) => { inner.replaceChildren(h("div", { class: "small bad", text: e.message })); return null; }));
+  if (!all) return;
+  const runs = all.runs.sort((a, b) => (b.run > a.run) - (b.run < a.run));
+  const byId = Object.fromEntries((S.runs || []).map((r) => [r.id, r]));
+  let picked = new Set((ids || "").split(",").filter((x) => runs.some((r) => r.run === x)));
+  // Same goal (or an explicit retry) = the same experiment.
+  const key = (m) => { let id = m.run, seen = 0; while (id && seen++ < 20) { const r = runs.find((x) => x.run === id); if (!r || !r.retry_of) break; id = r.retry_of; } const root = runs.find((x) => x.run === id) || m; return root.goal.trim().toLowerCase(); };
+  const groups = new Map();
+  for (const m of runs) { const k = key(m); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(m); }
+  const label = (m) => m.mode === "orchestra" ? `⎇ team of ${m.agents_planned} · ${fmtRef(m.model)}${m.worker_model ? " / " + fmtRef(m.worker_model) : ""}` : `› ${fmtRef(m.model) || "classic pipeline"}`;
+  const cmp = h("div");
+  const COLS = [
+    ["Cost (budget)", (m) => m.spent_usd, money, "low"],
+    ["Cost reported by agents", (m) => m.total.reported_cost_usd, (v) => (v ? money(v) : "—"), "low"],
+    ["Wall time", (m) => m.wall_secs, (v) => dur(v * 1000), "low"],
+    ["Active time (model + tools)", (m) => m.total.model_ms + m.total.tool_ms, dur, "low"],
+    ["Turns", (m) => m.total.turns, String, "low"], ["Questions asked", (m) => m.total.questions, String, "low"],
+    ["Tokens in", (m) => m.total.tokens.input, (v) => (v ? kTok(v) : "—"), "low"], ["Cache hit", (m) => m.total.cache_hit, pct, "high"],
+    ["Tokens out", (m) => m.total.tokens.output, (v) => (v ? kTok(v) : "—"), "low"],
+    ["Failed turns", (m) => m.total.failures, String, "low"], ["Escalations", (m) => m.total.escalations, String, "low"],
+    ["Files changed", (m) => m.changes.files, String, null], ["Lines +/−", (m) => m.changes.added + m.changes.removed, (v) => String(v), null],
+    ["Verified", (m) => (m.verify.passed ? 1 : m.verify.failed ? 0 : null), (v) => (v == null ? "—" : v ? "✓" : "✗"), "high"],
+  ];
+  const paintCompare = () => {
+    const list = runs.filter((m) => picked.has(m.run));
+    history.replaceState(null, "", "#/metrics" + (list.length ? "/" + list.map((m) => m.run).join(",") : ""));
+    if (list.length < 2) { cmp.replaceChildren(h("div", { class: "card small muted", text: "Tick two or more runs to compare them side by side: the same goal run by a single agent and by teams, or with different models." })); return; }
+    // A row's best value, only where the runs differ.
+    const best = COLS.map(([, f, , dir]) => { const v = list.map(f).filter((x) => x != null); if (new Set(v).size < 2) return null; return dir === "low" ? Math.min(...v) : dir === "high" ? Math.max(...v) : null; });
+    const base = list[0];
+    cmp.replaceChildren(h("div", { class: "card" }, h("h3", { text: "Side by side" }),
+      h("div", { style: { overflowX: "auto" } }, h("table", { class: "mtable cmp" },
+        h("tr", {}, h("th", { text: "" }), list.map((m) => h("th", {}, h("a", { href: runHash(byId[m.run] || { id: m.run, spec: { mode: m.mode } }), text: label(m) }), h("div", { class: "small faint", text: `${m.status} · ${m.run}` })))),
+        COLS.map(([name, f, fmt], ci) => h("tr", {}, h("td", { class: "nm", text: name }), list.map((m, i) => {
+          const v = f(m), b = best[ci] != null && v === best[ci] && list.length > 1;
+          const rel = i > 0 && typeof v === "number" && typeof f(base) === "number" && f(base) > 0 && name !== "Verified" && name !== "Cache hit" ? ` (${v >= f(base) ? "+" : ""}${Math.round(((v - f(base)) / f(base)) * 100)}%)` : "";
+          return h("td", { class: b ? "best" : "" }, fmt(v), h("span", { class: "small faint", text: rel }));
+        }))))),
+      h("p", { class: "small faint", text: "Green marks the best value in each row. Percentages are relative to the first column. Cost counts budget-metered calls; external agents bill your own subscription and report tokens only." })));
+  };
+  const table = h("div", { class: "card" }, h("h3", { text: `All runs · ${runs.length}` }),
+    [...groups.entries()].map(([, ms]) => h("div", { class: "mgrp" },
+      h("div", { class: "row" }, h("b", { class: "grow", text: firstLine(ms[ms.length - 1].goal, 110) }), ms.length > 1 && h("button", { class: "ghost small", text: `Compare ${ms.length}`, onclick: () => { picked = new Set(ms.map((m) => m.run)); paintTable(); paintCompare(); } })),
+      h("table", { class: "mtable" }, ms.map((m) => h("tr", {},
+        h("td", { style: { width: "26px" } }, h("input", { type: "checkbox", style: { width: "auto" }, checked: picked.has(m.run), "data-run": m.run, onchange: (e) => { e.target.checked ? picked.add(m.run) : picked.delete(m.run); paintCompare(); } })),
+        h("td", { class: "nm" }, h("a", { href: runHash(byId[m.run] || { id: m.run, spec: { mode: m.mode } }), text: label(m) })),
+        h("td", { class: "faint", text: m.status }), h("td", { text: money(m.spent_usd) }), h("td", { text: dur(m.wall_secs * 1000) }),
+        h("td", { text: `${m.total.turns} turns` }), h("td", { text: m.total.tokens.input + m.total.tokens.output ? `${kTok(m.total.tokens.input + m.total.tokens.output)} tok` : "—" }),
+        h("td", { class: "small", text: `+${m.changes.added} −${m.changes.removed}` }),
+        h("td", { text: m.verify.passed ? "✓" : m.verify.failed ? "✗" : "" })))))));
+  const paintTable = () => table.querySelectorAll("input[data-run]").forEach((c) => (c.checked = picked.has(c.dataset.run)));
+  inner.classList.add("stack");
+  inner.replaceChildren(
+    h("p", { class: "muted small", style: { margin: 0 }, text: "Every run is measured: what it cost, how long it took, how many turns and tokens it used, what it changed and whether it passed its checks. Runs of the same goal are grouped, so a single agent and a team on the same task can be compared directly." }),
+    cmp, table);
+  paintCompare();
 }
 
 // ---------- models & settings ----------
@@ -2003,9 +2661,11 @@ function palette() {
   const actions = [
     { g: "Actions", ic: "＋", t: "New chat", k: "", run: () => go("#/") },
     od && { g: "Actions", ic: "⎇", t: "Continue the unfinished team: " + firstLine(od.goal, 60), run: () => go("#/o/new") },
-    { g: "Actions", ic: "⚙", t: "Models & settings", run: () => go("#/models") },
+    { g: "Actions", ic: icon("gear"), t: "Models & settings", run: () => go("#/models") },
+    { g: "Actions", ic: icon("chart"), t: "Measurements: compare runs", run: () => go("#/metrics") },
     { g: "Actions", ic: "⇅", t: "Switch project…", run: switchProject },
     { g: "Actions", ic: "⟨", t: "Toggle sidebar", run: () => toggleSide() },
+    { g: "Actions", ic: icon(theme() === "dark" ? "sun" : "moon"), t: theme() === "dark" ? "Switch to light mode" : "Switch to dark mode", run: toggleTheme },
   ].filter(Boolean);
   const seen = seenMap();
   const runs = [...(S.runs || [])].sort((a, b) => (b.status === "running") - (a.status === "running") || isUnread(b, seen) - isUnread(a, seen) || b.updated_at - a.updated_at)
@@ -2025,7 +2685,7 @@ function palette() {
       if (it.g !== g) { g = it.g; kids.push(h("div", { class: "grp", text: g })); }
       kids.push(h("div", { class: "it" + (i === on ? " on" : ""), onmousemove: () => { if (on !== i) { on = i; paint(); } }, onclick: () => pick(i) },
         it.dot ? h("span", { class: "sdot " + it.dot, style: { width: "7px", height: "7px", borderRadius: "50%", flex: "none" } }) : null,
-        h("span", { class: "faint", style: { width: "14px", textAlign: "center" }, text: it.ic }), h("span", { class: "t", text: it.t }), it.k && h("span", { class: "k", text: it.k })));
+        h("span", { class: "faint", style: { width: "14px", textAlign: "center" } }, it.ic), h("span", { class: "t", text: it.t }), it.k && h("span", { class: "k", text: it.k })));
     });
     res.replaceChildren(...(kids.length ? kids : [h("div", { class: "it faint", text: "Nothing matches." })]));
     res.querySelector(".it.on")?.scrollIntoView({ block: "nearest" });
@@ -2071,7 +2731,7 @@ function announce(before, run) {
   const watching = S.view && S.view.id === run.id && !document.hidden;
   if (watching) return;
   const st = runState(run);
-  const msg = (st === "done" ? "✓ Finished: " : st === "error" ? "⚠ Stopped: " : "⏸ Paused: ") + firstLine(run.goal, 60);
+  const msg = st === "waiting" ? firstLine(run.error || "An agent has a question", 90) : (st === "done" ? "Finished: " : st === "error" ? "Stopped: " : "Paused: ") + firstLine(run.goal, 60);
   if (!(S.view && S.view.id === run.id)) toast(msg, false, { label: "Open", run: () => go(runHash(run)) });
   if (document.hidden && store.get("notify", false) && "Notification" in window && Notification.permission === "granted") {
     try {

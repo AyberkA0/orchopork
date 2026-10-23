@@ -76,6 +76,8 @@ enum Command {
     Resume { run: String },
     /// Send the agent a message (picked up on its next turn).
     Inject { run: String, text: String },
+    /// Answer the question a waiting run asked, and continue it.
+    Answer { run: String, text: String },
     /// Reset a run to just after step SEQ (-1 = back to the start).
     Rewind {
         run: String,
@@ -233,6 +235,15 @@ async fn main() -> anyhow::Result<()> {
             let step = engine(&root).await?.inject(&run, &text, None).await?;
             println!("queued as step {}; resume the run if it is not executing", step.seq);
             Ok(())
+        }
+        Command::Answer { run, text } => {
+            let engine = engine(&root).await?;
+            let (_, steps) = engine.run_detail(&run).await?;
+            let q = orchopork::graph::ask::waiting_on(&steps)
+                .ok_or_else(|| anyhow::anyhow!("run {run} is not waiting for an answer"))?;
+            let mut rx = engine.subscribe();
+            engine.answer(&run, q.seq, &text).await?;
+            follow(&engine, &run, &mut rx).await
         }
         Command::Rewind { run, seq } => {
             let r = engine(&root).await?.rewind(&run, seq).await?;

@@ -18,6 +18,7 @@
 //! failures the next turn is escalated to a stronger model; when the cloud
 //! budget is exhausted, cloud roles fall back to a local actor.
 
+pub mod ask;
 pub mod external;
 pub mod orchestra;
 pub mod prompts;
@@ -28,7 +29,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::json;
@@ -60,6 +61,8 @@ pub enum Event {
 enum Stop {
     Done,
     Paused(Option<String>),
+    /// An agent asked the user a question (the run's status line).
+    Waiting(String),
 }
 
 #[derive(Clone)]
@@ -289,6 +292,57 @@ impl Engine {
         Ok(step)
     }
 
+    /// Answers the question asked at step `seq` and continues the run.
+    pub async fn answer(&self, run_id: &str, seq: i64, text: &str) -> Result<Run> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(Error::InvalidRequest("the answer is empty".into()));
+        }
+        let ws = &self.inner.ws;
+        let q = ws.store.step(run_id, seq).await?;
+        if q.meta["tool"] != "ask" {
+            return Err(Error::InvalidRequest(format!("step {seq} is not a question")));
+        }
+        {
+            let _g = self.inner.append_lock.lock().await;
+            let run = ws.store.get_run(run_id).await?;
+            let state = ws.store.head_step(run_id).await?.map(|s| s.state).unwrap_or_default();
+            let commit = GitRepo::new(&run.worktree).head().await?.unwrap_or(run.base_commit.clone());
+            let mut meta = json!({ "answer_to": seq });
+            if let Some(a) = q.meta["agent"].as_str() {
+                meta["agent"] = json!(a);
+            }
+            let step = ws
+                .store
+                .append_step(
+                    run_id,
+                    NewStep {
+                        kind: StepKind::Inject,
+                        output: text,
+                        observation: None,
+                        meta,
+                        state: &state,
+                        git_commit: &commit,
+                        cost_usd: 0.0,
+                    },
+                )
+                .await?;
+            self.inner.emit(Event::Step { step });
+        }
+        if self.is_active(run_id) { ws.store.get_run(run_id).await } else { self.start(run_id).await }
+    }
+
+    /// Changes who answers the agents' questions, also mid-run.
+    pub async fn set_questions(&self, run_id: &str, route: crate::storage::QuestionRoute) -> Result<Run> {
+        let ws = &self.inner.ws;
+        let mut run = ws.store.get_run(run_id).await?;
+        run.spec.questions = route;
+        ws.store.set_run_spec(run_id, &run.spec).await?;
+        let run = ws.store.get_run(run_id).await?;
+        self.inner.emit(Event::Run { run: run.clone() });
+        Ok(run)
+    }
+
     /// Resets the run to just after step `seq` (or to its starting point
     /// for `seq < 0`). The pre-rewind tree is committed and kept under
     /// `refs/orchopork/rewound/<run>/<time>`, so nothing is unrecoverable.
@@ -362,6 +416,7 @@ impl Inner {
         let (status, error) = match self.drive_loop(&run_id, &pause).await {
             Ok(Stop::Done) => (RunStatus::Done, None),
             Ok(Stop::Paused(msg)) => (RunStatus::Paused, msg),
+            Ok(Stop::Waiting(q)) => (RunStatus::Waiting, Some(q)),
             Err(e) => (RunStatus::Paused, Some(e.to_string())),
         };
         // Status before releasing the slot: a resume that sneaks in between
@@ -387,6 +442,10 @@ impl Inner {
                 ))));
             }
             let steps = self.ws.store.steps(run_id).await?;
+            if let Some(q) = ask::waiting_on(&steps) {
+                let who = q.meta["agent"].as_str().and_then(|a| run.spec.agent(a)).map(|a| a.name.as_str());
+                return Ok(Stop::Waiting(ask::status_line(q, who.unwrap_or("The agent"))));
+            }
             let mut state = steps.last().map(|s| s.state.clone()).unwrap_or_default();
             // Solo and orchestra runs skip the planner, and so does a classic
             // run whose planner would be an external agent (it plans itself).
@@ -463,7 +522,7 @@ impl Inner {
         meta: serde_json::Value,
         state: &RunState,
         cost_usd: f64,
-    ) -> Result<()> {
+    ) -> Result<Step> {
         let _g = self.append_lock.lock().await;
         let label = meta["tool"].as_str().map(|t| format!(" {t}")).unwrap_or_default();
         let commit =
@@ -485,8 +544,8 @@ impl Inner {
                 },
             )
             .await?;
-        self.emit(Event::Step { step });
-        Ok(())
+        self.emit(Event::Step { step: step.clone() });
+        Ok(step)
     }
 
     async fn plan(&self, cfg: &Config, run: &Run, steps: &[Step], state: RunState) -> Result<Option<Stop>> {
@@ -502,9 +561,12 @@ impl Inner {
         let notes: Vec<&str> = steps.iter().filter(|s| s.kind == StepKind::Inject).map(|s| s.output.as_str()).collect();
         let system = self.ws.skills.compose_for(prompts::PLANNER, &Scope::of(&["planner"]))?.system;
         let input = prompts::planner_input(&run.goal, &notes, &files, &docs);
+        let t0 = Instant::now();
         let out = self.call(cfg, run, &model, system, vec![Message::user(input)]).await?;
         let next = RunState { phase: Phase::Act, ..state };
-        self.append(run, StepKind::Plan, &out.text, None, call_meta(&out), &next, out.cost_usd).await?;
+        let mut meta = call_meta(&out);
+        meta["ms"] = json!(t0.elapsed().as_millis() as u64);
+        self.append(run, StepKind::Plan, &out.text, None, meta, &next, out.cost_usd).await?;
         Ok(None)
     }
 
@@ -539,10 +601,13 @@ impl Inner {
             self.log(&run.id, format!("escalating this turn to {model} after {} failed turns", state.failures));
         }
         let req = CompletionRequest { system, messages, tail: Some(tail), ..Default::default() };
+        let t0 = Instant::now();
         let out = self.call_req(cfg, run, &model, req).await?;
 
         let mut meta = call_meta(&out);
         meta["escalated"] = json!(escalated);
+        let call_ms = t0.elapsed().as_millis() as u64;
+        meta["ms"] = json!(call_ms);
         let mut next = state.clone();
         let violations = skills.check_output(&out.text);
         let (observation, ok) = if !violations.is_empty() {
@@ -583,6 +648,22 @@ impl Inner {
                     };
                     (msg.to_string(), true)
                 }
+                Ok(a) if a.tool == "ask" => match ask::from_args(&a.args) {
+                    Some(q) => {
+                        meta["tool"] = json!("ask");
+                        meta["route"] = json!("user");
+                        for (k, v) in q.meta().as_object().into_iter().flatten() {
+                            meta[k] = v.clone();
+                        }
+                        meta["ok"] = json!(true);
+                        let next = RunState { failures: 0, escalate: false, ..next };
+                        let obs = "Question sent to the user; wait for the answer.";
+                        let asked =
+                            self.append(run, StepKind::Act, &out.text, Some(obs), meta, &next, out.cost_usd).await?;
+                        return Ok(Some(Stop::Waiting(ask::status_line(&asked, "The agent"))));
+                    }
+                    None => ("ask needs a non-empty \"question\"".to_string(), false),
+                },
                 Ok(a) => {
                     meta["tool"] = json!(a.tool);
                     let r = toolbox.execute(&a).await;
@@ -591,6 +672,7 @@ impl Inner {
             }
         };
         meta["ok"] = json!(ok);
+        meta["tool_ms"] = json!((t0.elapsed().as_millis() as u64).saturating_sub(call_ms));
         if ok {
             next.failures = 0;
             next.escalate = false;
@@ -609,6 +691,7 @@ impl Inner {
     }
 
     async fn verify(&self, cfg: &Config, run: &Run, state: RunState) -> Result<Option<Stop>> {
+        let t0 = Instant::now();
         let (all_ok, summary, details) = self.run_verification(cfg, run).await?;
         let next = RunState {
             phase: match (all_ok, cfg.routing.critic.is_some()) {
@@ -620,7 +703,7 @@ impl Inner {
             escalate: false,
             ..state
         };
-        let meta = json!({ "ok": all_ok });
+        let meta = json!({ "ok": all_ok, "ms": t0.elapsed().as_millis() as u64 });
         self.append(run, StepKind::Verify, &summary, Some(&details), meta, &next, 0.0).await?;
         Ok(None)
     }
@@ -654,6 +737,7 @@ impl Inner {
         let input =
             prompts::critic_input(&run.goal, plan, summary, verification, &stat, &patch, cfg.context_chars(&model));
         let system = self.ws.skills.compose_for(prompts::CRITIC, &Scope::of(&["critic"]))?.system;
+        let t0 = Instant::now();
         let out = self.call(cfg, run, &model, system, vec![Message::user(input)]).await?;
         let (approve, feedback) = protocol::parse_verdict(&out.text);
         let mut next = state.clone();
@@ -666,6 +750,7 @@ impl Inner {
         }
         let mut meta = call_meta(&out);
         meta["verdict"] = json!(if approve { "approve" } else { "revise" });
+        meta["ms"] = json!(t0.elapsed().as_millis() as u64);
         let output = match (feedback.is_empty(), approve) {
             (false, _) => feedback,
             (true, true) => "Approved.".to_string(),

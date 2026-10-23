@@ -119,9 +119,16 @@ Every call is accounted for, per run and per agent:
 - turns, escalations, failures and review rounds;
 - the diff each agent produced, attached to its report.
 
-The run header, each node on the canvas and each agent's panel show these live. The direction from here is
-analysis across runs: the same goal run as a single agent and as several orchestrations, side by side, so the
-cost of orchestration and what it buys are visible as numbers rather than impressions.
+Every step also records how long it took: the model call and, separately, the tool it ran, so wall-clock time
+(which includes waiting for you) and active time are told apart. External agents report their own tokens, and
+Claude Code its notional cost, which are shown next to the budget-counted cost but never charged to it.
+
+The run header, each node on the canvas and each agent's panel show these live; the header opens the full
+measurements of a run: totals, a timeline with one lane per agent, and per-agent and per-model breakdowns.
+**Measurements** (the chart icon in the sidebar, or `#/metrics`) lists every run, grouped by goal, and compares any of them
+side by side, with the best value of each row marked and the others as a percentage of the first. *Retry as new*
+links the new run to the old one, so the same goal run as a single agent and as several orchestrations lines up
+for comparison. Raw numbers are available at `GET /api/runs/<id>/metrics` and `GET /api/metrics?ids=a,b`.
 
 ## Where it is going
 
@@ -143,10 +150,13 @@ Roadmap, roughly in order:
 - [x] Prompt caching and per-agent token/cost metrics
 - [x] Agent contracts (owned files, acceptance criteria, verify commands) and team templates
 - [x] Fan-out / fan-in and blackboard-style shared state, through the orchestra tree
+- [x] Agents ask questions; you answer, or their commander does
+- [x] Outputs in the UI: preview images, SVG, web pages, markdown and code a run produced
+- [x] Measurements page: every run measured, any runs compared side by side
 - [ ] Pattern library: debate, voting, router, evaluator loop
 - [ ] Parallel fan-out branches and opportunistic blackboard turns
 - [ ] Free-form node graph (any pattern, not only trees)
-- [ ] Benchmark mode: one goal, many orchestrations, a comparison report
+- [ ] Benchmark mode: one goal, many orchestrations launched together, a comparison report
 - [ ] Remote orchopork nodes and cross-server orchestration
 
 ## Quick start
@@ -191,8 +201,33 @@ The interface is a chat box. When you send a message, orchopork asks **"Activate
 - `Ctrl+Z` undo, `Delete` remove (its subordinates move up), `A` add a subordinate, `Enter` edit; pan by dragging
   the background, zoom with the wheel.
 
-**Approve & deploy** starts it. The same tree then shows live status (who is working, who reported, turns and cost
-per agent), and clicking an agent opens its feed, where you can message that agent directly.
+**Approve & deploy** starts it. The same tree then shows live status (who is working, who reported, who has a
+question for you, turns, time, tokens and cost per agent), and clicking an agent opens its feed, where you can
+message that agent directly.
+
+### Questions from agents
+
+An agent that cannot go on without a decision asks: internal agents with the `ask` tool, external agents (Claude
+Code, Codex, …) by ending their reply with a `QUESTION:` line, optionally followed by `- option` lines. Where the
+question goes is up to you, per run, and can be changed while it runs (**Questions →** in the toolbar):
+
+- **to you** (the default): the run stops in *needs your answer*, the sidebar lists it under *Waiting for your
+  answer*, and a toast (or desktop notification) tells you. Answer on the question card, pick one of the offered
+  options, or *Let it decide*; the answer goes to that agent only, and the run continues.
+- **to the commander**: in an orchestra, the asking agent's commander answers at once from the mission, its brief and
+  the reports so far (one call of its own model, Claude Code included), and the agent continues. A commander that
+  cannot decide passes the question on to you. The lead's questions always come to you.
+
+From the CLI: `orchopork answer <run> "…"`.
+
+### Outputs
+
+Whatever a run creates or changes is one click away: an **Outputs** card under the conversation (and under the
+lead's feed) shows thumbnails of pictures, SVGs and web pages and lists every other file; **Files** opens a browser
+with a live preview (images, SVG, HTML with its scripts in a sandbox, markdown, code with line numbers, PDF, audio,
+video) and each file's diff. Files are served only from the run's worktree, under a sandboxing content security
+policy, so a generated page can never act as orchopork. Ask for "an SVG of a pelican riding a bicycle" and you see
+the pelican, not a path.
 
 ### How an orchestra executes
 
@@ -297,6 +332,13 @@ There are two ways to connect one, and several tools offer both:
 | OpenCode      | —                                                           | `opencode acp`                                 |
 | Goose         | —                                                           | `goose acp`                                    |
 
+**Workspace trust.** Every run works in a fresh worktree no tool has seen before, and several CLIs hold back in
+an untrusted folder (Gemini CLI and Qwen Code drop to "ask before every action", Cursor stops at a trust prompt).
+orchopork settles it before the agent starts: with the tool's own flag where it has one (`--skip-trust` for Gemini
+CLI, `--trust` for Cursor), and for tools that keep a trust list (Gemini CLI and Qwen Code, also over ACP) by adding
+the folder that holds orchopork's worktrees to it, once. Nothing else is trusted: not your checkout, not your home.
+Claude Code skips its trust dialog in `-p` mode, and Codex runs with `--skip-git-repo-check` in its own sandbox.
+
 Antigravity is installed with Google's own script (see [antigravity.google/cli](https://antigravity.google/docs/cli/headless/))
 and signed in once by running `agy` in a terminal. agy has no switch that allows only shell commands: with
 `allow_commands` on, orchopork passes `--dangerously-skip-permissions`; with it off, reads and writes in the worktree
@@ -342,7 +384,7 @@ plan ──► act ⇄ tool ──finish──► verify ──pass──► rev
 orchopork init --actor ollama:qwen2.5-coder:14b --planner claude:claude-sonnet-5 --critic deepseek:deepseek-chat
 orchopork providers set-key claude            # reads the key from stdin
 orchopork run "Add a --json flag to the list command" --verify "cargo test"
-orchopork runs | show <id> | diff <id> | inject <id> "use serde" | resume <id> | rewind <id> 3 | push <id>
+orchopork runs | show <id> | diff <id> | inject <id> "use serde" | answer <id> "yes" | resume <id> | rewind <id> 3 | push <id>
 ```
 
 | Phase  | Who                                 | What happens                                                                                          |
@@ -472,9 +514,13 @@ every enabled modifier costs context on every call.
 
 ## Security model
 
-- The server binds `127.0.0.1` only. It rejects requests whose `Host` is not local, and state-changing requests
-  whose `Origin` is not local. This blocks DNS rebinding and cross-site requests; the API can run commands through
-  the agent, so no web page may reach it.
+- By default the server binds `127.0.0.1` only. It rejects requests whose `Host` is not local, and state-changing
+  requests whose `Origin` is not local. This blocks DNS rebinding and cross-site requests; the API can run commands
+  through the agent, so no web page may reach it.
+- With `--host`, every request that is not from this machine needs the access token, and changes must be
+  same-origin.
+- Files a run produced are served from its worktree only, with `X-Content-Type-Options: nosniff` and a sandboxing
+  `Content-Security-Policy`, so a generated HTML or SVG file runs (if at all) in an opaque origin.
 - Secrets never pass through wizard state or any API response.
 - Nothing is written to disk before you choose a workspace, and `git init` only happens when you ask for it.
 
@@ -492,13 +538,13 @@ Requires Rust 1.89+ and `git` on `PATH`.
 
 ```text
 src/
-  graph/        engine, orchestra, prompts, action protocol, tools
+  graph/        engine, orchestra, questions, prompts, action protocol, tools
   providers/    gateway, budget, pricing
   storage/      SQLite checkpoints and spend ledger
   skills/       loader, composition, model
   git/          worktrees and branches through hardened git calls
-  server/       HTTP API and setup wizard
-  acp.rs        external agents over the Agent Client Protocol
+  server/       HTTP API, setup wizard, access control, outputs and measurements
+  agents/       external agents: ACP, headless CLIs, presets, workspace trust
 ui/index.html   the whole dashboard, dependency-free, embedded in the binary
 ```
 

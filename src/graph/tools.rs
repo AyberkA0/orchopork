@@ -72,6 +72,9 @@ impl ToolBox {
             let params = if t.parameters.is_null() { "{}".to_string() } else { t.parameters.to_string() };
             s.push_str(&format!("- {} {}: {}\n", t.name, params, t.description.trim()));
         }
+        s.push_str(
+            "- ask {\"question\": string, \"options\"?: [string]}: ask a question only a person can answer (missing information, a product decision). Work stops until the answer arrives, so prefer a sensible default and ask only when a wrong guess would waste the work.\n",
+        );
         s.push_str("- finish {\"summary\": string}: the goal is complete and verified; summarize what changed.\n");
         s
     }

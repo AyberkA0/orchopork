@@ -105,6 +105,8 @@ pub fn build_args(
         }
         Dialect::Cursor => {
             lead.extend(s(&["-p", "--output-format", "stream-json"]));
+            // Headless runs stop at the workspace trust prompt otherwise.
+            tail.push("--trust".into());
             if policy.allow_execute {
                 tail.push("--force".into());
             }
@@ -325,6 +327,13 @@ pub async fn run(
         let low = why.to_lowercase();
         let hint = if low.contains("login") || low.contains("auth") {
             format!(". Sign in to {} once in a terminal, then retry.", agent.name)
+        } else if low.contains("trust") {
+            format!(
+                ". {} did not trust the run's folder; open it once in a terminal (`{}` in {}) and trust it, then retry.",
+                agent.name,
+                agent.command,
+                cwd.display()
+            )
         } else {
             String::new()
         };
@@ -922,7 +931,7 @@ mod tests {
         );
         let cursor = ExternalAgent::new("u", "U", "cursor-agent", &["{prompt}"]).cli(Dialect::Cursor);
         let a = build_args(&cursor, &BTreeMap::new(), Policy { allow_execute: true }, None, "do it");
-        assert_eq!(a, ["-p", "--output-format", "stream-json", "do it", "--force"]);
+        assert_eq!(a, ["-p", "--output-format", "stream-json", "do it", "--trust", "--force"]);
     }
 
     fn python() -> Option<String> {

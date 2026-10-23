@@ -31,7 +31,7 @@ macro_rules! text_enum {
     };
 }
 
-text_enum!(RunStatus { Running => "running", Paused => "paused", Done => "done" });
+text_enum!(RunStatus { Running => "running", Paused => "paused", Done => "done", Waiting => "waiting" });
 text_enum!(Phase { Plan => "plan", Act => "act", Verify => "verify", Review => "review", Done => "done" });
 text_enum!(StepKind { Plan => "plan", Act => "act", Verify => "verify", Review => "review", Inject => "inject" });
 
@@ -46,6 +46,20 @@ pub enum RunMode {
     Solo,
     /// A hierarchy of agents led by one commander (see `graph::orchestra`).
     Orchestra,
+}
+
+/// Who answers an agent's question (the `ask` tool, or a `QUESTION:` line
+/// from an external agent).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionRoute {
+    /// The run waits for you.
+    #[default]
+    User,
+    /// In an orchestra, the asking agent's commander answers at once; it
+    /// can still pass a question on to you. The lead's (and a single
+    /// agent's) questions always come to you.
+    Commander,
 }
 
 /// One member of an orchestra. `parent == None` marks the single root.
@@ -86,6 +100,12 @@ pub struct RunSpec {
     /// pick its own, e.g. a strong lead with cheaper workers.
     pub worker_model: Option<ModelRef>,
     pub agents: Vec<AgentSpec>,
+    /// Who answers questions from the agents.
+    pub questions: QuestionRoute,
+    /// The run this one retries (same goal, another model or orchestra),
+    /// so they can be compared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_of: Option<String>,
 }
 
 impl RunSpec {
@@ -488,6 +508,7 @@ mod spec_tests {
             mode: RunMode::Orchestra,
             model: None,
             agents: vec![a("r", None), a("x", Some("r")), a("y", Some("x"))],
+            ..Default::default()
         };
         assert!(ok.validate_agents().is_ok());
         assert_eq!(ok.children("r").count(), 1);

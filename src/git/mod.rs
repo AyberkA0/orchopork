@@ -212,7 +212,38 @@ impl GitRepo {
     /// `M path` / `A path` / `D path` line per changed file.
     pub async fn changed_names(&self, base: &str) -> Result<String> {
         validate_commit(base)?;
+        self.see_new_files().await;
         self.run(&["diff", "--name-status", "--no-color", "--no-renames", base]).await
+    }
+
+    /// Marks new, not ignored files as intended for the next commit, so
+    /// `git diff <base>` shows them: an agent's new files must be in the
+    /// diff of its report before its step is checkpointed. Only ever used
+    /// in a run's worktree, where every step commits everything anyway.
+    async fn see_new_files(&self) {
+        let _ = self.run(&["add", "--intent-to-add", "--all"]).await;
+    }
+
+    /// Untracked, not ignored files (an agent's work before its checkpoint).
+    pub async fn untracked(&self) -> Result<Vec<String>> {
+        let out = self.run(&["ls-files", "--others", "--exclude-standard"]).await?;
+        Ok(out.lines().map(str::to_string).collect())
+    }
+
+    /// Lines added and removed per file in the working tree against `base`
+    /// (`None` for binary files).
+    pub async fn numstat(&self, base: &str) -> Result<std::collections::BTreeMap<String, (Option<u64>, Option<u64>)>> {
+        validate_commit(base)?;
+        self.see_new_files().await;
+        let out = self.run(&["diff", "--numstat", "--no-color", "--no-renames", base]).await?;
+        Ok(out
+            .lines()
+            .filter_map(|l| {
+                let mut it = l.splitn(3, '\t');
+                let (a, r, p) = (it.next()?, it.next()?, it.next()?);
+                Some((p.to_string(), (a.parse().ok(), r.parse().ok())))
+            })
+            .collect())
     }
 
     /// `git grep` over tracked and untracked files. No match is `Ok("")`.
@@ -229,6 +260,7 @@ impl GitRepo {
     /// Diff of the working tree (committed or not) against `base`.
     pub async fn diff_from(&self, base: &str) -> Result<(String, String)> {
         validate_commit(base)?;
+        self.see_new_files().await;
         let stat = self.run(&["diff", "--stat", "--no-color", base]).await?;
         let patch = self.run(&["diff", "--no-color", base]).await?;
         Ok((stat, patch))
@@ -332,6 +364,18 @@ mod tests {
         assert!(stat.contains("new.txt") && patch.contains("+hi"));
         assert!(wt.grep("h.", ".").await.unwrap().contains("new.txt:1:hi"));
         assert!(wt.grep("absent", ".").await.unwrap().is_empty());
+
+        // A file an agent just created, before its step is committed.
+        tokio::fs::write(
+            wt_path.join("fresh.svg"),
+            "<svg/>
+",
+        )
+        .await
+        .unwrap();
+        let (stat, _) = wt.diff_from(&base).await.unwrap();
+        assert!(stat.contains("fresh.svg"), "{stat}");
+        assert_eq!(wt.numstat(&base).await.unwrap()["fresh.svg"], (Some(1), Some(0)));
 
         tokio::fs::write(wt_path.join("stray.txt"), "x").await.unwrap();
         wt.reset_hard(&base).await.unwrap();

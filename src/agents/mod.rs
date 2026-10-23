@@ -20,6 +20,7 @@
 pub mod acp;
 pub mod cli;
 mod presets;
+pub mod trust;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -174,6 +175,9 @@ pub enum Update<'a> {
     Plan(String),
     Thinking,
     Text,
+    /// Something orchopork did on the agent's behalf (e.g. trusting the
+    /// worktrees folder), worth showing once.
+    Note(String),
 }
 
 /// Runs one task with `agent` in `cwd`, applying `options` (e.g.
@@ -187,8 +191,11 @@ pub async fn run(
     policy: Policy,
     timeout: Duration,
     cancel: &AtomicBool,
-    on_update: impl FnMut(Update) + Send,
+    mut on_update: impl FnMut(Update) + Send,
 ) -> Result<Outcome> {
+    if let Some(note) = trust::ensure(agent, cwd) {
+        on_update(Update::Note(note));
+    }
     match agent.protocol {
         Protocol::Acp => acp::run(agent, cwd, prompt, options, policy, timeout, cancel, on_update).await,
         Protocol::Cli => cli::run(agent, cwd, prompt, options, policy, timeout, cancel, on_update).await,
@@ -341,15 +348,53 @@ pub(crate) fn stderr_tail(child: &mut Child) -> tokio::task::JoinHandle<String> 
         let Some(mut err) = err else { return String::new() };
         let mut buf = Vec::new();
         let _ = err.read_to_end(&mut buf).await;
-        let s = String::from_utf8_lossy(&buf).into_owned();
+        let s = strip_ansi(&String::from_utf8_lossy(&buf));
         let n = s.chars().count();
         s.chars().skip(n.saturating_sub(1500)).collect()
     })
 }
 
+/// Drops terminal color and cursor codes, which CLIs print even to a pipe
+/// and which would show up as garbage in the UI.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            // CSI: parameters, then one final byte in @..~
+            Some('[') => {
+                for d in it.by_ref() {
+                    if ('@'..='~').contains(&d) {
+                        break;
+                    }
+                }
+            }
+            // OSC: up to BEL or ESC \
+            Some(']') => {
+                while let Some(d) = it.next() {
+                    if d == '\u{7}' || (d == '\u{1b}' && it.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_codes_are_stripped() {
+        assert_eq!(strip_ansi("\u{1b}[1;31mError\u{1b}[0m: x \u{1b}]8;;http://a\u{7}link"), "Error: x link");
+    }
 
     #[test]
     fn old_configs_without_protocol_stay_acp() {

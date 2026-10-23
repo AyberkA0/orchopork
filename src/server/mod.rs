@@ -3,6 +3,7 @@
 //! access token.
 
 pub mod access;
+mod outputs;
 mod setup;
 pub mod wizard;
 
@@ -34,6 +35,8 @@ use wizard::{Event, VcsStatus, Wizard};
 
 /// Single-file embedded SPA; client JS routes off `wizard.step`.
 const INDEX_HTML: &str = include_str!("../../ui/index.html");
+/// The pig, for the tab icon and the sidebar.
+const LOGO_PNG: &[u8] = include_bytes!("../../docs/img/logo.png");
 
 pub struct AppState {
     /// Live model lists of cloud providers, refreshed every 10 minutes.
@@ -198,7 +201,15 @@ pub fn router_with(state: Shared, access: access::Access) -> Router {
         .route("/api/runs/{id}/rewind", post(rewind_run))
         .route("/api/runs/{id}/diff", get(diff_run))
         .route("/api/runs/{id}/push", post(push_run))
+        .route("/api/runs/{id}/answer", post(answer_run))
+        .route("/api/runs/{id}/questions", post(questions_run))
+        .route("/api/runs/{id}/files", get(outputs::files))
+        .route("/api/runs/{id}/file", get(outputs::file))
+        .route("/api/runs/{id}/raw/{*path}", get(outputs::raw))
+        .route("/api/runs/{id}/metrics", get(outputs::metrics))
+        .route("/api/metrics", get(outputs::compare))
         .route("/api/events", get(events))
+        .route("/logo.png", get(logo))
         // Client-side-routed SPA: every other GET gets the same shell.
         .fallback(get(spa_index))
         .layer(middleware::from_fn_with_state(access, access::guard))
@@ -1023,6 +1034,30 @@ async fn diff_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiR
     Ok(Json(json!({ "stat": stat, "patch": crate::fsutil::clip(&patch, 400_000) })))
 }
 
+#[derive(Deserialize)]
+struct AnswerReq {
+    /// The question's step.
+    seq: i64,
+    text: String,
+}
+
+async fn answer_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(req): Json<AnswerReq>) -> ApiResult {
+    Ok(Json(json!({ "run": s.engine()?.answer(&id, req.seq, &req.text).await? })))
+}
+
+#[derive(Deserialize)]
+struct QuestionsReq {
+    route: crate::storage::QuestionRoute,
+}
+
+async fn questions_run(
+    State(s): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    Json(req): Json<QuestionsReq>,
+) -> ApiResult {
+    Ok(Json(json!({ "run": s.engine()?.set_questions(&id, req.route).await? })))
+}
+
 async fn push_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult {
     Ok(Json(json!({ "output": s.engine()?.push(&id).await? })))
 }
@@ -1041,6 +1076,10 @@ async fn events(
         Ok(SseEvent::default().data(data))
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+async fn logo() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")], LOGO_PNG)
 }
 
 async fn spa_index() -> impl IntoResponse {

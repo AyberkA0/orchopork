@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{Inner, Stop, prompts, verify_commands};
+use super::{Inner, Stop, ask, prompts, verify_commands};
 use crate::agents::{self, Outcome, Policy, Update};
 use crate::config::{Config, ModelRef};
 use crate::error::{Error, Result};
@@ -102,6 +102,7 @@ impl Inner {
                 let msg = match u {
                     Update::Tool(t) => Some(format!("{who} · {}", t.title)),
                     Update::Plan(p) => Some(format!("{who} plans: {}", clip(&p, 160))),
+                    Update::Note(n) => Some(n),
                     Update::Thinking | Update::Text if last.elapsed() > Duration::from_secs(3) => Some(format!(
                         "{who} is {}…",
                         if matches!(u, Update::Thinking) { "thinking" } else { "writing" }
@@ -138,10 +139,23 @@ impl Inner {
             cfg.limits.cloud_context_chars,
             cfg.limits.tool_output_chars,
         );
-        let prompt = format!("{}\n\n{tail}{SUFFIX}", as_prompt(&messages));
+        let prompt = format!("{}\n\n{tail}{SUFFIX}\n{}", as_prompt(&messages), ask::EXTERNAL_HOW);
         let name = self.agent_display(cfg, model);
+        let t0 = Instant::now();
         let out = self.external_turn(cfg, run, model, &name, prompt).await?;
+        let mut meta = meta(model, &out);
+        meta["ms"] = json!(t0.elapsed().as_millis() as u64);
         let mut next = RunState { failures: 0, escalate: false, ..state };
+        let question = if out.cancelled { None } else { ask::from_text(&out.text) };
+        if let Some(q) = question {
+            meta["tool"] = json!("ask");
+            meta["route"] = json!("user");
+            for (k, v) in q.meta().as_object().into_iter().flatten() {
+                meta[k] = v.clone();
+            }
+            let asked = self.append(run, StepKind::Act, &out.text, Some(&tool_lines(&out)), meta, &next, 0.0).await?;
+            return Ok(Some(Stop::Waiting(ask::status_line(&asked, &name))));
+        }
         if !out.cancelled {
             let skills = self.ws.skills.compose_for("", &crate::skills::Scope::of(&["solo"]))?;
             next.phase = if !verify_commands(cfg, run, &skills).is_empty() {
@@ -154,7 +168,7 @@ impl Inner {
         }
         let text =
             if out.text.is_empty() { format!("({} finished without a message)", name) } else { out.text.clone() };
-        self.append(run, StepKind::Act, &text, Some(&tool_lines(&out)), meta(model, &out), &next, 0.0).await?;
+        self.append(run, StepKind::Act, &text, Some(&tool_lines(&out)), meta, &next, 0.0).await?;
         Ok(out.cancelled.then_some(Stop::Paused(None)))
     }
 

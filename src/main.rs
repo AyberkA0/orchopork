@@ -30,6 +30,14 @@ enum Command {
     Serve {
         #[arg(long, default_value_t = 7878)]
         port: u16,
+        /// Address to listen on. Anything but loopback (e.g. 0.0.0.0) lets
+        /// other machines in, and they need the access token.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: std::net::IpAddr,
+        /// Access token for other machines (default: $ORCHOPORK_TOKEN, else
+        /// one generated once and kept in ~/.orchopork/access-token).
+        #[arg(long)]
+        token: Option<String>,
     },
     /// Set up a workspace without the web wizard.
     Init {
@@ -139,8 +147,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let root = cli.workspace;
-    match cli.command.unwrap_or(Command::Serve { port: 7878 }) {
-        Command::Serve { port } => serve(root, port).await,
+    let default = Command::Serve { port: 7878, host: std::net::Ipv4Addr::LOCALHOST.into(), token: None };
+    match cli.command.unwrap_or(default) {
+        Command::Serve { port, host, token } => serve(root, host, port, token).await,
         Command::Init { git_init, actor, planner, critic, escalation, ollama_url, llamacpp_url, cap } => {
             let ws = Workspace::open(&root).await?;
             if git_init {
@@ -313,12 +322,27 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn serve(root: PathBuf, port: u16) -> anyhow::Result<()> {
+async fn serve(root: PathBuf, host: std::net::IpAddr, port: u16, token: Option<String>) -> anyhow::Result<()> {
+    use server::access::{self, Access};
     let root = orchopork::fsutil::strip_verbatim(std::path::absolute(&root)?);
     let state = server::AppState::new(root).await?;
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    let listener = tokio::net::TcpListener::bind((host, port)).await?;
     println!("orchopork is running at http://localhost:{port}");
-    axum::serve(listener, server::router(state)).with_graceful_shutdown(shutdown_signal()).await?;
+    let access = if host.is_loopback() {
+        Access::local_only()
+    } else {
+        let token = access::load_or_create(token)?;
+        let shown = if host.is_unspecified() { access::lan_ip().unwrap_or(host) } else { host };
+        let shown = if shown.is_ipv6() { format!("[{shown}]") } else { shown.to_string() };
+        println!("From other machines: http://{shown}:{port}/?token={token}");
+        println!("Anyone with this link can run commands on this machine through the agents; keep it private.");
+        if let Some(f) = access::token_file() {
+            println!("(token kept in {}; delete it to issue a new one)", f.display());
+        }
+        Access::with_token(token)
+    };
+    let app = server::router_with(state, access).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
     Ok(())
 }
 

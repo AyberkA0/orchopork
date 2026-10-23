@@ -158,6 +158,14 @@ cd /path/to/your/repo
 /path/to/orchopork                     # opens http://localhost:7878
 ```
 
+orchopork only accepts requests from this machine. To reach it from another device, start it with
+`orchopork serve --host 0.0.0.0` (keep `--port` as you like): it prints a link such as
+`http://192.168.1.10:7878/?token=…`. Opening that link once stores the access token in a cookie; scripts can send it
+as `Authorization: Bearer <token>`. Requests from this machine still need no token. The token is kept in
+`~/.orchopork/access-token` (or pass `--token`, or set `ORCHOPORK_TOKEN`); delete that file to issue a new one.
+Anyone with the link can make the agents run commands on this machine, so share it only with devices you trust,
+and allow the port through your firewall only on private networks.
+
 The interface is a chat box. When you send a message, orchopork asks **"Activate an agent orchestra?"**
 
 - **No, single agent.** Pick a model (local or cloud). One agent with tools works on the request like a classic

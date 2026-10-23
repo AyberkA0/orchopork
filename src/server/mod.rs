@@ -1,8 +1,8 @@
-//! Local HTTP API + embedded dashboard. Binds loopback only, and rejects
-//! requests whose `Host`/`Origin` is not local (DNS-rebinding protection:
-//! this API can run shell commands through the agent, so a web page must
-//! never be able to reach it).
+//! Local HTTP API + embedded dashboard. Local-only by default; see
+//! `access.rs` for who may reach it and how `--host` opens it up behind an
+//! access token.
 
+pub mod access;
 mod setup;
 pub mod wizard;
 
@@ -11,9 +11,9 @@ use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-use axum::extract::{Path as UrlPath, Query, Request, State};
-use axum::http::{Method, StatusCode, header};
-use axum::middleware::{self, Next};
+use axum::extract::{Path as UrlPath, Query, State};
+use axum::http::{StatusCode, header};
+use axum::middleware;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -156,7 +156,13 @@ impl AppState {
     }
 }
 
+/// The router for this machine only.
 pub fn router(state: Shared) -> Router {
+    router_with(state, access::Access::local_only())
+}
+
+/// The router; non-local requests need `access`'s token.
+pub fn router_with(state: Shared, access: access::Access) -> Router {
     Router::new()
         .route("/api/state", get(get_state))
         .route("/api/wizard/initialize", post(wizard_initialize))
@@ -195,33 +201,9 @@ pub fn router(state: Shared) -> Router {
         .route("/api/events", get(events))
         // Client-side-routed SPA: every other GET gets the same shell.
         .fallback(get(spa_index))
-        .layer(middleware::from_fn(local_only))
+        .layer(middleware::from_fn_with_state(access, access::guard))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
-}
-
-fn is_local_host(host: &str) -> bool {
-    let name = if let Some(rest) = host.strip_prefix('[') {
-        rest.split(']').next().unwrap_or("")
-    } else {
-        host.rsplit_once(':').map_or(host, |(h, p)| if p.bytes().all(|b| b.is_ascii_digit()) { h } else { host })
-    };
-    matches!(name.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
-}
-
-async fn local_only(req: Request, next: Next) -> Response {
-    let headers = req.headers();
-    let host_ok = headers.get(header::HOST).and_then(|h| h.to_str().ok()).is_some_and(is_local_host);
-    let origin_ok = match headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) {
-        None => true,
-        Some(o) => o.split_once("://").is_some_and(|(_, rest)| is_local_host(rest.trim_end_matches('/'))),
-    };
-    let state_changing = !matches!(*req.method(), Method::GET | Method::HEAD);
-    if !host_ok || (state_changing && !origin_ok) {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "orchopork only accepts local requests" })))
-            .into_response();
-    }
-    next.run(req).await
 }
 
 struct ApiError(Error);
@@ -1067,8 +1049,10 @@ async fn spa_index() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::access::is_local_host;
     use super::*;
     use axum::body::Body;
+    use axum::extract::{ConnectInfo, Request};
     use tower::ServiceExt;
 
     #[test]
@@ -1164,6 +1148,62 @@ mod tests {
         let (code, _) =
             call(&app, "POST", "/api/wizard/initialize", "127.0.0.1:7878", Some("http://localhost:7878"), json!({}))
                 .await;
+        assert_eq!(code, 200);
+    }
+
+    /// A request from another machine (`peer`), as the real server sees it.
+    async fn remote(app: &Router, method: &str, uri: &str, host: &str, headers: &[(&str, &str)]) -> Response {
+        let mut req = Request::builder().method(method).uri(uri).header("host", host);
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        let mut req = req.header("content-type", "application/json").body(Body::from("{}")).unwrap();
+        let peer: std::net::SocketAddr = "192.168.1.50:51000".parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer));
+        app.clone().oneshot(req).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn other_machines_need_the_access_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path().to_path_buf()).await.unwrap();
+        let h = "192.168.1.10:7878";
+
+        // Local-only server: nobody else, whatever Host they claim.
+        let local = router(state.clone());
+        assert_eq!(remote(&local, "GET", "/api/state", h, &[]).await.status(), 403);
+        assert_eq!(remote(&local, "GET", "/api/state", "localhost:7878", &[]).await.status(), 403);
+
+        let app = router_with(state, access::Access::with_token("s3cret-token"));
+        assert_eq!(remote(&app, "GET", "/api/state", h, &[]).await.status(), 403);
+        assert_eq!(
+            remote(&app, "GET", "/api/state", "localhost:7878", &[]).await.status(),
+            403,
+            "a spoofed Host is no pass"
+        );
+        assert_eq!(remote(&app, "GET", "/api/state", h, &[("authorization", "Bearer wrong")]).await.status(), 403);
+        assert_eq!(
+            remote(&app, "GET", "/api/state", h, &[("authorization", "Bearer s3cret-token")]).await.status(),
+            200
+        );
+
+        // The startup link sets the cookie and drops the token from the URL.
+        let r = remote(&app, "GET", "/?token=s3cret-token", h, &[]).await;
+        assert_eq!(r.status(), 303);
+        assert_eq!(r.headers()["location"], "/");
+        let cookie = r.headers()["set-cookie"].to_str().unwrap();
+        assert!(cookie.starts_with("orchopork_token=s3cret-token;") && cookie.contains("HttpOnly"), "{cookie}");
+        let c = ("cookie", "theme=dark; orchopork_token=s3cret-token");
+        assert_eq!(remote(&app, "GET", "/api/state", h, &[c]).await.status(), 200);
+
+        // Changes must be same-origin.
+        let same = ("origin", "http://192.168.1.10:7878");
+        assert_eq!(remote(&app, "POST", "/api/wizard/initialize", h, &[c, same]).await.status(), 200);
+        let evil = ("origin", "http://evil.example");
+        assert_eq!(remote(&app, "POST", "/api/wizard/initialize", h, &[c, evil]).await.status(), 403);
+
+        // This machine still needs no token.
+        let (code, _) = call(&app, "GET", "/api/state", "127.0.0.1:7878", None, Value::Null).await;
         assert_eq!(code, 200);
     }
 }

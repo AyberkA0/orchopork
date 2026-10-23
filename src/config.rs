@@ -105,7 +105,7 @@ pub struct Limits {
     /// Output cap for every LLM call; also bounds the worst-case cost the
     /// budget guard reserves before a cloud call.
     pub max_output_tokens: u32,
-    /// Wall-clock limit for one external (ACP) agent turn.
+    /// Wall-clock limit for one external agent turn.
     pub external_timeout_secs: u64,
 }
 
@@ -155,8 +155,9 @@ pub struct Config {
     pub remote_auth: RemoteAuth,
     pub routing: Routing,
     pub limits: Limits,
-    /// Agents driven over ACP (see `acp.rs`), usable anywhere a model is.
-    pub external_agents: Vec<crate::acp::ExternalAgent>,
+    /// External agents, over ACP or as headless CLIs (see `agents/`),
+    /// usable anywhere a model is.
+    pub external_agents: Vec<crate::agents::ExternalAgent>,
     /// OpenAI-compatible endpoints you added (keys live in secrets as
     /// `endpoint:<id>`).
     pub endpoints: Vec<Endpoint>,
@@ -192,7 +193,7 @@ impl Default for Config {
             remote_auth: RemoteAuth::None,
             routing: Routing::default(),
             limits: Limits::default(),
-            external_agents: crate::acp::default_agents(),
+            external_agents: crate::agents::default_agents(),
             endpoints: Vec::new(),
         }
     }

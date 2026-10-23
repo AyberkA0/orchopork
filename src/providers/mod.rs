@@ -68,7 +68,9 @@ impl ProviderId {
     }
 
     pub fn parse(s: &str) -> Result<Self> {
-        if s.trim() == "acp" {
+        // `agent:` reads better for headless CLI agents; both name the
+        // same external-agent provider.
+        if matches!(s.trim(), "acp" | "agent") {
             return Ok(ProviderId::Acp);
         }
         Self::ALL.into_iter().find(|p| p.as_str() == s.trim()).ok_or_else(|| {

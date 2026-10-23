@@ -171,6 +171,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/setup/detect", get(setup::detect))
         .route("/api/setup/import-key", post(setup::import_env_key))
         .route("/api/agents/install", post(setup::install_agent))
+        .route("/api/agents/add-preset", post(setup::add_preset))
         .route("/api/models", get(available_models))
         .route("/api/agents/probe", post(probe_agent))
         .route("/api/agents/options", post(agent_options))
@@ -593,8 +594,9 @@ async fn available_models(State(s): State<Shared>) -> ApiResult {
     // External agents: offered when their launcher is on PATH.
     let mut agents = Vec::new();
     for a in &cfg.external_agents {
-        let available = crate::acp::resolve_command(&a.command).is_some();
-        agents.push(json!({ "provider": "acp", "model": a.id, "name": a.name, "available": available,
+        let available = crate::agents::resolve_command(&a.command).is_some();
+        agents
+            .push(json!({ "provider": "acp", "model": a.id, "name": a.name, "available": available, "kind": a.kind(),
             "command": format!("{} {}", a.command, a.args.join(" ")) }));
     }
     let body = json!({ "models": out, "agents": agents, "notes": notes, "default": cfg.routing.actor });
@@ -654,10 +656,15 @@ enum AddModelReq {
     Llamacpp {
         url: String,
     },
-    /// An ACP agent started by `command` (a full command line).
+    /// An external agent started by `command` (a full command line):
+    /// over ACP, or as a headless CLI of the given dialect.
     Acp {
         name: String,
         command: String,
+        #[serde(default)]
+        protocol: crate::agents::Protocol,
+        #[serde(default)]
+        dialect: crate::agents::Dialect,
     },
 }
 
@@ -732,18 +739,17 @@ async fn add_model(State(s): State<Shared>, Json(req): Json<AddModelReq>) -> Api
             ws.update_config(|c| c.llamacpp_url = Some(url))?;
             ("llamacpp".into(), found)
         }
-        AddModelReq::Acp { name, command } => {
-            let mut parts = command.split_whitespace().map(String::from);
+        AddModelReq::Acp { name, command, protocol, dialect } => {
+            let mut parts = command.split_whitespace();
             let program =
                 parts.next().ok_or_else(|| Error::InvalidRequest("enter the command that starts the agent".into()))?;
             let taken: Vec<String> = ws.config().external_agents.iter().map(|a| a.id.clone()).collect();
-            let agent = crate::acp::ExternalAgent {
-                id: slug(&name, &taken),
-                name: name.trim().to_string(),
-                command: program,
-                args: parts.collect(),
-            };
-            crate::acp::probe(&agent, &ws.root).await?;
+            let args: Vec<&str> = parts.collect();
+            let mut agent = crate::agents::ExternalAgent::new(&slug(&name, &taken), name.trim(), program, &args);
+            if protocol == crate::agents::Protocol::Cli {
+                agent = agent.cli(dialect);
+            }
+            crate::agents::probe(&agent, &ws.root).await?;
             let id = agent.id.clone();
             ws.update_config(|c| c.external_agents.push(agent))?;
             (id.clone(), vec![id])
@@ -840,7 +846,7 @@ async fn agent_options(State(s): State<Shared>, Json(req): Json<ProbeReq>) -> Ap
         .ok_or_else(|| Error::NotFound(format!("external agent {}", req.id)))?;
     // Discovery starts the agent: no lock is held meanwhile, so asking
     // two different agents at once does not queue one behind the other.
-    let options = crate::acp::discover(&agent, &ws.root).await?;
+    let options = crate::agents::discover(&agent, &ws.root).await?;
     let v = json!({ "options": options });
     s.agent_options.lock().await.insert(req.id, v.clone());
     Ok(Json(v))
@@ -856,7 +862,7 @@ async fn probe_agent(State(s): State<Shared>, Json(req): Json<ProbeReq>) -> ApiR
         .into_iter()
         .find(|a| a.id == req.id)
         .ok_or_else(|| Error::NotFound(format!("external agent {}", req.id)))?;
-    let info = crate::acp::probe(&agent, &ws.root).await?;
+    let info = crate::agents::probe(&agent, &ws.root).await?;
     Ok(Json(json!({ "ok": true, "info": info })))
 }
 

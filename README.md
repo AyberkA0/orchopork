@@ -138,7 +138,8 @@ Roadmap, roughly in order:
 
 - [x] Single agent and hierarchical orchestra with a visual team editor
 - [x] Hybrid local/cloud routing, escalation and a hard monthly budget
-- [x] External agents over ACP (Claude Code, Gemini CLI, Codex)
+- [x] External agents over ACP (Claude Code, Gemini CLI, Codex, Qwen Code, Cursor, Copilot, OpenCode, Goose)
+- [x] Headless CLI agents that run with your installed setup (`claude -p`, `codex exec`, `gemini`, `cursor-agent`, `copilot`, `aider`)
 - [x] Prompt caching and per-agent token/cost metrics
 - [x] Agent contracts (owned files, acceptance criteria, verify commands) and team templates
 - [x] Fan-out / fan-in and blackboard-style shared state, through the orchestra tree
@@ -249,7 +250,7 @@ before it is saved.
 | LM Studio, vLLM, llama.cpp               | local | Local OpenAI-compatible servers; free and never budget-limited.         |
 | Claude, Gemini, DeepSeek                 | cloud | API key; the model list is fetched live from the provider.              |
 | OpenAI, Mistral, OpenRouter, Groq, xAI, Together, ... | cloud | Any OpenAI-compatible endpoint: base URL + key, optional price per 1M tokens. Models appear as `compat:<endpoint>/<model>`. |
-| Claude Code, Gemini CLI, Codex           | agent | Any [Agent Client Protocol](https://agentclientprotocol.com) agent, detected automatically. |
+| Claude Code, Codex, Gemini CLI, Qwen Code, Cursor, Copilot, OpenCode, Goose, Aider | agent | Your installed CLI, run headless, or any [Agent Client Protocol](https://agentclientprotocol.com) agent. Detected automatically; one click to add. |
 
 Models are written `provider:model`, e.g. `ollama:qwen2.5-coder:14b`. Prices live in `src/providers/pricing.rs` and
 match model ids by longest prefix. Unknown models are priced high, so the budget guard over-estimates rather than
@@ -258,23 +259,62 @@ under-estimates.
 Ollama's default context window is small and it silently truncates longer prompts, which breaks agent turns.
 orchopork sets `num_ctx` on every request (default 16384); raise it if your hardware allows.
 
-### External agents (ACP)
+### External agents
 
-Claude Code, Gemini CLI, Codex and any other ACP agent can be used anywhere a model can: as a single agent, as the
-lead of an orchestra, or as any member of one. orchopork starts the agent in the run's worktree, sends it the task
-with the same context an internal agent would get, streams its actions to the UI, answers its permission requests
-(shell commands only if `allow_commands` is on) and file requests (only inside the worktree), then checkpoints the
-result. Each agent uses your own login for that tool, and its cost is not counted against the budget.
+Coding agents can be used anywhere a model can: as a single agent, as the lead of an orchestra, or as any member of
+one. orchopork starts the agent in the run's worktree, sends it the task with the same context an internal agent
+would get, streams its actions to the UI, then checkpoints the result. Each agent uses your own login for that
+tool, and its cost is not counted against the budget; the tokens (and, for Claude Code, the cost) it reports are
+recorded in the per-agent metrics.
 
-| Agent       | Command                                        |
-|-------------|------------------------------------------------|
-| Claude Code | `npx -y @agentclientprotocol/claude-agent-acp` |
-| Gemini CLI  | `gemini --acp`                                 |
-| Codex       | `npx -y @agentclientprotocol/codex-acp`        |
+There are two ways to connect one, and several tools offer both:
 
-When you pick an agent, orchopork asks it what it offers over ACP (model family, version, effort) and shows those
-choices. API models get the same treatment: Claude takes an effort level, Gemini takes low/medium/high. From the CLI
-or config, use a query suffix: `acp:claude-code?model=opus&effort=high`, `claude:claude-opus-5-5?effort=xhigh`.
+- **Headless CLI.** orchopork runs the CLI you already use in its own non-interactive mode. Nothing else to install,
+  and the tool behaves as it does in your terminal: your login, settings, MCP servers, plugins and memory files
+  (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`). Its own permission system applies; orchopork maps `allow_commands` onto it.
+  Untick **my config** on the agent to make Claude Code ignore your user settings and MCP servers for that agent.
+- **ACP.** The [Agent Client Protocol](https://agentclientprotocol.com): orchopork answers the agent's permission
+  requests (shell commands only if `allow_commands` is on) and file requests (only inside the worktree) itself.
+
+| Agent         | Headless CLI (what orchopork runs)                          | ACP                                            |
+|---------------|-------------------------------------------------------------|------------------------------------------------|
+| Claude Code   | `claude -p --output-format stream-json --verbose`           | `npx -y @agentclientprotocol/claude-agent-acp` |
+| Codex         | `codex exec --json --sandbox workspace-write -`             | `npx -y @agentclientprotocol/codex-acp`        |
+| Gemini CLI    | `gemini --output-format stream-json --approval-mode …`      | `gemini --acp`                                 |
+| Qwen Code     | `qwen --output-format stream-json --approval-mode …`        | `qwen --acp`                                   |
+| Cursor        | `cursor-agent -p --output-format stream-json "<task>"`      | `cursor-agent acp`                             |
+| Copilot       | `copilot -p "<task>"`                                       | `copilot --acp --stdio`                        |
+| Aider         | `aider --message-file <task file> --yes-always --no-auto-commits` | —                                        |
+| OpenCode      | —                                                           | `opencode acp`                                 |
+| Goose         | —                                                           | `goose acp`                                    |
+
+**Add a model** lists every agent it finds on this machine (on PATH, and in the usual install folders such as
+`~/.local/bin` or npm's global folder, which a GUI-started process often does not have on PATH), with a guided
+install and sign-in for the rest. Any other agent works too: pick **Other agent**, choose ACP or a CLI dialect,
+and give the command. For a CLI, the task goes to stdin, or put `{prompt}` (the task as one argument) or
+`{prompt_file}` (a temporary file outside the worktree) in the arguments. With the `generic` dialect, stdout is
+the report.
+
+In `.orchopork/config.yaml` an agent looks like this:
+
+```yaml
+external_agents:
+  - id: claude-code-cli
+    name: Claude Code (CLI)
+    command: claude
+    args: [--add-dir, ../shared]   # your own flags; orchopork adds -p, the output format and permissions
+    protocol: cli                  # or acp (the default)
+    dialect: claude                # claude | codex | gemini | qwen | cursor | copilot | aider | generic
+    inherit_config: true           # false: --setting-sources project,local --strict-mcp-config
+    env: {CLAUDE_CODE_MAX_OUTPUT_TOKENS: "32000"}
+```
+
+When you pick an agent, orchopork shows what it can be tuned with: over ACP it asks the agent (model family,
+version, effort); for CLIs it offers the known choices (Claude Code's `opus`/`sonnet`/`haiku` and effort, Codex's
+reasoning effort). API models get the same treatment: Claude takes an effort level, Gemini takes low/medium/high.
+From the CLI or config, use a query suffix: `acp:claude-code-cli?model=opus&effort=high`,
+`claude:claude-opus-5-5?effort=xhigh`. For a CLI agent, any other option is passed on as `--key value`
+(`agent:` works as a synonym of `acp:`).
 
 ## The classic pipeline (CLI)
 

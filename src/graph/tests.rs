@@ -1317,15 +1317,10 @@ while True:
 "#;
 
 #[cfg(unix)]
-fn fake_acp(dir: &Path, id: &str) -> crate::acp::ExternalAgent {
+fn fake_acp(dir: &Path, id: &str) -> crate::agents::ExternalAgent {
     let script = dir.join("fake_acp.py");
     std::fs::write(&script, FAKE_ACP).unwrap();
-    crate::acp::ExternalAgent {
-        id: id.into(),
-        name: format!("Fake {id}"),
-        command: "python3".into(),
-        args: vec![script.to_string_lossy().into(), id.into()],
-    }
+    crate::agents::ExternalAgent::new(id, &format!("Fake {id}"), "python3", &[&script.to_string_lossy(), id])
 }
 
 #[cfg(unix)]

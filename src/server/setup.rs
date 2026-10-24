@@ -153,27 +153,45 @@ pub(super) async fn detect(State(s): State<Shared>) -> ApiResult {
     });
     let servers: Vec<Value> = futures_join(probes).await.into_iter().flatten().collect();
 
-    let node = crate::acp::resolve_command("npx").is_some();
+    let node = crate::agents::resolve_command("npx").is_some();
     let agents: Vec<Value> = cfg
         .external_agents
         .iter()
         .map(|a| {
-            let setup = crate::acp::setup_for(&a.id);
-            let launcher = crate::acp::resolve_command(&a.command).is_some();
-            let cli = setup.as_ref().map(|s| crate::acp::resolve_command(s.cli).is_some());
+            let setup = crate::agents::setup_for(a);
+            let launcher = crate::agents::resolve_command(&a.command).is_some();
+            let cli = setup.as_ref().map(|s| crate::agents::resolve_command(s.cli).is_some());
             // npx-launched adapters also need the tool itself for its login.
             let ready = launcher && cli.unwrap_or(true);
             json!({
                 "id": a.id,
                 "name": a.name,
+                "kind": a.kind(),
                 "ready": ready,
                 "launcher": launcher,
                 "cli_installed": cli,
                 "node": node,
-                "install": setup.as_ref().map(|s| s.install.join(" ")),
+                "install": setup.as_ref().map(|s| s.install.join(" ")).filter(|i| !i.is_empty()),
                 "login": setup.as_ref().map(|s| s.login),
-                "key_env_set": setup.as_ref().is_some_and(|s| std::env::var_os(s.key_env).is_some()),
+                "key_env_set": setup.as_ref().is_some_and(|s| !s.key_env.is_empty() && std::env::var_os(s.key_env).is_some()),
             })
+        })
+        .collect();
+
+    // Known agents not configured yet: `found` when the tool is installed,
+    // so it can be added with one click.
+    let presets: Vec<Value> = crate::agents::catalog()
+        .into_iter()
+        .filter(|p| !cfg.external_agents.iter().any(|a| a.id == p.agent.id))
+        .map(|p| {
+            let found = crate::agents::resolve_command(p.setup.cli).is_some()
+                && crate::agents::resolve_command(&p.agent.command).is_some();
+            let install = p.setup.install.join(" ");
+            json!({ "id": p.agent.id, "name": p.agent.name, "kind": p.agent.kind(), "blurb": p.blurb, "found": found,
+                    "cli": p.setup.cli, "cli_installed": crate::agents::resolve_command(p.setup.cli).is_some(),
+                    "launcher": crate::agents::resolve_command(&p.agent.command).is_some(), "node": node,
+                    "install": Some(install).filter(|i| !i.is_empty()), "login": p.setup.login,
+                    "key_env_set": !p.setup.key_env.is_empty() && std::env::var_os(p.setup.key_env).is_some() })
         })
         .collect();
 
@@ -182,6 +200,7 @@ pub(super) async fn detect(State(s): State<Shared>) -> ApiResult {
         "ollama": { "url": cfg.ollama_url, "running": ollama.is_some(), "models": ollama.unwrap_or_default() },
         "servers": servers,
         "agents": agents,
+        "presets": presets,
         "node": node,
     })))
 }
@@ -217,9 +236,27 @@ pub(super) struct InstallReq {
     id: String,
 }
 
+/// Adds a known agent from the catalog, after checking that it starts.
+pub(super) async fn add_preset(State(s): State<Shared>, Json(req): Json<InstallReq>) -> ApiResult {
+    let engine = s.engine()?;
+    let ws = engine.workspace();
+    let preset = crate::agents::catalog()
+        .into_iter()
+        .find(|p| p.agent.id == req.id)
+        .ok_or_else(|| Error::NotFound(format!("agent preset {}", req.id)))?;
+    if ws.config().external_agents.iter().any(|a| a.id == preset.agent.id) {
+        return Ok(Json(json!({ "added": preset.agent.id, "models": [preset.agent.id] })));
+    }
+    let info = crate::agents::probe(&preset.agent, &ws.root).await?;
+    let id = preset.agent.id.clone();
+    ws.update_config(|c| c.external_agents.push(preset.agent))?;
+    s.models_changed();
+    Ok(Json(json!({ "added": id, "models": [id], "info": info })))
+}
+
 /// Installs a preset agent's CLI with its fixed npm command.
 pub(super) async fn install_agent(State(s): State<Shared>, Json(req): Json<InstallReq>) -> ApiResult {
-    let log = crate::acp::install(&req.id).await?;
+    let log = crate::agents::install(&req.id).await?;
     s.models_changed(); // the agent's launcher is on PATH now
     let tail: Vec<&str> = log.lines().rev().take(6).collect();
     Ok(Json(json!({ "ok": true, "log": tail.into_iter().rev().collect::<Vec<_>>().join("\n") })))

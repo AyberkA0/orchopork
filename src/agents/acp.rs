@@ -2,7 +2,8 @@
 //!
 //! ACP lets an editor drive a coding agent that runs as a subprocess,
 //! speaking newline-delimited JSON-RPC 2.0 over stdio. Claude Code (through
-//! Zed's adapter), Gemini CLI and Codex (through an adapter) all speak it,
+//! an adapter), Gemini CLI, Qwen Code, Cursor, Copilot, OpenCode, Goose and
+//! Codex (through an adapter) all speak it,
 //! so one client turns every installed agent into an orchestra member.
 //! Each agent keeps its own login/subscription; nothing is impersonated.
 //!
@@ -14,198 +15,17 @@
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 
+use super::{ExternalAgent, Outcome, Policy, ToolCall, Update, kill_tree, spawn, stderr_tail};
 use crate::error::{Error, Result};
 
 const PROTOCOL_VERSION: u64 = 1;
-
-/// An agent launchable over ACP. `id` is what a `ModelRef` names
-/// (`acp:claude-code`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ExternalAgent {
-    pub id: String,
-    pub name: String,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-}
-
-/// Presets for the agents people usually have installed. Each uses the
-/// user's existing login of that tool; edit command/args in settings if an
-/// adapter is installed differently.
-pub fn default_agents() -> Vec<ExternalAgent> {
-    let a = |id: &str, name: &str, command: &str, args: &[&str]| ExternalAgent {
-        id: id.into(),
-        name: name.into(),
-        command: command.into(),
-        args: args.iter().map(|s| s.to_string()).collect(),
-    };
-    vec![
-        a("claude-code", "Claude Code", "npx", &["-y", "@agentclientprotocol/claude-agent-acp"]),
-        a("gemini-cli", "Gemini CLI", "gemini", &["--acp"]),
-        a("codex", "Codex", "npx", &["-y", "@agentclientprotocol/codex-acp"]),
-    ]
-}
-
-/// How to get a preset agent working: the CLI it wraps, the fixed
-/// command that installs it, and how to sign in once.
-pub struct Setup {
-    pub cli: &'static str,
-    pub install: &'static [&'static str],
-    pub login: &'static str,
-    /// Env var that works instead of an interactive login.
-    pub key_env: &'static str,
-}
-
-pub fn setup_for(id: &str) -> Option<Setup> {
-    Some(match id {
-        "claude-code" => Setup {
-            cli: "claude",
-            install: &["npm", "install", "-g", "@anthropic-ai/claude-code"],
-            login: "claude",
-            key_env: "ANTHROPIC_API_KEY",
-        },
-        "gemini-cli" => Setup {
-            cli: "gemini",
-            install: &["npm", "install", "-g", "@google/gemini-cli"],
-            login: "gemini",
-            key_env: "GEMINI_API_KEY",
-        },
-        "codex" => Setup {
-            cli: "codex",
-            install: &["npm", "install", "-g", "@openai/codex"],
-            login: "codex login",
-            key_env: "OPENAI_API_KEY",
-        },
-        _ => return None,
-    })
-}
-
-/// Runs a preset's fixed install command (never user-supplied text).
-pub async fn install(id: &str) -> Result<String> {
-    let setup = setup_for(id).ok_or_else(|| Error::InvalidRequest(format!("no installer for {id}")))?;
-    let agent = ExternalAgent {
-        id: id.into(),
-        name: id.into(),
-        command: setup.install[0].into(),
-        args: setup.install[1..].iter().map(|s| s.to_string()).collect(),
-    };
-    let child = spawn(&agent, &std::env::temp_dir())
-        .map_err(|_| Error::Provider("npm was not found: install Node.js from nodejs.org first".into()))?;
-    let out = tokio::time::timeout(Duration::from_secs(600), child.wait_with_output())
-        .await
-        .map_err(|_| Error::Provider("install took longer than 10 minutes".into()))??;
-    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    if !out.status.success() {
-        let tail: String =
-            text.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
-        return Err(Error::Provider(format!("install failed:\n{tail}")));
-    }
-    Ok(text)
-}
-
-/// Asks the user about one ACP tool call: (kind, title, toolCall) → allowed.
-pub type Approver =
-    std::sync::Arc<dyn Fn(String, String, Value) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
-
-/// What the agent may do without asking a human.
-#[derive(Clone, Default)]
-pub struct Policy {
-    /// Allow tool calls of kind `execute` (shell commands).
-    pub allow_execute: bool,
-    /// Kinds of tool calls refused outright (`edit`, `delete`, `move`,
-    /// `fetch`, ...), whatever the approvals say: an agent's role or
-    /// internet level takes them away. Only calls the agent asks
-    /// permission for, and file writes it sends us, can be refused; the
-    /// task prompt says the rest.
-    pub deny: Vec<String>,
-    /// Consulted for calls the policy allows (autonomy / approvals).
-    pub approve: Option<Approver>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolCall {
-    pub id: String,
-    pub title: String,
-    pub kind: String,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Outcome {
-    /// The agent's final message text.
-    pub text: String,
-    pub stop_reason: String,
-    pub tool_calls: Vec<ToolCall>,
-    pub cancelled: bool,
-    /// Options applied to the session, by display name
-    /// (e.g. "Model" → "Opus 5.5", "Effort" → "High").
-    pub settings: BTreeMap<String, String>,
-}
-
-/// Human-readable progress, streamed to the UI while a turn runs.
-pub enum Update<'a> {
-    Tool(&'a ToolCall),
-    Plan(String),
-    Thinking,
-    Text,
-}
-
-/// Looks `command` up on PATH (with PATHEXT on Windows).
-pub fn resolve_command(command: &str) -> Option<PathBuf> {
-    let p = Path::new(command);
-    if p.components().count() > 1 {
-        return p.is_file().then(|| p.to_path_buf());
-    }
-    let exts: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
-            .split(';')
-            .map(|e| e.to_ascii_lowercase())
-            .chain(std::iter::once(String::new()))
-            .collect()
-    } else {
-        vec![String::new()]
-    };
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .find_map(|dir| exts.iter().map(|e| dir.join(format!("{command}{e}"))).find(|c| c.is_file()))
-}
-
-fn spawn(agent: &ExternalAgent, cwd: &Path) -> Result<Child> {
-    let exe = resolve_command(&agent.command)
-        .ok_or_else(|| Error::Provider(format!("{}: `{}` was not found on PATH", agent.name, agent.command)))?;
-    let is_script = exe
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
-    // Windows cannot exec .cmd/.bat shims (npx, npm-installed CLIs) directly.
-    let mut cmd = if is_script {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(&exe);
-        c
-    } else {
-        Command::new(&exe)
-    };
-    cmd.args(&agent.args)
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    // Its own process group, so the agent and whatever it started can be
-    // stopped together (see `Conn::shutdown`).
-    #[cfg(unix)]
-    cmd.process_group(0);
-    cmd.spawn().map_err(|e| Error::Provider(format!("{}: failed to start: {e}", agent.name)))
-}
 
 struct Conn<'a> {
     agent: &'a ExternalAgent,
@@ -234,25 +54,14 @@ impl<'a> Conn<'a> {
     /// is not enough: on Windows it is `cmd /C npx …`, and the node process
     /// actually running the agent would be left behind.
     fn shutdown(&mut self) {
-        if let Ok(None) = self.child.try_wait() {
-            crate::graph::tools::processes::kill_tree(self.child.id());
-            let _ = self.child.start_kill();
-        }
+        kill_tree(&mut self.child);
     }
 
     fn open(agent: &'a ExternalAgent, cwd: &Path, policy: Policy) -> Result<Self> {
-        let mut child = spawn(agent, cwd)?;
+        let mut child = spawn(agent, cwd, &agent.args, false)?;
         let stdin = child.stdin.take().expect("piped");
         let stdout = child.stdout.take().expect("piped");
-        let mut err = child.stderr.take().expect("piped");
-        // Keep the tail of stderr for error messages (login prompts etc.).
-        let stderr = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let _ = err.read_to_end(&mut buf).await;
-            let s = String::from_utf8_lossy(&buf).into_owned();
-            let n = s.chars().count();
-            s.chars().skip(n.saturating_sub(1500)).collect()
-        });
+        let stderr = stderr_tail(&mut child);
         Ok(Self {
             agent,
             child,
@@ -401,7 +210,8 @@ impl<'a> Conn<'a> {
     /// Picks an allow option unless policy forbids this kind of call.
     async fn permission(&self, p: &Value) -> Value {
         let kind = p["toolCall"]["kind"].as_str().unwrap_or("other");
-        let mut allowed = (kind != "execute" || self.policy.allow_execute) && !self.policy.deny.iter().any(|d| d == kind);
+        let mut allowed =
+            (kind != "execute" || self.policy.allow_execute) && !self.policy.deny.iter().any(|d| d == kind);
         if allowed && let Some(approve) = &self.policy.approve {
             let title = p["toolCall"]["title"].as_str().unwrap_or("tool call").to_string();
             allowed = approve(kind.to_string(), title, p["toolCall"].clone()).await;
@@ -595,6 +405,7 @@ pub async fn run(
         stop_reason,
         tool_calls: std::mem::take(&mut c.tools),
         settings,
+        usage: Default::default(),
     })
 }
 
@@ -670,12 +481,8 @@ while True:
     async fn drives_a_fake_agent_through_a_full_turn() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("fake.py"), FAKE).unwrap();
-        let agent = ExternalAgent {
-            id: "fake".into(),
-            name: "Fake".into(),
-            command: "python3".into(),
-            args: vec![d.path().join("fake.py").to_string_lossy().into()],
-        };
+        let script = d.path().join("fake.py").to_string_lossy().into_owned();
+        let agent = ExternalAgent::new("fake", "Fake", "python3", &[&script]);
         let never = AtomicBool::new(false);
         let mut seen = Vec::new();
         let opts: BTreeMap<String, String> =
@@ -712,20 +519,23 @@ while True:
         let ids: Vec<&str> = found.iter().filter_map(|o| o["id"].as_str()).collect();
         assert_eq!(ids, ["model", "effort"], "permission modes are not offered");
         let bad: BTreeMap<String, String> = [("model".to_string(), "gpt".to_string())].into();
-        let err =
-            run(&agent, d.path(), "hi", &bad, Policy { allow_execute: false, ..Default::default() }, Duration::from_secs(20), &never, |_| {})
-                .await;
+        let err = run(
+            &agent,
+            d.path(),
+            "hi",
+            &bad,
+            Policy { allow_execute: false, ..Default::default() },
+            Duration::from_secs(20),
+            &never,
+            |_| {},
+        )
+        .await;
         assert!(err.unwrap_err().to_string().contains("not offered"));
     }
 
     #[tokio::test]
     async fn missing_binaries_are_reported_clearly() {
-        let agent = ExternalAgent {
-            id: "x".into(),
-            name: "X".into(),
-            command: "definitely-not-installed-xyz".into(),
-            args: vec![],
-        };
+        let agent = ExternalAgent::new("x", "X", "definitely-not-installed-xyz", &[]);
         let never = AtomicBool::new(false);
         let err = run(
             &agent,

@@ -250,7 +250,7 @@ pub struct Config {
     pub routing: Routing,
     pub limits: Limits,
     /// Agents driven over ACP (see `acp.rs`), usable anywhere a model is.
-    pub external_agents: Vec<crate::acp::ExternalAgent>,
+    pub external_agents: Vec<crate::agents::ExternalAgent>,
     /// OpenAI-compatible endpoints you added (keys live in secrets as
     /// `endpoint:<id>`).
     pub endpoints: Vec<Endpoint>,
@@ -286,7 +286,7 @@ impl Default for Config {
             remote_auth: RemoteAuth::None,
             routing: Routing::default(),
             limits: Limits::default(),
-            external_agents: crate::acp::default_agents(),
+            external_agents: crate::agents::default_agents(),
             endpoints: Vec::new(),
         }
     }

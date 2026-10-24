@@ -1,4 +1,5 @@
-//! Turns executed by external ACP agents (Claude Code, Gemini CLI, Codex…).
+//! Turns executed by external agents (Claude Code, Gemini CLI, Codex…),
+//! over ACP or as headless CLIs.
 //!
 //! An external agent owns a whole task per turn: it edits the worktree with
 //! its own tools and ends with a report. orchopork gives it the same
@@ -14,7 +15,7 @@ use serde_json::json;
 
 use super::approvals::{self, Decision};
 use super::{Inner, Stop, prompts, verify_commands};
-use crate::acp::{self, Outcome, Policy, Update};
+use crate::agents::{self, Outcome, Policy, Update};
 use crate::config::{Config, ModelRef};
 use crate::error::{Error, Result};
 use crate::fsutil::clip;
@@ -54,10 +55,19 @@ pub fn tool_lines(out: &Outcome) -> String {
         .join("\n")
 }
 
+/// Step metadata. Reported tokens use the same keys as internal calls so
+/// per-agent metrics include external agents; a reported cost is kept
+/// apart, since it is never charged to the budget.
 pub fn meta(model: &ModelRef, out: &Outcome) -> serde_json::Value {
+    let u = &out.usage;
     json!({
         "model": model.to_string(),
-        "external": { "stop_reason": out.stop_reason, "tool_calls": out.tool_calls, "settings": out.settings },
+        "external": { "stop_reason": out.stop_reason, "tool_calls": out.tool_calls, "settings": out.settings,
+                      "reported_cost_usd": u.reported_cost_usd },
+        "prompt_tokens": u.prompt_tokens,
+        "completion_tokens": u.completion_tokens,
+        "cache_read_tokens": u.cache_read_tokens,
+        "cache_write_tokens": u.cache_write_tokens,
         "ok": !out.cancelled,
         "tool": if out.cancelled { "external" } else { "finish" },
     })
@@ -92,7 +102,7 @@ impl Inner {
         let flag =
             self.active.lock().unwrap().get(&run.id).cloned().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         self.log(&run.id, format!("{who}: starting {}", agent.name));
-        let approve: acp::Approver = {
+        let approve: agents::Approver = {
             let (approvals, ws, rid, flag, who) =
                 (self.approvals.clone(), self.ws.clone(), run.id.clone(), flag.clone(), who.to_string());
             Arc::new(move |kind: String, title: String, call: serde_json::Value| {
@@ -112,7 +122,7 @@ impl Inner {
         };
         let mut last = Instant::now() - Duration::from_secs(5);
         let run_id = run.id.clone();
-        acp::run(
+        agents::run(
             &agent,
             Path::new(&run.worktree),
             &prompt,
@@ -124,6 +134,7 @@ impl Inner {
                 let msg = match u {
                     Update::Tool(t) => Some(format!("{who} · {}", t.title)),
                     Update::Plan(p) => Some(format!("{who} plans: {}", clip(&p, 160))),
+                    Update::Note(n) => Some(format!("{who}: {n}")),
                     Update::Thinking | Update::Text if last.elapsed() > Duration::from_secs(3) => Some(format!(
                         "{who} is {}…",
                         if matches!(u, Update::Thinking) { "thinking" } else { "writing" }

@@ -248,6 +248,15 @@ impl GitRepo {
         let _ = self.run(&args).await;
     }
 
+    /// Untracked, not ignored files (an agent's work before its checkpoint),
+    /// without dependencies and screenshots.
+    pub async fn untracked(&self) -> Result<Vec<String>> {
+        let mut args = vec!["ls-files", "--others", "--exclude-standard", "--", "."];
+        args.extend(DEPENDENCY_DIRS.iter().map(|(pathspec, _)| *pathspec));
+        let out = self.run(&args).await?;
+        Ok(out.lines().map(str::to_string).collect())
+    }
+
     /// Lines added and removed per file in the working tree against `base`
     /// (`None` for binary files).
     pub async fn numstat(&self, base: &str) -> Result<std::collections::BTreeMap<String, (Option<u64>, Option<u64>)>> {

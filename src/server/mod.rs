@@ -3,6 +3,7 @@
 //! this API can run shell commands through the agent, so a web page must
 //! never be able to reach it).
 
+mod outputs;
 mod setup;
 pub mod tokens;
 pub mod wizard;
@@ -222,6 +223,11 @@ pub fn router(state: Shared) -> Router {
         .route("/api/runs/{id}/inject", post(inject_run))
         .route("/api/runs/{id}/rewind", post(rewind_run))
         .route("/api/runs/{id}/diff", get(diff_run))
+        .route("/api/runs/{id}/files", get(outputs::files))
+        .route("/api/runs/{id}/file", get(outputs::file))
+        .route("/api/runs/{id}/raw/{*path}", get(outputs::raw))
+        .route("/api/runs/{id}/metrics", get(outputs::metrics))
+        .route("/api/metrics", get(outputs::compare))
         .route("/api/runs/{id}/push", post(push_run))
         .route("/api/runs/{id}/merge", post(merge_run))
         .route("/api/runs/{id}/approval", post(decide_approval))

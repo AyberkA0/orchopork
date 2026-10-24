@@ -583,6 +583,62 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .nbcard textarea { font-size: 13px; }
 .nbnotes { max-height: 320px; overflow-y: auto; margin-top: 4px; }
 
+/* ---------- questions, outputs, measurements ---------- */
+.pill.waiting { color: var(--accent-fg); border-color: var(--accent-line); background: var(--accent-soft); }
+.approval.qcard { border-color: var(--accent-line); background: var(--accent-soft); }
+.qcard .qt { white-space: pre-wrap; font-size: 14px; }
+.qcard .qopts { display: flex; flex-wrap: wrap; gap: 6px; }
+.qcard .qopts button { border-radius: 999px; }
+.qcard textarea { flex: 1 1 240px; min-width: 0; resize: none; }
+.msg-ai.qask { border-left: 2px solid var(--accent); }
+.hstats { display: inline-flex; align-items: center; gap: 5px; }
+.outputs { margin: 12px auto; width: min(var(--col), calc(100% - 32px)); padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); display: grid; gap: 10px; min-width: 0; }
+.outputs .row { gap: 6px; }
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.thumb { position: relative; padding: 0; height: 96px; overflow: hidden; border-radius: var(--r); background: var(--bg); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb iframe { width: 400%; height: 400%; border: 0; transform: scale(.25); transform-origin: 0 0; pointer-events: none; background: #fff; }
+.thumb .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 6px; font-size: 11px; text-align: left; background: color-mix(in srgb, var(--bg) 80%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fchip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; font-size: 12px; border-radius: 999px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal.xwide { width: min(1180px, calc(100vw - 32px)); }
+.fviewer { display: grid; gap: 10px; min-width: 0; }
+.fgrid { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 10px; height: min(70vh, 720px); min-height: 0; }
+.flist { overflow: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); }
+.fit { display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer; font-size: 13px; min-width: 0; }
+.fit:hover, .fit.on { background: var(--accent-soft); }
+.fit .fnm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fic { display: inline-flex; color: var(--muted); } .fic.added { color: var(--ok); } .fic.deleted { color: var(--bad); }
+.fright { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; min-width: 0; min-height: 0; }
+.fbar { gap: 6px; min-width: 0; }
+.fpane { overflow: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); min-height: 0; }
+.fframe { width: 100%; height: 100%; border: 0; background: #fff; }
+.fimg { display: grid; place-items: center; min-height: 100%; padding: 12px; } .fimg img { max-width: 100%; max-height: 66vh; }
+.fempty { padding: 16px; color: var(--muted); }
+.ftext { padding: 8px 0; }
+.fcode { margin: 0; padding: 0 12px; font: 12px/1.5 var(--mono); white-space: pre; tab-size: 4; }
+.fcode.wrap { white-space: pre-wrap; }
+.fcode .ln { display: inline-block; width: 38px; color: var(--faint); user-select: none; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 3px 10px; } .seg button.on { background: var(--accent-soft); color: var(--accent-fg); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.tile { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); min-width: 0; }
+.tile .tl { font-size: 11px; color: var(--faint); text-transform: lowercase; font-family: var(--mono); }
+.tile .tv { font-size: 19px; font-weight: 600; margin-top: 2px; }
+.tile .ts { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.tile.warnt .tv { color: var(--warn); } .tile.badt .tv { color: var(--bad); }
+.tline { width: 100%; height: auto; display: block; }
+.tline .lab { font: 11px var(--mono); fill: var(--muted); }
+.mtable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mtable th { text-align: left; font-weight: 500; color: var(--faint); font-size: 11px; padding: 4px 6px; font-family: var(--mono); }
+.mtable td { padding: 5px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
+.mtable td.nm { white-space: normal; max-width: 280px; }
+.mtable td.best { color: var(--ok); font-weight: 600; }
+.mtable .barc { width: 120px; } .mtable .bar { height: 6px; border-radius: 3px; background: var(--accent); }
+.mgrp { display: grid; gap: 6px; margin-top: 12px; }
+.inner.wide { width: min(1100px, calc(100% - 32px)); }
+@media (max-width: 700px) { .fgrid { grid-template-columns: minmax(0, 1fr); grid-template-rows: 160px minmax(0, 1fr); height: 78vh; } }
+
 /* ---------- approvals, autonomy, browser ---------- */
 .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: var(--r); background: var(--bg); flex: none; padding: 2px; gap: 2px; }
 .seg button { border: 0; border-radius: var(--r-sm); background: none; padding: 3px 9px; min-height: 22px; font-size: 12px; color: var(--muted); }
@@ -1084,6 +1140,7 @@ window.addEventListener("beforeunload", (e) => {
 function viewFor(hash) {
   const [, a, b] = hash.slice(1).split("/");
   if (a === "models") return viewModels;
+  if (a === "metrics") return (m) => viewMeasurements(m, b);
   if (a === "o" && b === "new") return viewOrchestraDraft;
   if (a === "o" && b) return (m) => viewOrchestraRun(m, b);
   if (a === "c" && b) return (m) => viewChat(m, b);
@@ -1206,6 +1263,7 @@ function sideEl() {
         h("span", { class: "faint", text: "this month" })),
       h("div", { class: "meter" + (pct >= 100 ? " over" : pct >= 85 ? " hot" : "") }, h("div", { style: { width: pct + "%" } })),
       h("div", { class: "tools" },
+        h("button", { class: "ghost", title: "Compare runs: cost, time, turns, tokens, results", onclick: () => go("#/metrics") }, icon("bolt", 14), "Measurements"),
         h("button", { class: "ghost", onclick: () => go("#/models") }, icon("gear", 14), "Settings"),
         h("span", { class: "grow" }),
         h("button", { class: "ghost icon-btn", title: `Theme: ${curTheme} (click to change)`, "aria-label": "Change theme",
@@ -1544,7 +1602,7 @@ async function pickModel({ title, subtitle }) {
     const row = (m) => m.external
       ? h("div", { class: "mitem" + (m.available ? "" : " off") + (sel && mref(sel) === mref(m) ? " sel" : ""), title: m.available ? m.command : `Not found: ${m.command}`,
           onclick: () => { if (m.available) { sel = m; paint(); retune(); } }, ondblclick: () => { if (m.available) { sel = m; done(); } } },
-          h("span", { class: "ext-badge", text: "ACP" }), h("span", { class: "grow", text: m.name }),
+          h("span", { class: "ext-badge", text: m.kind || "ACP" }), h("span", { class: "grow", text: m.name }),
           h("span", { class: "pill", text: m.available ? "your login" : "not installed" }))
       : h("div", { class: "mitem" + (sel && mref(sel) === mref(m) ? " sel" : ""), onclick: () => { sel = m; paint(); retune(); }, ondblclick: () => { sel = m; done(); } },
           h("span", { class: "grow mono", text: m.endpoint ? m.model.replace(/^[^/]+\//, "") : m.model }),
@@ -1563,7 +1621,7 @@ async function pickModel({ title, subtitle }) {
       for (const m of ms) { const k = m.endpoint || m.provider; if (!byP.has(k)) byP.set(k, []); byP.get(k).push(m); }
       for (const [k, l] of byP) kids.push(h("div", { class: "mgroup", text: PNAME[k] || k + (l[0].local ? " · Local" : "") }), ...l.map(row));
       if (missing.length && !f) kids.push(h("div", { class: "mgroup", text: "Available Agents (Not configured)" }), ...missing.map((a) => h("div", { class: "mitem", onclick: () => { close(); openAddModel().then(() => pickModel({ title, subtitle }).then(resolve)); } },
-        h("span", { class: "ext-badge", text: "ACP" }), h("span", { class: "grow muted", text: a.name }), h("span", { class: "small", style: { color: "var(--accent-fg)" }, text: "Setup →" }))));
+        h("span", { class: "ext-badge", text: a.kind || "ACP" }), h("span", { class: "grow muted", text: a.name }), h("span", { class: "small", style: { color: "var(--accent-fg)" }, text: "Setup →" }))));
       list.replaceChildren(...(kids.length ? kids : [h("div", { class: "mitem muted", text: "No matching models." })]));
     };
     q.addEventListener("input", paint);
@@ -2236,7 +2294,7 @@ function extBlock(s) {
   const mark = (st) => (st === "completed" ? "✓" : st === "failed" ? "✗" : "·");
   return h("div", { class: "ext" },
     h("div", { class: "ext-h" },
-      h("span", { class: "ext-badge", text: "ACP" }),
+      h("span", { class: "ext-badge", text: (agent && agent.kind) || "ACP" }),
       h("b", { text: agent ? agent.name : name }),
       Object.entries(e.settings || {}).sort(([x]) => (x === "Model" ? -1 : 1)).map(([k, v]) => h("span", { class: "pill", title: k, text: v })),
       h("span", { text: `${calls.length} action${calls.length === 1 ? "" : "s"}` }),
@@ -2248,10 +2306,13 @@ function extBlock(s) {
 
 function chatItem(s) {
   const m = s.meta || {};
+  if (s.kind === "inject" && m.answer_to != null) return h("div", { class: "msg-user" }, h("div", { class: "small faint", text: "Your answer" }), h("div", { text: s.output }));
   if (s.kind === "inject") return h("div", { class: "msg-user" }, h("div", { text: s.output }));
   if (s.kind === "plan") return h("div", { class: "msg-ai" }, h("div", { class: "small faint", style: { fontWeight: 600 }, text: "Execution Plan" }), s.output);
   if (s.kind === "act" && m.external) return h("div", {}, extBlock(s), h("div", { class: "msg-ai", text: s.output }));
   if (s.kind === "act" && m.tool === "finish") return h("div", { class: "msg-ai", style: { fontWeight: 500 }, text: parseArgs(s.output).summary || s.output });
+  if (s.kind === "act" && m.tool === "ask") return h("div", { class: "msg-ai qask" }, h("div", { class: "small faint", text: `${m.agent ? agentName(m.agent) : "The agent"} asked` }), h("div", { text: m.question || s.output }),
+    (m.options || []).length > 0 && h("div", { class: "small faint", text: "Options: " + m.options.join(" · ") }));
   if (s.kind === "act") return actLine(s);
   if (s.kind === "verify") return h("div", { class: "sysline", title: s.output }, h("span", {}, h("span", { class: m.ok ? "ok" : "bad", text: m.ok ? "✓ verification passed" : "✗ verification failed" }), " · ", s.output.split("\n")[0]));
   if (s.kind === "review") return h("div", { class: "msg-ai" }, h("div", { class: "small faint", style: { fontWeight: 600 }, text: "Review · " + (m.verdict || "") }), s.output);
@@ -2322,10 +2383,10 @@ async function viewChat(main, id) {
   S.view = { kind: "chat", id };
   loadModels().catch(() => {});
   const head = h("div"), scroll = h("div", { class: "scroll" }), dock = h("div", { class: "dock" });
-  const banner = h("div"), thread = h("div", { class: "thread" }), apprBox = h("div");
-  let apprKey = null;
-  scroll.append(banner, thread);
-  main.append(head, scroll, apprBox, dock);
+  const banner = h("div"), thread = h("div", { class: "thread" }), apprBox = h("div"), qBox = h("div"), outBox = h("div");
+  let apprKey = null, qKey = null, outKey = null;
+  scroll.append(banner, thread, outBox);
+  main.append(head, scroll, apprBox, qBox, dock);
   head.append(topbar(h("span", { class: "grow" }, sk("sk-title"))));
   const skel = h("div", { class: "thread-skel" }, sk("sk-bubble"), skLines(3), sk("sk-block"), skLines(2));
   thread.append(skel);
@@ -2355,6 +2416,10 @@ async function viewChat(main, id) {
       apprBox.replaceChildren(approvalCard(id, d.approval));
       if (d.approval) setLive("Waiting for your approval…");
     }
+    const q = !active && run.status === "waiting" ? pendingQuestion(steps) : null;
+    if ((q ? q.seq : -1) !== qKey) { qKey = q ? q.seq : -1; qBox.replaceChildren(questionCard(run, q, q && (q.meta.agent ? agentName(q.meta.agent) : run.spec.model ? fmtRef(run.spec.model) : null))); }
+    const ok_ = [steps.length, active].join("|");
+    if (ok_ !== outKey && steps.length > 1) { outKey = ok_; runFiles(id).then((f) => outBox.replaceChildren(outputsCard(run, f))).catch(() => {}); }
     const key = [active, run.status, run.cost_usd.toFixed(4), run.error, run.spec.autonomy, d.lines && d.lines.added, d.lines && d.lines.removed].join("|");
     if (key !== headKey) {
       headKey = key;
@@ -2366,13 +2431,14 @@ async function viewChat(main, id) {
         tier(run.spec.model && h("span", { class: "pill", title: mref(run.spec.model), text: (run.spec.model.provider === "acp" ? "ACP " : "") + fmtRef(run.spec.model) }), "p3"),
         tier(run.verify_command && h("span", { class: "pill", title: "Verification: " + run.verify_command, text: "✓ " + firstLine(run.verify_command, 24) }), "p3"),
         tier(h("span", { class: "stat", title: statLine(t), text: money(run.cost_usd) + (t.cached ? ` · ${t.pct}% cached` : "") }), "p3"),
+        tier(headStats(run, steps, active), "p2"),
         h("span", { class: "sep tb-p3" }),
         runAutonomy(run),
         tier(browserBtn(run.id), "p2"),
         active && killBtn(run),
         runMenu(run, active)));
       const bkids = [];
-      if (run.error && !active) bkids.push(errorBanner(run, active));
+      if (run.error && !active && run.status !== "waiting") bkids.push(errorBanner(run, active));
       if (run.worktree && (run.status === "done" || steps.length > 1)) bkids.push(worktreeBanner(run, active));
       banner.replaceChildren(...bkids);
     }
@@ -2516,7 +2582,7 @@ function runMenu(run, active, extra = {}) {
   return h("span", { class: "row" },
     tier(h("button", { class: "ghost small", text: "Diff", onclick: guard(() => showDiff(run)) }), "p3"),
     tier(h("button", { class: "ghost small", text: "Push", onclick: push }), "p3"),
-    !active && run.status !== "done" && h("button", { class: "small", onclick: () => resumeRun(run) }, icon("play", 10), "Resume"),
+    !active && run.status !== "done" && run.status !== "waiting" && h("button", { class: "small", onclick: () => resumeRun(run) }, icon("play", 10), "Resume"),
     !active && (run.status === "done" || run.step_count > 1) && h("button", { class: "accent small", title: "Merge this task's branch into your project checkout", onclick: () => mergeRun(run) }, icon("merge", 12), "Merge"),
     more);
 }
@@ -4212,12 +4278,16 @@ async function viewOrchestraRun(main, id) {
       active && h("span", { class: "dots" }, h("i"), h("i"), h("i")),
       h("span", { class: "live-line grow", text: active ? S.lastLive || "Running the flow…" : "" }),
       h("span", { class: "stat", title: statLine(t), text: `${done}/${workers} done${data.flow && data.flow.goal_rounds ? ` · ${data.flow.goal_rounds} failed checks` : ""} · ${money(run.cost_usd)}` }),
-      data.lines && delta(data.lines.added, data.lines.removed, "lines added / removed by this task")));
-    if (run.error && !active) head.append(errorBanner(run, active));
+      data.lines && delta(data.lines.added, data.lines.removed, "lines added / removed by this task"),
+      steps.length > 1 && h("button", { class: "ghost small", title: "Everything this run changed or created, with previews", onclick: () => openFiles(run) }, icon("file", 12), "Outputs"),
+      headStats(run, steps, active)));
+    if (run.error && !active && run.status !== "waiting") head.append(errorBanner(run, active));
     if (run.worktree && (run.status === "done" || steps.length > 1)) head.append(worktreeBanner(run, active));
     const ak = data.approval ? data.approval.id : "";
     if (ak !== apprKey) { apprKey = ak; apprBox.replaceChildren(approvalCard(id, data.approval)); }
     head.append(apprBox);
+    const q = !active && run.status === "waiting" ? pendingQuestion(steps) : null;
+    if (q) head.append(questionCard(run, q, q.meta.agent ? agentName(q.meta.agent) : null));
     canvas.paint();
     const pk = [JSON.stringify(ed.selected), steps.length, active, data.flow && data.flow.next].join("|");
     if (pk !== panelKey) { panelKey = pk; paintPanel(); }
@@ -4226,6 +4296,275 @@ async function viewOrchestraRun(main, id) {
   loadModels().catch(() => {});
   paintSw();
   await refresh();
+}
+
+// ---------- outputs: what a run produced ----------
+const fileUrl = (runId, path, dl) => `/api/runs/${runId}/raw/${path.split("/").map(encodeURIComponent).join("/")}?${dl ? "download=1" : ""}`;
+const fsize = (n) => (n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB");
+const FILE_KIND_ICON = { image: "eye", html: "globe", svg: "eye", markdown: "book", code: "code", text: "file", pdf: "file", audio: "file", video: "eye", binary: "file" };
+S.files = {};
+// The run's changed files; reused for a moment so several views asking at
+// once share one request.
+function runFiles(runId, fresh) {
+  const c = S.files[runId];
+  if (c && !fresh && Date.now() - c.at < 1500) return c.p;
+  const p = api(`/api/runs/${runId}/files`).then((r) => r.files);
+  S.files[runId] = { at: Date.now(), p };
+  p.catch(() => delete S.files[runId]);
+  return p;
+}
+function filePreview(runId, f) {
+  const url = fileUrl(runId, f.path) + "v=" + Date.now();
+  if (f.status === "deleted") return h("div", { class: "fempty", text: "This file was deleted in this run." });
+  if (f.kind === "image") return h("div", { class: "fimg" }, h("img", { src: url, alt: f.path }));
+  if (f.kind === "html") return h("iframe", { class: "fframe", src: url, sandbox: "allow-scripts allow-modals allow-popups", title: f.path });
+  if (f.kind === "pdf") return h("iframe", { class: "fframe", src: url, title: f.path });
+  if (f.kind === "audio") return h("div", { class: "fempty" }, h("audio", { controls: true, src: url }));
+  if (f.kind === "video") return h("video", { controls: true, src: url, style: { maxWidth: "100%" } });
+  if (f.kind === "binary") return h("div", { class: "fempty" }, `${fsize(f.size)} binary file. `, h("a", { href: fileUrl(runId, f.path, true), text: "Download" }));
+  const box = h("div", { class: "ftext" }, skLines(6));
+  fetch(url).then((r) => (r.ok ? r.text() : r.json().then((e) => Promise.reject(new Error(e.error))))).then((t) => {
+    const lines = t.split("\n"); const shown = lines.slice(0, 5000);
+    const pre = h("pre", { class: "fcode" + (f.kind === "markdown" ? " wrap" : "") });
+    shown.forEach((l, n) => pre.append(h("span", { class: "ln", text: String(n + 1) }), l + "\n"));
+    box.replaceChildren(pre, lines.length > shown.length ? h("div", { class: "small faint", text: `… ${lines.length - shown.length} more lines` }) : "");
+  }).catch((e) => box.replaceChildren(h("div", { class: "small bad", text: e.message })));
+  return box;
+}
+// The diff of one file, cut out of the run's whole diff.
+function fileDiff(patch, path) {
+  const parts = (patch || "").split(/^(?=diff --git )/m);
+  const mine = parts.find((p) => p.startsWith(`diff --git a/${path} `) || p.includes(` b/${path}\n`));
+  const pre = h("pre", { class: "fcode" });
+  for (const line of (mine || "(no committed diff for this file yet)").split("\n")) {
+    const c = line.startsWith("+") && !line.startsWith("+++") ? "ok" : line.startsWith("-") && !line.startsWith("---") ? "bad" : line.startsWith("@@") ? "muted" : "";
+    pre.append(h("div", { class: c, text: line || " " }));
+  }
+  return pre;
+}
+// A browser for everything the run changed: list on the left, a live
+// preview (images, SVG, web pages, markdown, code) or the diff on the right.
+async function openFiles(run, focus) {
+  const list = h("div", { class: "flist" }, Array.from({ length: 5 }, () => sk("sk-row")));
+  const pane = h("div", { class: "fpane" });
+  const bar = h("div", { class: "row fbar" });
+  let files = [], cur = null, mode = "preview", patch = null;
+  const show = async (f) => {
+    cur = f; list.querySelectorAll(".fit").forEach((x) => x.classList.toggle("on", x.dataset.path === f.path));
+    bar.replaceChildren(...[h("b", { class: "grow mono small", style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, text: f.path }),
+      h("div", { class: "seg" }, ["preview", "diff"].map((m) => h("button", { class: mode === m ? "on" : "", text: m === "preview" ? "Preview" : "Diff", onclick: () => { mode = m; show(f); } }))),
+      f.status !== "deleted" && h("a", { class: "button ghost icon-btn", href: fileUrl(run.id, f.path), target: "_blank", rel: "noopener", title: "Open in a new tab" }, icon("external", 14)),
+      f.status !== "deleted" && h("a", { class: "button ghost icon-btn", href: fileUrl(run.id, f.path, true), title: "Download" }, icon("down", 14))].filter(Boolean));
+    if (mode === "diff") {
+      pane.replaceChildren(h("div", { class: "ftext" }, skLines(5)));
+      if (!patch) patch = (await api(`/api/runs/${run.id}/diff`)).patch;
+      if (cur === f && mode === "diff") pane.replaceChildren(h("div", { class: "ftext" }, fileDiff(patch, f.path)));
+    } else pane.replaceChildren(filePreview(run.id, f));
+  };
+  const paintList = () => list.replaceChildren(...(files.length ? files.map((f) => h("div", { class: "fit", "data-path": f.path, title: f.path, onclick: () => show(f) },
+    h("span", { class: "fic " + f.status }, icon(FILE_KIND_ICON[f.kind] || "file", 14)),
+    h("span", { class: "grow fnm" }, h("span", { text: f.path.split("/").pop() }), h("span", { class: "faint small", text: f.path.includes("/") ? "  " + f.path.replace(/\/[^/]+$/, "/") : "" })),
+    f.added != null && h("span", { class: "small ok", text: "+" + f.added }), f.removed ? h("span", { class: "small bad", text: "−" + f.removed }) : null))
+    : [h("div", { class: "small faint", style: { padding: "14px" }, text: "No files changed yet." })]));
+  modal(h("div", { class: "fviewer" }, h("div", { class: "row" }, h("h2", { class: "grow", style: { margin: 0 }, text: "Files" }), h("span", { class: "small faint mono", text: run.branch })),
+    h("div", { class: "fgrid" }, list, h("div", { class: "fright" }, bar, pane))), { wide: true, cls: "xwide" });
+  try { files = await runFiles(run.id, true); } catch (e) { list.replaceChildren(h("div", { class: "small bad", text: e.message })); return; }
+  paintList();
+  const first = files.find((f) => f.path === focus) || files.find((f) => f.kind === "image" || f.kind === "html") || files[0];
+  if (first) show(first);
+}
+// What the run made, at a glance: thumbnails of pictures and pages, chips
+// for everything else.
+function outputsCard(run, files) {
+  if (!files.length) return "";
+  const visual = files.filter((f) => f.status !== "deleted" && (f.kind === "image" || f.kind === "html")).slice(0, 6);
+  const rest = files.filter((f) => !visual.includes(f));
+  const add = files.reduce((n, f) => n + (f.added || 0), 0), del = files.reduce((n, f) => n + (f.removed || 0), 0);
+  return h("div", { class: "outputs enter" },
+    h("div", { class: "row" }, h("b", { text: "Outputs" }), h("span", { class: "small faint", text: `${files.length} file${files.length > 1 ? "s" : ""} · ` }),
+      h("span", { class: "small ok", text: "+" + add }), h("span", { class: "small bad", text: "−" + del }), h("span", { class: "grow" }),
+      h("button", { class: "ghost small", onclick: () => openFiles(run) }, "Browse files", icon("external", 12))),
+    visual.length > 0 && h("div", { class: "thumbs" }, visual.map((f) => h("button", { class: "thumb", title: f.path, onclick: () => openFiles(run, f.path) },
+      f.kind === "image" ? h("img", { src: fileUrl(run.id, f.path) + "v=" + (f.size || 0), alt: f.path, loading: "lazy" })
+        : h("iframe", { src: fileUrl(run.id, f.path), sandbox: "", tabindex: "-1", scrolling: "no", title: f.path }),
+      h("span", { class: "cap", text: f.path.split("/").pop() })))),
+    rest.length > 0 && h("div", { class: "fchips" }, rest.slice(0, 24).map((f) => h("button", { class: "fchip", title: f.path, onclick: () => openFiles(run, f.path) },
+      icon(FILE_KIND_ICON[f.kind] || "file", 12), f.path.split("/").pop()))));
+}
+
+// ---------- questions from agents ----------
+// The question the run waits on (same rule as the engine): the latest
+// `ask` with no message for that agent after it.
+function pendingQuestion(steps) {
+  const q = [...steps].reverse().find((s) => s.kind === "act" && s.meta.tool === "ask");
+  if (!q) return null;
+  const answered = steps.some((s) => s.seq > q.seq && s.kind === "inject" && (!q.meta.agent || s.meta.agent === q.meta.agent));
+  return answered ? null : q;
+}
+const answerQuestion = guard(async (run, seq, text) => {
+  await api(`/api/runs/${run.id}/answer`, { body: { seq, text } });
+  toast("Answer sent; the agent continues");
+  S.view && S.view.refresh && S.view.refresh();
+});
+const NO_PREF = "No preference: use your best judgment and continue.";
+// The open question, with a place to answer it. Styled like an approval:
+// both are the run waiting for you.
+function questionCard(run, q, who) {
+  if (!q) return "";
+  const t = h("textarea", { rows: 2, placeholder: "Your answer…" });
+  if (typeof autosize === "function") autosize(t);
+  const send = (text) => { if (text.trim()) answerQuestion(run, q.seq, text.trim()); };
+  t.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(t.value); } });
+  setTimeout(() => { if (document.activeElement === document.body) t.focus(); });
+  return h("div", { class: "approval qcard enter", role: "alert" },
+    h("div", { class: "row", style: { gap: "8px" } }, icon("alert", 16, { color: "var(--accent)", flexShrink: "0" }),
+      h("b", { class: "grow", text: `${who || "The agent"} asks` })),
+    h("div", { class: "qt", text: q.meta.question || q.output }),
+    (q.meta.options || []).length > 0 && h("div", { class: "qopts" }, q.meta.options.map((o) => h("button", { text: o, onclick: () => send(o) }))),
+    h("div", { class: "acts" }, t, h("button", { class: "primary", text: "Answer", onclick: () => send(t.value) })),
+    h("div", { class: "row small" }, h("span", { class: "grow faint", text: "The run waits for you. Your answer goes to this agent only." }),
+      h("button", { class: "ghost small", title: "Let the agent decide by itself", text: "Let it decide", onclick: () => send(NO_PREF) })));
+}
+
+// ---------- measurements ----------
+const dur = (ms) => { if (ms == null) return "—"; const s = ms / 1000; if (s < 1) return Math.round(ms) + " ms"; if (s < 60) return s.toFixed(s < 10 ? 1 : 0) + " s"; const m = Math.floor(s / 60); if (m < 60) return `${m}m ${Math.round(s % 60)}s`; return `${Math.floor(m / 60)}h ${m % 60}m`; };
+const pctOf = (x) => Math.round((x || 0) * 100) + "%";
+const LANE_COLORS = ["var(--accent)", "var(--text)", "var(--muted)", "#c9a227", "#6f9bb3", "#86a874", "#b98bb0", "#d4875c"];
+function metricTiles(m) {
+  const t = m.total;
+  const tile = (label, value, sub, cls) => h("div", { class: "tile " + (cls || "") }, h("div", { class: "tl", text: label }), h("div", { class: "tv", text: value }), sub && h("div", { class: "ts", text: sub }));
+  return h("div", { class: "tiles" },
+    tile("Cost", money(m.spent_usd), t.reported_cost_usd ? `+ ${money(t.reported_cost_usd)} reported by agents` : "budget-counted"),
+    tile("Wall time", dur(m.wall_secs * 1000), `active ${dur(t.model_ms + t.tool_ms)}`),
+    tile("Turns", String(t.turns), `${m.steps} steps · ${t.failures} failed`, t.failures ? "warnt" : ""),
+    tile("Tokens in", kTok(t.tokens.input), t.tokens.input ? `${pctOf(t.cache_hit)} from cache` : "—"),
+    tile("Tokens out", kTok(t.tokens.output), t.tokens.cache_write ? `${kTok(t.tokens.cache_write)} cache writes` : ""),
+    tile("Changes", `${m.changes.files} files`, `+${m.changes.added} −${m.changes.removed} lines`),
+    tile("Verification", m.verify.passed + m.verify.failed ? `${m.verify.passed}/${m.verify.passed + m.verify.failed} passed` : "—", m.review_rounds ? `${m.review_rounds} review rounds` : "", m.verify.failed && !m.verify.passed ? "badt" : ""),
+    tile("Interventions", String(t.questions + t.escalations), `${t.questions} questions · ${t.escalations} escalations`));
+}
+// One lane per agent, one bar per step, as long as the step took.
+function timelineChart(m) {
+  const steps = m.timeline.filter((s) => s.ms);
+  if (!steps.length) return h("div", { class: "small faint", text: "No timings recorded yet (runs from before this version have none)." });
+  const lanes = [...new Set(steps.map((s) => s.agent || "run"))];
+  const total = steps.reduce((n, s) => n + s.ms, 0);
+  const W = 720, LH = 22, PAD = 110, H = lanes.length * LH + 22;
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("class", "tline");
+  const el = (n, a, text) => { const e = document.createElementNS(NS, n); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); if (text != null) e.textContent = text; svg.append(e); return e; };
+  lanes.forEach((l, i) => el("text", { x: 0, y: i * LH + 15, class: "lab" }, (agentName(l) || l).slice(0, 16)));
+  let x = 0;
+  for (const s of steps) {
+    const i = lanes.indexOf(s.agent || "run"), w = Math.max(1.5, (s.ms / total) * (W - PAD));
+    const r = el("rect", { x: PAD + x, y: i * LH + 4, width: w, height: LH - 8, rx: 3, style: `fill:${s.ok === false ? "var(--bad)" : LANE_COLORS[i % LANE_COLORS.length]}` });
+    const t = document.createElementNS(NS, "title");
+    t.textContent = `#${s.seq} ${s.kind}${s.tool ? " · " + s.tool : ""} · ${dur(s.ms)}${s.tokens ? " · " + kTok(s.tokens) + " tok" : ""}${s.cost ? " · " + money(s.cost) : ""}`;
+    r.append(t);
+    x += w;
+  }
+  el("text", { x: PAD, y: H - 2, class: "lab" }, "0");
+  el("text", { x: W, y: H - 2, class: "lab", "text-anchor": "end" }, dur(total) + " of active time");
+  return svg;
+}
+function breakdownTable(rows, nameOf) {
+  const entries = Object.entries(rows);
+  if (!entries.length) return "";
+  const max = Math.max(...entries.map(([, t]) => t.tokens.input + t.tokens.output), 1);
+  return h("table", { class: "mtable" },
+    h("tr", {}, ["", "Turns", "Time", "Tokens in", "cached", "out", "Cost", "Failed", ""].map((x) => h("th", { text: x }))),
+    entries.sort(([, a], [, b]) => b.tokens.input + b.tokens.output - (a.tokens.input + a.tokens.output)).map(([k, t]) => h("tr", {},
+      h("td", { class: "nm", title: k, text: nameOf(k) }), h("td", { text: String(t.turns) }), h("td", { text: dur(t.model_ms + t.tool_ms) }),
+      h("td", { text: kTok(t.tokens.input) }), h("td", { text: pctOf(t.cache_hit) }), h("td", { text: kTok(t.tokens.output) }),
+      h("td", { text: money(t.cost_usd) + (t.reported_cost_usd ? ` (+${money(t.reported_cost_usd)})` : "") }), h("td", { class: t.failures ? "warn" : "faint", text: String(t.failures) }),
+      h("td", { class: "barc" }, h("div", { class: "bar", style: { width: ((t.tokens.input + t.tokens.output) / max) * 100 + "%" } })))));
+}
+async function showMetrics(run) {
+  const body = h("div", {}, sk("sk-block"), sk("sk-block"));
+  const close = modal(h("div", {}, h("div", { class: "row" }, h("h2", { class: "grow", style: { margin: 0 }, text: "Measurements" }),
+    h("button", { class: "ghost small", onclick: () => { close(); go(`#/metrics/${run.id}`); } }, "Compare runs", icon("external", 12))),
+    h("p", { class: "small muted", style: { marginTop: "4px" }, text: firstLine(run.goal, 140) }), body), { wide: true });
+  try {
+    const m = await api(`/api/runs/${run.id}/metrics`);
+    const tools = Object.entries(m.total.tools).sort(([, a], [, b]) => b - a);
+    body.replaceChildren(...[metricTiles(m),
+      h("h4", { text: "Timeline" }), timelineChart(m),
+      Object.keys(m.agents).length > 1 && [h("h4", { text: "Per agent" }), breakdownTable(m.agents, (k) => agentName(k) || k)],
+      h("h4", { text: "Per model" }), breakdownTable(m.by_model, (k) => k.replace(/^acp:(.*)$/, "$1 (agent)")),
+      tools.length > 0 && [h("h4", { text: "Actions" }), h("div", { class: "fchips" }, tools.map(([k, n]) => h("span", { class: "fchip" }, h("b", { text: String(n) }), " " + k.replace("_", " "))))]].flat().filter(Boolean));
+  } catch (e) { body.replaceChildren(h("div", { class: "small bad", text: e.message })); }
+}
+// Small live figures for a run header: time so far and turns; opens the
+// measurements.
+function headStats(run, steps, active) {
+  const turns = steps.filter((s) => s.kind === "act").length;
+  const end = active ? Date.now() / 1000 : (steps.length ? steps[steps.length - 1].created_at : run.updated_at);
+  return h("button", { class: "ghost small hstats", title: "Every measurement of this run", onclick: () => showMetrics(run) },
+    icon("bolt", 12), h("span", { text: dur(Math.max(0, end - run.created_at) * 1000) }),
+    h("span", { class: "faint", text: "·" }), h("span", { text: `${turns} turn${turns === 1 ? "" : "s"}` }));
+}
+
+// ---------- measurements page: every run, side by side ----------
+async function viewMeasurements(main, ids) {
+  S.view = { kind: "metrics" };
+  main.append(topbar(h("span", { class: "title grow", text: "Measurements" })));
+  const page = h("div", { class: "page" }), inner = h("div", { class: "inner wide" }, sk("sk-block"), sk("sk-block")); page.append(inner); main.append(page);
+  const all = (await api("/api/metrics").catch((e) => { inner.replaceChildren(h("div", { class: "small bad", text: e.message })); return null; }));
+  if (!all) return;
+  const runs = all.runs.sort((a, b) => (b.run > a.run) - (b.run < a.run));
+  const byId = Object.fromEntries((S.runs || []).map((r) => [r.id, r]));
+  let picked = new Set((ids || "").split(",").filter((x) => runs.some((r) => r.run === x)));
+  // Runs of the same goal are the same experiment.
+  const groups = new Map();
+  for (const m of runs) { const k = m.goal.trim().toLowerCase(); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(m); }
+  const label = (m) => m.mode === "orchestra" ? `Flow of ${m.agents_planned} · ${fmtRef(m.model)}${m.worker_model ? " / " + fmtRef(m.worker_model) : ""}` : (fmtRef(m.model) || "classic pipeline");
+  const link = (m) => runHash(byId[m.run] || { id: m.run, spec: { mode: m.mode } });
+  const cmp = h("div");
+  const COLS = [
+    ["Cost (budget)", (m) => m.spent_usd, money, "low"],
+    ["Cost reported by agents", (m) => m.total.reported_cost_usd, (v) => (v ? money(v) : "—"), "low"],
+    ["Wall time", (m) => m.wall_secs, (v) => dur(v * 1000), "low"],
+    ["Active time", (m) => m.total.model_ms + m.total.tool_ms, dur, "low"],
+    ["Turns", (m) => m.total.turns, String, "low"], ["Questions asked", (m) => m.total.questions, String, "low"],
+    ["Tokens in", (m) => m.total.tokens.input, (v) => (v ? kTok(v) : "—"), "low"], ["Cache hit", (m) => m.total.cache_hit, pctOf, "high"],
+    ["Tokens out", (m) => m.total.tokens.output, (v) => (v ? kTok(v) : "—"), "low"],
+    ["Failed turns", (m) => m.total.failures, String, "low"], ["Escalations", (m) => m.total.escalations, String, "low"],
+    ["Files changed", (m) => m.changes.files, String, null], ["Lines +/−", (m) => m.changes.added + m.changes.removed, (v) => String(v), null],
+    ["Verified", (m) => (m.verify.passed ? 1 : m.verify.failed ? 0 : null), (v) => (v == null ? "—" : v ? "yes" : "no"), "high"],
+  ];
+  const paintCompare = () => {
+    const list = runs.filter((m) => picked.has(m.run));
+    history.replaceState(null, "", "#/metrics" + (list.length ? "/" + list.map((m) => m.run).join(",") : ""));
+    if (list.length < 2) { cmp.replaceChildren(h("div", { class: "card small muted", text: "Tick two or more runs to compare them side by side: the same goal run by a single agent and by flows, or with different models." })); return; }
+    const best = COLS.map(([, f, , dir]) => { const v = list.map(f).filter((x) => x != null); if (new Set(v).size < 2) return null; return dir === "low" ? Math.min(...v) : dir === "high" ? Math.max(...v) : null; });
+    const base = list[0];
+    cmp.replaceChildren(h("div", { class: "card" }, h("h3", { text: "Side by side" }),
+      h("div", { style: { overflowX: "auto" } }, h("table", { class: "mtable cmp" },
+        h("tr", {}, h("th", { text: "" }), list.map((m) => h("th", {}, h("a", { href: link(m), text: label(m) }), h("div", { class: "small faint", text: `${m.status} · ${m.run}` })))),
+        COLS.map(([name, f, fmt], ci) => h("tr", {}, h("td", { class: "nm", text: name }), list.map((m, i) => {
+          const v = f(m), b = best[ci] != null && v === best[ci];
+          const rel = i > 0 && typeof v === "number" && typeof f(base) === "number" && f(base) > 0 && name !== "Verified" && name !== "Cache hit" ? ` (${v >= f(base) ? "+" : ""}${Math.round(((v - f(base)) / f(base)) * 100)}%)` : "";
+          return h("td", { class: b ? "best" : "" }, fmt(v), h("span", { class: "small faint", text: rel }));
+        }))))),
+      h("p", { class: "small faint", text: "Green marks the best value in each row. Percentages are relative to the first column. Cost counts budget-metered calls; external agents bill your own subscription and report tokens only." })));
+  };
+  const table = h("div", { class: "card" }, h("h3", { text: `All runs · ${runs.length}` }),
+    [...groups.entries()].map(([, ms]) => h("div", { class: "mgrp" },
+      h("div", { class: "row" }, h("b", { class: "grow", text: firstLine(ms[ms.length - 1].goal, 110) }), ms.length > 1 && h("button", { class: "ghost small", text: `Compare ${ms.length}`, onclick: () => { picked = new Set(ms.map((m) => m.run)); paintTable(); paintCompare(); } })),
+      h("table", { class: "mtable" }, ms.map((m) => h("tr", {},
+        h("td", { style: { width: "26px" } }, h("input", { type: "checkbox", style: { width: "auto" }, checked: picked.has(m.run), "data-run": m.run, onchange: (e) => { e.target.checked ? picked.add(m.run) : picked.delete(m.run); paintCompare(); } })),
+        h("td", { class: "nm" }, h("a", { href: link(m), text: label(m) })),
+        h("td", { class: "faint", text: m.status }), h("td", { text: money(m.spent_usd) }), h("td", { text: dur(m.wall_secs * 1000) }),
+        h("td", { text: `${m.total.turns} turns` }), h("td", { text: m.total.tokens.input + m.total.tokens.output ? `${kTok(m.total.tokens.input + m.total.tokens.output)} tok` : "—" }),
+        h("td", { class: "small", text: `+${m.changes.added} −${m.changes.removed}` }),
+        h("td", { class: m.verify.passed ? "ok" : "bad", text: m.verify.passed ? "verified" : m.verify.failed ? "failed" : "" })))))));
+  const paintTable = () => table.querySelectorAll("input[data-run]").forEach((c) => (c.checked = picked.has(c.dataset.run)));
+  inner.classList.add("stack");
+  inner.replaceChildren(
+    h("p", { class: "muted small", style: { margin: 0 }, text: "Every run is measured: what it cost, how long it took, how many turns and tokens it used, what it changed and whether it passed its checks. Runs of the same goal are grouped, so a single agent and a flow on the same task can be compared directly." }),
+    cmp, table);
+  paintCompare();
 }
 
 // ---------- models & settings ----------
@@ -4566,6 +4905,7 @@ function palette() {
     { g: "Actions", ic: "plus", t: "New task", k: "", run: () => go("#/") },
     od && { g: "Actions", ic: "fork", t: "Continue orchestra draft: " + firstLine(od.goal, 60), run: () => go("#/o/new") },
     { g: "Actions", ic: "gear", t: "Settings & models", run: () => go("#/models") },
+    { g: "Actions", ic: "bolt", t: "Measurements", run: () => go("#/metrics") },
     { g: "Actions", ic: "swap", t: "Switch project…", run: switchProject },
     { g: "Actions", ic: "sidebar", t: "Toggle sidebar", run: () => toggleSide() },
   ].filter(Boolean);

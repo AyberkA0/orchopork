@@ -109,7 +109,7 @@
   <text class="mono mute cap" x="256" y="492">cheapest model that can</text>
 
   <!-- 07 evaluator -->
-  <rect x="456.5" y="300.5" width="9" height="9" fill="none" stroke="#231f20"/>
+  <rect x="456" y="300" width="10" height="10" class="p"/>
   <text class="mono mute num" x="474" y="309">07</text>
   <text class="sans ink name" x="496" y="310">evaluator loop</text>
   <circle class="n" cx="500" cy="394" r="10"/>

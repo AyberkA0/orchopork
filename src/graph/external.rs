@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use super::{Inner, Stop, ask, prompts, verify_commands};
+use super::approvals::{self, Decision};
+use super::{Inner, Stop, prompts, verify_commands};
 use crate::agents::{self, Outcome, Policy, Update};
 use crate::config::{Config, ModelRef};
 use crate::error::{Error, Result};
@@ -82,12 +83,43 @@ impl Inner {
         who: &str,
         prompt: String,
     ) -> Result<Outcome> {
+        self.external_turn_denying(cfg, run, model, who, prompt, Vec::new()).await
+    }
+
+    /// `external_turn`, refusing the permission requests of the given kinds.
+    pub(super) async fn external_turn_denying(
+        &self,
+        cfg: &Config,
+        run: &Run,
+        model: &ModelRef,
+        who: &str,
+        prompt: String,
+        deny: Vec<String>,
+    ) -> Result<Outcome> {
         let agent = cfg.external_agents.iter().find(|a| a.id == model.model).cloned().ok_or_else(|| {
             Error::InvalidRequest(format!("external agent {:?} is not configured (Models & settings)", model.model))
         })?;
         let flag =
             self.active.lock().unwrap().get(&run.id).cloned().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         self.log(&run.id, format!("{who}: starting {}", agent.name));
+        let approve: agents::Approver = {
+            let (approvals, ws, rid, flag, who) =
+                (self.approvals.clone(), self.ws.clone(), run.id.clone(), flag.clone(), who.to_string());
+            Arc::new(move |kind: String, title: String, call: serde_json::Value| {
+                let (approvals, ws, rid, flag, who) =
+                    (approvals.clone(), ws.clone(), rid.clone(), flag.clone(), who.clone());
+                Box::pin(async move {
+                    let class = approvals::acp_class(&kind);
+                    let autonomy = ws.store.get_run(&rid).await.map(|r| r.spec.autonomy).unwrap_or_default();
+                    let key = format!("acp:{kind}");
+                    if !approvals.needed(&rid, &key, class, autonomy) {
+                        return true;
+                    }
+                    let label = format!("{who} · {title}");
+                    matches!(approvals.ask(&rid, None, &label, call, class, key, &flag).await, Decision::Allow)
+                })
+            })
+        };
         let mut last = Instant::now() - Duration::from_secs(5);
         let run_id = run.id.clone();
         agents::run(
@@ -95,14 +127,14 @@ impl Inner {
             Path::new(&run.worktree),
             &prompt,
             &model.options,
-            Policy { allow_execute: cfg.limits.allow_commands },
+            Policy { allow_execute: cfg.limits.allow_commands, deny, approve: Some(approve) },
             Duration::from_secs(cfg.limits.external_timeout_secs.max(30)),
             &flag,
             |u| {
                 let msg = match u {
                     Update::Tool(t) => Some(format!("{who} · {}", t.title)),
                     Update::Plan(p) => Some(format!("{who} plans: {}", clip(&p, 160))),
-                    Update::Note(n) => Some(n),
+                    Update::Note(n) => Some(format!("{who}: {n}")),
                     Update::Thinking | Update::Text if last.elapsed() > Duration::from_secs(3) => Some(format!(
                         "{who} is {}…",
                         if matches!(u, Update::Thinking) { "thinking" } else { "writing" }
@@ -139,26 +171,23 @@ impl Inner {
             cfg.limits.cloud_context_chars,
             cfg.limits.tool_output_chars,
         );
-        let prompt = format!("{}\n\n{tail}{SUFFIX}\n{}", as_prompt(&messages), ask::EXTERNAL_HOW);
+        let prompt = format!("{}\n\n{tail}{SUFFIX}{}", as_prompt(&messages), super::ask::EXTERNAL_HOW);
         let name = self.agent_display(cfg, model);
-        let t0 = Instant::now();
         let out = self.external_turn(cfg, run, model, &name, prompt).await?;
-        let mut meta = meta(model, &out);
-        meta["ms"] = json!(t0.elapsed().as_millis() as u64);
         let mut next = RunState { failures: 0, escalate: false, ..state };
-        let question = if out.cancelled { None } else { ask::from_text(&out.text) };
+        let question = (!out.cancelled).then(|| super::ask::from_text(&out.text)).flatten();
         if let Some(q) = question {
-            meta["tool"] = json!("ask");
-            meta["route"] = json!("user");
+            let mut m = meta(model, &out);
+            m["tool"] = json!("ask");
             for (k, v) in q.meta().as_object().into_iter().flatten() {
-                meta[k] = v.clone();
+                m[k] = v.clone();
             }
-            let asked = self.append(run, StepKind::Act, &out.text, Some(&tool_lines(&out)), meta, &next, 0.0).await?;
-            return Ok(Some(Stop::Waiting(ask::status_line(&asked, &name))));
+            self.append(run, StepKind::Act, &out.text, Some(&tool_lines(&out)), m, &next, 0.0).await?;
+            return Ok(Some(Stop::Waiting(q.status(&name))));
         }
         if !out.cancelled {
-            let skills = self.ws.skills.compose_for("", &crate::skills::Scope::of(&["solo"]))?;
-            next.phase = if !verify_commands(cfg, run, &skills).is_empty() {
+            let skills = self.ws.skills.compose("")?;
+            next.phase = if !verify_commands(run, &skills).is_empty() {
                 Phase::Verify
             } else if cfg.routing.critic.is_some() {
                 Phase::Review
@@ -168,7 +197,7 @@ impl Inner {
         }
         let text =
             if out.text.is_empty() { format!("({} finished without a message)", name) } else { out.text.clone() };
-        self.append(run, StepKind::Act, &text, Some(&tool_lines(&out)), meta, &next, 0.0).await?;
+        self.append(run, StepKind::Act, &text, Some(&tool_lines(&out)), meta(model, &out), &next, 0.0).await?;
         Ok(out.cancelled.then_some(Stop::Paused(None)))
     }
 

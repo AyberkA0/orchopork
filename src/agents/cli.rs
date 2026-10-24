@@ -49,12 +49,45 @@ fn json_output(d: Dialect) -> bool {
     )
 }
 
+/// What a CLI may do this turn. A CLI cannot ask orchopork per tool call,
+/// so the policy (role restrictions, approvals) is settled once, before it
+/// starts, and turned into the tool's own flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Grants {
+    /// Shell commands.
+    pub exec: bool,
+    /// Changing files in the worktree. Without it the CLI runs read-only
+    /// (or as close to it as the tool allows).
+    pub edit: bool,
+}
+
+impl Grants {
+    pub const ALL: Grants = Grants { exec: true, edit: true };
+
+    /// Settles `policy` for one turn: role restrictions first, then one
+    /// approval per kind when the run's autonomy asks for it.
+    pub async fn settle(agent: &ExternalAgent, policy: &Policy) -> Grants {
+        let mut g = Grants { exec: policy.allow_execute && !policy.denies("execute"), edit: !policy.denies("edit") };
+        if let Some(approve) = &policy.approve {
+            if g.edit {
+                let what = format!("{} may change files in the worktree this turn", agent.name);
+                g.edit = approve("edit".into(), what, json!({ "agent": agent.name, "kind": "edit" })).await;
+            }
+            if g.exec {
+                let what = format!("{} may run shell commands this turn", agent.name);
+                g.exec = approve("execute".into(), what, json!({ "agent": agent.name, "kind": "execute" })).await;
+            }
+        }
+        g
+    }
+}
+
 /// The full argument list: the agent's own args (with the prompt
 /// placeholders expanded) plus the dialect's flags.
 pub fn build_args(
     agent: &ExternalAgent,
     options: &BTreeMap<String, String>,
-    policy: Policy,
+    grants: Grants,
     prompt_file: Option<&Path>,
     prompt: &str,
 ) -> Vec<String> {
@@ -72,12 +105,20 @@ pub fn build_args(
             // Edits inside the working directory are accepted; shell
             // commands follow `allow_commands`. Anything else (web, MCP
             // tools) follows your own Claude Code permission settings.
-            tail.extend(s(&["--permission-mode", "acceptEdits"]));
-            tail.extend(s(if policy.allow_execute {
-                &["--allowedTools", "Bash"]
-            } else {
-                &["--disallowedTools", "Bash"]
-            }));
+            tail.extend(s(&["--permission-mode", if grants.edit { "acceptEdits" } else { "default" }]));
+            if grants.exec {
+                tail.extend(s(&["--allowedTools", "Bash"]));
+            }
+            let mut denied: Vec<&str> = Vec::new();
+            if !grants.exec {
+                denied.push("Bash");
+            }
+            if !grants.edit {
+                denied.extend(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+            }
+            if !denied.is_empty() {
+                tail.extend(["--disallowedTools".to_string(), denied.join(",")]);
+            }
             if !agent.inherit_config {
                 tail.extend(s(&["--setting-sources", "project,local", "--strict-mcp-config"]));
             }
@@ -87,7 +128,7 @@ pub fn build_args(
             lead.extend(s(&["exec", "--json", "--skip-git-repo-check"]));
             // Codex has no separate switch for commands: its sandbox keeps
             // them inside the worktree (and offline) either way.
-            tail.extend(s(&["--sandbox", "workspace-write"]));
+            tail.extend(s(&["--sandbox", if grants.edit { "workspace-write" } else { "read-only" }]));
             if let Some(e) = opts.get("effort") {
                 tail.extend(["-c".into(), format!("model_reasoning_effort={e}")]);
                 handled.push("effort");
@@ -95,7 +136,12 @@ pub fn build_args(
         }
         Dialect::Gemini | Dialect::Qwen => {
             lead.extend(s(&["--output-format", "stream-json"]));
-            tail.extend(s(&["--approval-mode", if policy.allow_execute { "yolo" } else { "auto_edit" }]));
+            let mode = match (grants.edit, grants.exec) {
+                (false, _) => "plan",
+                (true, true) => "yolo",
+                (true, false) => "auto_edit",
+            };
+            tail.extend(s(&["--approval-mode", mode]));
             // Every run gets a fresh worktree that Gemini CLI has never seen;
             // untrusted, it drops the approval mode back to "ask", which a
             // headless run cannot answer. Trust it for this session only.
@@ -107,20 +153,27 @@ pub fn build_args(
             lead.extend(s(&["-p", "--output-format", "stream-json"]));
             // Headless runs stop at the workspace trust prompt otherwise.
             tail.push("--trust".into());
-            if policy.allow_execute {
+            if grants.exec && grants.edit {
                 tail.push("--force".into());
             }
         }
         Dialect::Copilot => {
             lead.push("-p".into());
-            tail.extend(s(&["--allow-tool", "write"]));
-            tail.extend(s(if policy.allow_execute { &["--allow-all-tools"] } else { &["--deny-tool", "shell"] }));
+            if grants.edit {
+                tail.extend(s(&["--allow-tool", "write"]));
+            } else {
+                tail.extend(s(&["--deny-tool", "write"]));
+            }
+            tail.extend(s(if grants.exec && grants.edit { &["--allow-all-tools"] } else { &["--deny-tool", "shell"] }));
         }
         Dialect::Aider => {
             // orchopork checkpoints the worktree itself.
             tail.extend(s(&["--yes-always", "--no-auto-commits", "--no-check-update", "--no-pretty", "--no-stream"]));
-            if !policy.allow_execute {
+            if !grants.exec {
                 tail.push("--no-suggest-shell-commands".into());
+            }
+            if !grants.edit {
+                tail.push("--dry-run".into());
             }
         }
         Dialect::Antigravity => {
@@ -131,7 +184,9 @@ pub fn build_args(
             // agy has no flag that allows only shell commands, so with
             // commands on every tool call is approved. With them off,
             // your own `permissions.allow` rules in agy's settings apply.
-            if policy.allow_execute {
+            if !grants.edit {
+                tail.extend(s(&["--mode", "plan"]));
+            } else if grants.exec {
                 tail.push("--dangerously-skip-permissions".into());
             }
         }
@@ -254,7 +309,8 @@ pub async fn run(
     if let Some(f) = &file {
         tokio::fs::write(f, prompt).await?;
     }
-    let mut args = build_args(agent, options, policy, file.as_deref(), prompt);
+    let grants = Grants::settle(agent, &policy).await;
+    let mut args = build_args(agent, options, grants, file.as_deref(), prompt);
     if agent.dialect == Dialect::Antigravity {
         // agy gives up after 5 minutes by default; orchopork's own limit rules.
         args.extend(["--print-timeout".into(), format!("{}m", timeout.as_secs().div_ceil(60).max(1))]);
@@ -881,10 +937,10 @@ mod tests {
         assert_eq!(bad.error.as_deref(), Some("authentication required"));
 
         let agy = ExternalAgent::new("g", "G", "agy", &[]).cli(Dialect::Antigravity);
-        let a = build_args(&agy, &BTreeMap::new(), Policy { allow_execute: false }, None, "x");
+        let a = build_args(&agy, &BTreeMap::new(), Grants { exec: false, edit: true }, None, "x");
         assert_eq!(a, ["-p", "--input-format", "stream-json", "--output-format", "stream-json"]);
         assert!(
-            build_args(&agy, &BTreeMap::new(), Policy { allow_execute: true }, None, "x")
+            build_args(&agy, &BTreeMap::new(), Grants { exec: true, edit: true }, None, "x")
                 .contains(&"--dangerously-skip-permissions".to_string())
         );
         let line = stdin_payload(Dialect::Antigravity, "fix \"it\"\nnow");
@@ -892,12 +948,51 @@ mod tests {
         assert_eq!(v["message"]["content"], "fix \"it\"\nnow");
     }
 
+    #[tokio::test]
+    async fn roles_and_approvals_become_cli_flags() {
+        let claude = ExternalAgent::new("c", "C", "claude", &[]).cli(Dialect::Claude);
+        // A role without edits: read-only, whatever approvals say.
+        let reviewer = Policy { allow_execute: true, deny: vec!["edit".into()], approve: None };
+        let g = Grants::settle(&claude, &reviewer).await;
+        assert_eq!(g, Grants { exec: true, edit: false });
+        let a = build_args(&claude, &BTreeMap::new(), g, None, "x").join(" ");
+        assert!(
+            a.contains("--permission-mode default")
+                && a.contains("--disallowedTools Edit,Write,MultiEdit,NotebookEdit"),
+            "{a}"
+        );
+        // Approvals are asked once per kind; a refusal turns that kind off.
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = asked.clone();
+        let approve: super::super::Approver = std::sync::Arc::new(move |kind: String, _t: String, _c: Value| {
+            log.lock().unwrap().push(kind.clone());
+            Box::pin(async move { kind == "edit" })
+        });
+        let manual = Policy { allow_execute: true, deny: vec![], approve: Some(approve) };
+        let g = Grants::settle(&claude, &manual).await;
+        assert_eq!(g, Grants { exec: false, edit: true });
+        assert_eq!(*asked.lock().unwrap(), ["edit", "execute"]);
+        let a = build_args(&claude, &BTreeMap::new(), g, None, "x").join(" ");
+        assert!(a.contains("--permission-mode acceptEdits --disallowedTools Bash"), "{a}");
+        let ro = Grants { exec: false, edit: false };
+        for (d, flag) in [
+            (Dialect::Codex, "read-only"),
+            (Dialect::Gemini, "plan"),
+            (Dialect::Aider, "--dry-run"),
+            (Dialect::Antigravity, "plan"),
+        ] {
+            let agent = ExternalAgent::new("x", "X", "x", &[]).cli(d);
+            let a = build_args(&agent, &BTreeMap::new(), ro, None, "x");
+            assert!(a.iter().any(|x| x == flag), "{d:?}: {a:?}");
+        }
+    }
+
     #[test]
     fn builds_flags_from_policy_and_options() {
         let claude = ExternalAgent::new("c", "C", "claude", &["--add-dir", "../shared"]).cli(Dialect::Claude);
         let opts: BTreeMap<String, String> =
             [("model".to_string(), "opus".to_string()), ("effort".to_string(), "high".to_string())].into();
-        let a = build_args(&claude, &opts, Policy { allow_execute: false }, None, "hi").join(" ");
+        let a = build_args(&claude, &opts, Grants { exec: false, edit: true }, None, "hi").join(" ");
         assert!(a.starts_with("-p --output-format stream-json --verbose --add-dir ../shared"), "{a}");
         assert!(a.contains("--disallowedTools Bash") && a.contains("--model opus"), "{a}");
         assert!(a.contains("--effort high"), "{a}");
@@ -905,32 +1000,32 @@ mod tests {
         let mut isolated = claude.clone();
         isolated.inherit_config = false;
         assert!(
-            build_args(&isolated, &BTreeMap::new(), Policy { allow_execute: true }, None, "")
+            build_args(&isolated, &BTreeMap::new(), Grants { exec: true, edit: true }, None, "")
                 .join(" ")
                 .contains("--allowedTools Bash --setting-sources project,local --strict-mcp-config")
         );
 
         let codex = ExternalAgent::new("x", "X", "codex", &[]).cli(Dialect::Codex);
         let m: BTreeMap<String, String> = [("model".to_string(), "gpt-5".to_string())].into();
-        let a = build_args(&codex, &m, Policy { allow_execute: true }, None, "hi");
+        let a = build_args(&codex, &m, Grants { exec: true, edit: true }, None, "hi");
         assert_eq!(a[..3], ["exec", "--model", "gpt-5"]);
         assert_eq!(a.last().map(String::as_str), Some("-"), "codex reads the task from stdin");
 
         let aider = ExternalAgent::new("a", "A", "aider", &["--message-file", "{prompt_file}"]).cli(Dialect::Aider);
         let a =
-            build_args(&aider, &BTreeMap::new(), Policy { allow_execute: false }, Some(Path::new("/tmp/t.md")), "x");
+            build_args(&aider, &BTreeMap::new(), Grants { exec: false, edit: true }, Some(Path::new("/tmp/t.md")), "x");
         assert_eq!(a[..2], ["--message-file", "/tmp/t.md"]);
         assert!(a.contains(&"--no-auto-commits".to_string()));
         let gemini = ExternalAgent::new("g", "G", "gemini", &[]).cli(Dialect::Gemini);
-        let a = build_args(&gemini, &BTreeMap::new(), Policy { allow_execute: true }, None, "x");
+        let a = build_args(&gemini, &BTreeMap::new(), Grants { exec: true, edit: true }, None, "x");
         assert_eq!(a, ["--output-format", "stream-json", "--approval-mode", "yolo", "--skip-trust"]);
         let qwen = ExternalAgent::new("q", "Q", "qwen", &[]).cli(Dialect::Qwen);
         assert!(
-            !build_args(&qwen, &BTreeMap::new(), Policy { allow_execute: true }, None, "x")
+            !build_args(&qwen, &BTreeMap::new(), Grants { exec: true, edit: true }, None, "x")
                 .contains(&"--skip-trust".into())
         );
         let cursor = ExternalAgent::new("u", "U", "cursor-agent", &["{prompt}"]).cli(Dialect::Cursor);
-        let a = build_args(&cursor, &BTreeMap::new(), Policy { allow_execute: true }, None, "do it");
+        let a = build_args(&cursor, &BTreeMap::new(), Grants { exec: true, edit: true }, None, "do it");
         assert_eq!(a, ["-p", "--output-format", "stream-json", "do it", "--trust", "--force"]);
     }
 
@@ -1020,7 +1115,7 @@ exec \"{}\" \"{}\" \"$@\"
             d.path(),
             &prompt,
             &BTreeMap::new(),
-            Policy { allow_execute: true },
+            Policy { allow_execute: true, ..Default::default() },
             Duration::from_secs(60),
             &never,
             |u| {
@@ -1042,7 +1137,7 @@ exec \"{}\" \"{}\" \"$@\"
             d.path(),
             "t",
             &BTreeMap::new(),
-            Policy { allow_execute: false },
+            Policy { allow_execute: false, ..Default::default() },
             Duration::from_secs(60),
             &never,
             |_| {},
@@ -1056,7 +1151,7 @@ exec \"{}\" \"{}\" \"$@\"
             d.path(),
             "please fail",
             &BTreeMap::new(),
-            Policy { allow_execute: true },
+            Policy { allow_execute: true, ..Default::default() },
             Duration::from_secs(60),
             &never,
             |_| {},
@@ -1074,7 +1169,7 @@ exec \"{}\" \"{}\" \"$@\"
             d.path(),
             "t",
             &BTreeMap::new(),
-            Policy { allow_execute: true },
+            Policy { allow_execute: true, ..Default::default() },
             Duration::from_secs(60),
             &stop,
             |_| {},
@@ -1095,7 +1190,7 @@ line \"task\" {}",
             d.path(),
             &task,
             &BTreeMap::new(),
-            Policy { allow_execute: true },
+            Policy { allow_execute: true, ..Default::default() },
             Duration::from_secs(60),
             &never,
             |_| {},

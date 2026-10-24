@@ -11,14 +11,14 @@ use orchopork::config::ModelRef;
 use orchopork::graph::{Engine, Event};
 use orchopork::providers::ProviderId;
 use orchopork::server;
-use orchopork::storage::{Run, RunStatus, Step, StepKind};
+use orchopork::storage::{Autonomy, Run, RunSpec, RunStatus, Step, StepKind};
 
 #[derive(Parser)]
 #[command(name = "orchopork", version, about = "Lean hybrid local/cloud LLM agent orchestration engine")]
 struct Cli {
     /// Workspace root (a git repository); `.orchopork/` lives under it.
-    #[arg(long, global = true, default_value = ".")]
-    workspace: PathBuf,
+    #[arg(long, global = true)]
+    workspace: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -30,14 +30,8 @@ enum Command {
     Serve {
         #[arg(long, default_value_t = 7878)]
         port: u16,
-        /// Address to listen on. Anything but loopback (e.g. 0.0.0.0) lets
-        /// other machines in, and they need the access token.
         #[arg(long, default_value = "127.0.0.1")]
-        host: std::net::IpAddr,
-        /// Access token for other machines (default: $ORCHOPORK_TOKEN, else
-        /// one generated once and kept in ~/.orchopork/access-token).
-        #[arg(long)]
-        token: Option<String>,
+        host: String,
     },
     /// Set up a workspace without the web wizard.
     Init {
@@ -67,6 +61,10 @@ enum Command {
         /// Command that must succeed before the run may finish (e.g. "cargo test").
         #[arg(long)]
         verify: Option<String>,
+        /// full: never ask; semi: ask before commands and deletions;
+        /// manual: ask before every change.
+        #[arg(long, default_value = "full", value_parser = parse_autonomy)]
+        autonomy: Autonomy,
     },
     /// List runs.
     Runs,
@@ -132,6 +130,11 @@ fn parse_model(s: &str) -> Result<ModelRef, String> {
     ModelRef::parse(s).map_err(|e| e.to_string())
 }
 
+fn parse_autonomy(s: &str) -> Result<Autonomy, String> {
+    serde_json::from_value(serde_json::Value::String(s.trim().to_lowercase()))
+        .map_err(|_| format!("expected full, semi or manual, got {s:?}"))
+}
+
 fn parse_provider(s: &str) -> Result<ProviderId, String> {
     ProviderId::parse(s).map_err(|e| e.to_string())
 }
@@ -148,10 +151,10 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let root = cli.workspace;
-    let default = Command::Serve { port: 7878, host: std::net::Ipv4Addr::LOCALHOST.into(), token: None };
-    match cli.command.unwrap_or(default) {
-        Command::Serve { port, host, token } => serve(root, host, port, token).await,
+    let explicit_workspace = cli.workspace.clone();
+    let root = cli.workspace.unwrap_or_else(|| PathBuf::from("."));
+    match cli.command.unwrap_or(Command::Serve { port: 7878, host: "0.0.0.0".into() }) {
+        Command::Serve { port, host } => serve(explicit_workspace, &host, port).await,
         Command::Init { git_init, actor, planner, critic, escalation, ollama_url, llamacpp_url, cap } => {
             let ws = Workspace::open(&root).await?;
             if git_init {
@@ -191,10 +194,11 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::Run { goal, verify } => {
+        Command::Run { goal, verify, autonomy } => {
             let engine = engine(&root).await?;
             let mut rx = engine.subscribe();
-            let run = engine.create_run(&goal, verify.as_deref(), Default::default()).await?;
+            let spec = RunSpec { autonomy, ..Default::default() };
+            let run = engine.create_run(&goal, verify.as_deref(), spec).await?;
             println!("run {} on branch {} ({})", run.id, run.branch, run.worktree);
             follow(&engine, &run.id, &mut rx).await
         }
@@ -333,36 +337,42 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn serve(root: PathBuf, host: std::net::IpAddr, port: u16, token: Option<String>) -> anyhow::Result<()> {
-    use server::access::{self, Access};
-    let root = orchopork::fsutil::strip_verbatim(std::path::absolute(&root)?);
+async fn serve(root: Option<PathBuf>, host: &str, port: u16) -> anyhow::Result<()> {
+    let root = match root {
+        Some(r) => Some(orchopork::fsutil::strip_verbatim(std::path::absolute(&r)?)),
+        None => None,
+    };
     let state = server::AppState::new(root).await?;
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
-    println!("orchopork is running at http://localhost:{port}");
-    let access = if host.is_loopback() {
-        Access::local_only()
-    } else {
-        let token = access::load_or_create(token)?;
-        let settings = access::settings_file();
-        let require = access::load_require_token(settings.as_deref());
-        let shown = if host.is_unspecified() { access::lan_ip().unwrap_or(host) } else { host };
-        let shown = if shown.is_ipv6() { format!("[{shown}]") } else { shown.to_string() };
+    println!("orchopork is running at:");
+    println!("  Local:  http://localhost:{port}");
+    let loopback = host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()) || host == "localhost";
+    if !loopback {
+        let shown = if host == "0.0.0.0" || host == "::" { lan_ip().unwrap_or_else(|| "<ip>".into()) } else { host.to_string() };
         let base = format!("http://{shown}:{port}");
-        if require {
-            println!("From other machines: {base}/?token={token}");
-            println!("Anyone with this link can run commands on this machine through the agents; keep it private.");
-            if let Some(f) = access::token_file() {
-                println!("(token kept in {}; delete it to issue a new one)", f.display());
-            }
-        } else {
-            println!("From other machines: {base} (no access token: turn it on in Settings → Remote access)");
-            println!("Anyone who can reach this port can run commands on this machine through the agents.");
-        }
-        Access::remote(token, require).saved_in(settings).reachable_at(base)
-    };
-    let app = server::router_with(state, access).into_make_service_with_connect_info::<std::net::SocketAddr>();
-    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
+        println!("  Remote: {base} (access token: Settings → Remote access)");
+        state.set_remote_base(base);
+    }
+    if cfg!(windows) && !loopback {
+        // Windows drops inbound connections silently unless allowed, so a
+        // remote browser just spins forever. Say how to allow it.
+        println!("  If remote browsers hang while loading, Windows Firewall is blocking port {port}.");
+        println!("  Allow it once from an elevated PowerShell:");
+        println!(
+            "    New-NetFirewallRule -DisplayName \"orchopork {port}\" -Direction Inbound -Protocol TCP -LocalPort {port} -Action Allow -Profile Any"
+        );
+    }
+    axum::serve(listener, server::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown_signal()).await?;
     Ok(())
+}
+
+/// This machine's address on the local network (no packet is sent:
+/// connecting a UDP socket only picks a route).
+fn lan_ip() -> Option<String> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("192.0.2.1:9").ok()?;
+    let ip = s.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then(|| ip.to_string())
 }
 
 async fn shutdown_signal() {
@@ -387,6 +397,32 @@ async fn follow(engine: &Engine, run_id: &str, rx: &mut tokio::sync::broadcast::
             ev = rx.recv() => match ev {
                 Ok(Event::Step { step }) if step.run_id == run_id => print_step(&step, false),
                 Ok(Event::Log { run_id: r, message }) if r == run_id => println!("   · {message}"),
+                Ok(Event::Approval { run_id: r, approval: Some(a) }) if r == run_id => {
+                    let args = serde_json::to_string_pretty(&a.args).unwrap_or_default();
+                    println!("\n?  {} wants to run {} ({}):\n{}", a.agent.as_deref().unwrap_or("the agent"), a.tool, a.class, orchopork::fsutil::clip(&args, 2000));
+                    println!("   allow? [y]es / [n]o / [a]lways for this tool / or type a reason to decline");
+                    let (engine, run_id, id) = (engine.clone(), run_id.to_string(), a.id.clone());
+                    tokio::spawn(async move {
+                        let line = tokio::task::spawn_blocking(|| {
+                            let mut s = String::new();
+                            std::io::stdin().read_line(&mut s).map(|_| s)
+                        })
+                        .await;
+                        let answer = match line {
+                            Ok(Ok(s)) => s.trim().to_string(),
+                            _ => return,
+                        };
+                        let (allow, always, note) = match answer.to_lowercase().as_str() {
+                            "y" | "yes" | "" => (true, false, String::new()),
+                            "a" | "always" => (true, true, String::new()),
+                            "n" | "no" => (false, false, String::new()),
+                            _ => (false, false, answer),
+                        };
+                        if let Err(e) = engine.decide(&run_id, &id, allow, always, &note) {
+                            eprintln!("   {e}");
+                        }
+                    });
+                }
                 Ok(Event::Run { run }) if run.id == run_id && run.status != RunStatus::Running && !engine.is_active(run_id) => {
                     print_final(&run);
                     return Ok(());

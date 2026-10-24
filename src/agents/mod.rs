@@ -127,11 +127,30 @@ impl ExternalAgent {
     }
 }
 
+/// Asks the user about one tool call: (kind, title, toolCall) → allowed.
+pub type Approver =
+    std::sync::Arc<dyn Fn(String, String, Value) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+
 /// What the agent may do without asking a human.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Default)]
 pub struct Policy {
-    /// Allow shell commands.
+    /// Allow tool calls of kind `execute` (shell commands).
     pub allow_execute: bool,
+    /// Kinds of tool calls refused outright (`edit`, `delete`, `move`,
+    /// `fetch`, ...), whatever the approvals say: an agent's role or
+    /// internet level takes them away. Over ACP only calls the agent asks
+    /// permission for, and file writes it sends us, can be refused; a CLI
+    /// gets the matching flags (see `cli::build_args`).
+    pub deny: Vec<String>,
+    /// Consulted for calls the policy allows (autonomy / approvals). A CLI
+    /// cannot ask per call, so it is consulted once per turn instead.
+    pub approve: Option<Approver>,
+}
+
+impl Policy {
+    pub fn denies(&self, kind: &str) -> bool {
+        self.deny.iter().any(|d| d == kind)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -322,19 +341,8 @@ pub(crate) fn spawn(agent: &ExternalAgent, cwd: &Path, args: &[String], direct: 
 /// real agent as a grandchild, which killing the direct child would leave
 /// running.
 pub(crate) fn kill_tree(child: &mut Child) {
-    if let Some(pid) = child.id() {
-        #[cfg(windows)]
-        let _ = std::process::Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        #[cfg(unix)]
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &format!("-{pid}")])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+    if let Ok(None) = child.try_wait() {
+        crate::graph::tools::processes::kill_tree(child.id());
     }
     let _ = child.start_kill();
 }

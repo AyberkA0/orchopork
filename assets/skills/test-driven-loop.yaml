@@ -1,9 +1,8 @@
 name: "test-driven-loop"
-version: "1.1.0"
+version: "1.0.0"
 type: "system_modifier"
 description: "Requires a failing test before any production change."
 priority: 30
-applies_to: ["solo", "worker", "!role:doc"]
 prompt_injection: |
   Before modifying production code, write a test that fails for the stated reason
   and confirm it fails. Only then implement the minimal change to make it pass.

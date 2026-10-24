@@ -10,16 +10,38 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("explain-like-principal.yaml", include_str!("../../assets/skills/explain-like-principal.yaml")),
     ("test-driven-loop.yaml", include_str!("../../assets/skills/test-driven-loop.yaml")),
     ("markdown-memory-sync.yaml", include_str!("../../assets/skills/markdown-memory-sync.yaml")),
-    ("team-bugfix.yaml", include_str!("../../assets/skills/team-bugfix.yaml")),
-    ("team-feature.yaml", include_str!("../../assets/skills/team-feature.yaml")),
-    ("team-refactor.yaml", include_str!("../../assets/skills/team-refactor.yaml")),
+    ("no-false-claims.yaml", include_str!("../../assets/skills/no-false-claims.yaml")),
+    ("team-protocol.yaml", include_str!("../../assets/skills/team-protocol.yaml")),
+    ("role-lead.yaml", include_str!("../../assets/skills/role-lead.yaml")),
+    ("role-coder.yaml", include_str!("../../assets/skills/role-coder.yaml")),
+    ("role-tester.yaml", include_str!("../../assets/skills/role-tester.yaml")),
+    ("role-visual-tester.yaml", include_str!("../../assets/skills/role-visual-tester.yaml")),
+    ("role-reviewer.yaml", include_str!("../../assets/skills/role-reviewer.yaml")),
+    ("role-researcher.yaml", include_str!("../../assets/skills/role-researcher.yaml")),
+    ("role-docs-writer.yaml", include_str!("../../assets/skills/role-docs-writer.yaml")),
+    ("role-refactorer.yaml", include_str!("../../assets/skills/role-refactorer.yaml")),
+    ("role-dispatcher.yaml", include_str!("../../assets/skills/role-dispatcher.yaml")),
 ];
 
-/// Enabled on a workspace's first run. Kept short on purpose: every enabled
-/// modifier costs context on every call, which small local models feel.
-/// Team templates cost context only in the one team-design call.
-pub const DEFAULT_ENABLED: &[&str] =
-    &["anti-sycophancy-terse", "test-driven-loop", "team-bugfix", "team-feature", "team-refactor"];
+/// Enabled on a workspace's first run, and when an update ships them as new
+/// files. Kept short on purpose: every enabled modifier costs context on
+/// every call, which small local models feel. The role playbooks only cost
+/// their own role's agents (team-protocol plus one role per agent).
+pub const DEFAULT_ENABLED: &[&str] = &[
+    "anti-sycophancy-terse",
+    "test-driven-loop",
+    "no-false-claims",
+    "team-protocol",
+    "role-lead",
+    "role-coder",
+    "role-tester",
+    "role-visual-tester",
+    "role-reviewer",
+    "role-researcher",
+    "role-docs-writer",
+    "role-refactorer",
+    "role-dispatcher",
+];
 
 #[derive(Debug, Default)]
 pub struct LoadReport {
@@ -29,16 +51,19 @@ pub struct LoadReport {
     pub errors: Vec<(PathBuf, String)>,
 }
 
-/// Write bundled skills that are not on disk yet (never overwrites user edits).
-pub fn install_bundled(dir: &Path) -> Result<()> {
+/// Write bundled skills that are not on disk yet (never overwrites user
+/// edits). Returns the names of the ones written now.
+pub fn install_bundled(dir: &Path) -> Result<Vec<String>> {
     std::fs::create_dir_all(dir)?;
+    let mut added = Vec::new();
     for (file, body) in BUNDLED {
         let p = dir.join(file);
         if !p.exists() {
             std::fs::write(p, body)?;
+            added.push(file.trim_end_matches(".yaml").to_string());
         }
     }
-    Ok(())
+    Ok(added)
 }
 
 pub fn load_dir(dir: &Path) -> Result<LoadReport> {

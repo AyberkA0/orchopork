@@ -11,8 +11,8 @@ use std::sync::RwLock;
 
 use serde::Serialize;
 
-pub use compose::{ComposedPrompt, Scope, Violation, compose, compose_for};
-pub use model::{Skill, SkillType};
+pub use compose::{ComposedPrompt, Violation, compose};
+pub use model::{Audience, Skill, SkillType};
 
 use crate::error::{Error, Result};
 
@@ -43,7 +43,7 @@ impl SkillRegistry {
     /// the enabled set (`loader::DEFAULT_ENABLED` on first run).
     pub fn open(dir: impl Into<PathBuf>, state_file: impl Into<PathBuf>) -> Result<Self> {
         let reg = Self { dir: dir.into(), state_file: state_file.into(), inner: RwLock::default() };
-        loader::install_bundled(&reg.dir)?;
+        let added = loader::install_bundled(&reg.dir)?;
         let first_run = !reg.state_file.exists();
         reg.reload()?;
         if first_run {
@@ -52,6 +52,17 @@ impl SkillRegistry {
                 loader::DEFAULT_ENABLED.iter().filter(|n| g.skills.contains_key(**n)).map(|n| n.to_string()).collect();
             drop(g);
             reg.persist()?;
+        } else {
+            // An update that ships a new default skill turns it on once; the
+            // user can switch it off, and it stays off (the file is there).
+            let mut g = reg.inner.write().unwrap();
+            let new: Vec<String> =
+                added.into_iter().filter(|n| loader::DEFAULT_ENABLED.contains(&n.as_str()) && g.skills.contains_key(n)).collect();
+            if !new.is_empty() {
+                g.enabled.extend(new);
+                drop(g);
+                reg.persist()?;
+            }
         }
         Ok(reg)
     }
@@ -88,25 +99,30 @@ impl SkillRegistry {
     }
 
     pub fn set_enabled(&self, name: &str, on: bool) -> Result<()> {
-        let mut next = self.inner.read().unwrap().enabled.clone();
-        if on {
-            next.insert(name.into());
-        } else {
-            next.remove(name);
-        }
-        self.replace_enabled(next)
+        self.replace_enabled(|cur| {
+            let mut next = cur.clone();
+            if on {
+                next.insert(name.into());
+            } else {
+                next.remove(name);
+            }
+            next
+        })
     }
 
     pub fn set_enabled_exact(&self, names: &[String]) -> Result<()> {
-        self.replace_enabled(names.iter().cloned().collect())
+        self.replace_enabled(|_| names.iter().cloned().collect())
     }
 
     /// Validates the whole new set (unknown names, declared conflicts,
     /// duplicate tools) *before* committing it, so an invalid combination
     /// is rejected at toggle time instead of failing the next run step.
-    fn replace_enabled(&self, next: BTreeSet<String>) -> Result<()> {
+    /// The new set is computed under the lock, so two toggles at once both
+    /// take effect.
+    fn replace_enabled(&self, change: impl FnOnce(&BTreeSet<String>) -> BTreeSet<String>) -> Result<()> {
         {
             let mut g = self.inner.write().unwrap();
+            let next = change(&g.enabled);
             if let Some(bad) = next.iter().find(|n| !g.skills.contains_key(*n)) {
                 return Err(Error::NotFound(format!("skill {bad}")));
             }
@@ -122,13 +138,27 @@ impl SkillRegistry {
         g.enabled.iter().filter_map(|n| g.skills.get(n).cloned()).collect()
     }
 
+    /// The prompt for single agents and non-flow calls: skills with no role.
     pub fn compose(&self, base: &str) -> Result<ComposedPrompt> {
-        compose(base, &self.enabled_skills())
+        self.compose_for(base, Audience::Single)
     }
 
-    /// The enabled skills that apply to `scope` (see `Skill::applies_to`).
-    pub fn compose_for(&self, base: &str, scope: &Scope) -> Result<ComposedPrompt> {
-        compose_for(base, &self.enabled_skills(), scope)
+    /// The prompt for `who`: the skills that apply everywhere plus the ones
+    /// written for that role.
+    pub fn compose_for(&self, base: &str, who: Audience) -> Result<ComposedPrompt> {
+        let chosen: Vec<Skill> = self.enabled_skills().into_iter().filter(|s| s.applies_to(who)).collect();
+        compose(base, &chosen)
+    }
+
+    /// Only the skills written for `role` (no everywhere-skills): the
+    /// playbook of an agent that is not run through the normal agent loop.
+    pub fn compose_role(&self, role: &str) -> Result<ComposedPrompt> {
+        let chosen: Vec<Skill> = self
+            .enabled_skills()
+            .into_iter()
+            .filter(|s| !s.roles.is_empty() && s.applies_to(Audience::Node(role)))
+            .collect();
+        compose("", &chosen)
     }
 
     fn persist(&self) -> Result<()> {
@@ -150,12 +180,45 @@ mod tests {
     #[test]
     fn bundled_skills_load_and_compose_in_priority_order() {
         let (_t, r) = registry();
-        assert_eq!(r.list().len(), 7);
+        assert_eq!(r.list().len(), loader::BUNDLED.len());
+        let honest = r.compose("").unwrap();
+        assert!(honest.honest && honest.system.contains("Honesty about evidence"), "no-false-claims is on by default");
         r.set_enabled("markdown-memory-sync", true).unwrap();
         let p = r.compose("You are orchopork.").unwrap();
         let a = p.system.find("anti-sycophancy-terse").unwrap();
         let b = p.system.find("markdown-memory-sync").unwrap();
         assert!(p.system.starts_with("You are orchopork.") && a < b);
+    }
+
+    #[test]
+    fn role_playbooks_reach_only_their_role() {
+        let (_t, r) = registry();
+        let single = r.compose("").unwrap().system;
+        assert!(!single.contains("team-protocol") && !single.contains("ROLE: LEAD"), "single agents get no orchestra roles");
+        let lead = r.compose_for("", Audience::Node("lead")).unwrap().system;
+        assert!(lead.contains("ROLE: LEAD") && lead.contains("team-protocol") && !lead.contains("ROLE: CODER"));
+        let coder = r.compose_for("", Audience::Node("coder")).unwrap().system;
+        assert!(coder.contains("ROLE: CODER") && !coder.contains("ROLE: LEAD"));
+        let unknown = r.compose_for("", Audience::Node("")).unwrap().system;
+        assert!(unknown.contains("team-protocol") && !unknown.contains("ROLE: "), "an unrecognised role gets the team rules only");
+        let only = r.compose_role("dispatcher").unwrap().system;
+        assert!(only.contains("ROLE: DISPATCHER") && !only.contains("anti-sycophancy"));
+        for key in crate::storage::ROLE_KEYS {
+            assert!(r.compose_role(key).unwrap().system.contains("ROLE: "), "{key} has a playbook");
+        }
+    }
+
+    #[test]
+    fn a_new_default_skill_is_enabled_once_on_an_existing_workspace() {
+        let (t, r) = registry();
+        r.set_enabled("role-coder", false).unwrap();
+        std::fs::remove_file(t.path().join("skills/role-tester.yaml")).unwrap();
+        r.set_enabled("role-tester", false).ok();
+        drop(r);
+        let r = SkillRegistry::open(t.path().join("skills"), t.path().join("enabled.yaml")).unwrap();
+        let on: Vec<String> = r.enabled_skills().into_iter().map(|s| s.name).collect();
+        assert!(on.contains(&"role-tester".to_string()), "re-installed file is switched on");
+        assert!(!on.contains(&"role-coder".to_string()), "a skill the user switched off stays off");
     }
 
     #[test]
@@ -177,68 +240,6 @@ mod tests {
     }
 
     #[test]
-    fn skills_apply_only_to_their_scopes() {
-        let (_t, r) = registry();
-        r.set_enabled("markdown-memory-sync", true).unwrap();
-        let has = |scope: &Scope, needle: &str| r.compose_for("", scope).unwrap().system.contains(needle);
-        let worker = Scope::agent(false, false, "coder", "Coder", "writes the parser");
-        let docs = Scope::agent(false, false, "docs", "Docs writer", "documents it");
-        let lead = Scope::agent(true, true, "lead", "Lead", "integrates");
-        assert!(
-            has(&worker, "Before modifying production code")
-                && !has(&docs, "Before modifying production code")
-                && !has(&lead, "Before modifying production code")
-        );
-        assert!(
-            has(&Scope::of(&["solo"]), "Before modifying production code")
-                && !has(&Scope::of(&["critic"]), "Before modifying production code")
-        );
-        assert!(has(&lead, "STATE.md") && !has(&worker, "STATE.md"));
-        assert!(has(&docs, "anti-sycophancy-terse"), "unscoped skills apply everywhere");
-        assert!(
-            r.compose("").unwrap().system.contains("Before modifying production code"),
-            "unscoped compose keeps every skill"
-        );
-    }
-
-    #[test]
-    fn team_templates_reach_the_designer_and_scoped_validators_gate_reports() {
-        let (t, r) = registry();
-        let write =
-            |name: &str, body: &str| std::fs::write(t.path().join(format!("skills/{name}.yaml")), body).unwrap();
-        write(
-            "unit-tests",
-            "name: unit-tests\nversion: '1'\ntype: validator\ndescription: d\napplies_to: [role:test]\nvalidator: {command: 'cargo test --lib'}\n",
-        );
-        write(
-            "fmt",
-            "name: fmt\nversion: '1'\ntype: validator\ndescription: d\nvalidator: {command: 'cargo fmt --check'}\n",
-        );
-        r.reload().unwrap();
-        r.set_enabled("unit-tests", true).unwrap();
-        r.set_enabled("fmt", true).unwrap();
-        let note = r.compose_for("", &Scope::of(&["designer"])).unwrap().teams_note();
-        assert!(note.contains("## team-bugfix:") && note.contains("- reproducer (parent lead)"), "{note}");
-        let tester = r.compose_for("", &Scope::agent(false, false, "tester", "Tester", "tests")).unwrap();
-        assert_eq!(tester.report_gates(), [("unit-tests".to_string(), "cargo test --lib".to_string())]);
-        assert_eq!(tester.verify_commands().len(), 2);
-        let coder = r.compose_for("", &Scope::agent(false, false, "coder", "Coder", "code")).unwrap();
-        assert!(coder.report_gates().is_empty(), "unscoped validators gate only the final finish");
-    }
-
-    #[test]
-    fn bad_scopes_and_teams_are_rejected() {
-        let bad = |rest: &str| {
-            let yaml = format!("name: a\nversion: '1'\ndescription: d\n{rest}");
-            loader::parse_skill(std::path::Path::new("x.yaml"), &yaml).is_err()
-        };
-        assert!(bad("type: system_modifier\nprompt_injection: x\napplies_to: [boss]\n"));
-        assert!(bad("type: team_template\nteam: []\n"));
-        assert!(bad("type: team_template\nteam: [{id: a, task: t}, {id: b, task: t}]\n"));
-        assert!(!bad("type: system_modifier\nprompt_injection: x\napplies_to: [worker, '!role:doc']\n"));
-    }
-
-    #[test]
     fn conflicts_are_rejected() {
         let mk = |name: &str, c: &str| Skill {
             name: name.into(),
@@ -248,10 +249,9 @@ mod tests {
             prompt_injection: "x".into(),
             priority: 1,
             conflicts_with: vec![c.into()],
+            roles: vec![],
             tools: vec![],
             validator: None,
-            applies_to: vec![],
-            team: vec![],
         };
         assert!(compose("", &[mk("a", "b"), mk("b", "a")]).is_err());
     }

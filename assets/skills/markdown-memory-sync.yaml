@@ -1,9 +1,8 @@
 name: "markdown-memory-sync"
-version: "1.1.0"
+version: "1.0.0"
 type: "system_modifier"
 description: "Keeps STATE.md, PROJECT_CONTEXT.md and SCRATCHPAD.md consistent."
 priority: 40
-applies_to: ["solo", "lead"]
 prompt_injection: |
   Maintain three files at the workspace root:
   - PROJECT_CONTEXT.md: stable goal, constraints, architecture decisions. Edit only on goal/design change.

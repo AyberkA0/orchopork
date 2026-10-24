@@ -54,7 +54,7 @@ pull requests are welcome.
 
 ```text
   +------------------------------------------------------------------+
-  |  Patterns     hierarchy, pipeline, fan-out, debate, vote, ...    |   what the team looks like
+  |  Patterns     pipeline, fan-out, review loops, debate, vote, ... |   what the team looks like
   +------------------------------------------------------------------+
   |  Nodes        one agent = one model + role + task + tools        |   who does the work
   +------------------------------------------------------------------+
@@ -68,26 +68,28 @@ pull requests are welcome.
 - **Nodes.** A node is an agent: a model (any provider, or an external agent such as Claude Code), a role, a task
   and the tools it may use. Nodes do not care which vendor sits behind them; they all speak the same text
   protocol.
-- **Patterns.** Nodes are wired into an orchestration. Today that is a chain-of-command tree, which
-  also gives fan-out / fan-in and a blackboard-style shared state, plus the classic plan-act-verify-review
-  pipeline; the rest of the pattern library is on the roadmap.
+- **Patterns.** Nodes are wired into a flow graph: a line from a Lead through the agents to an optional Goal,
+  Dispatchers that run branches of agents in parallel, links that let two agents consult, test and review each
+  other, and notebooks for shared memory. That already gives pipelines, fan-out / fan-in, review loops and a
+  blackboard-style shared state, plus the classic plan-act-verify-review pipeline for a single agent; the rest of
+  the pattern library is on the roadmap.
 
 ## Orchestration patterns
 
 <p align="center">
-  <img src="docs/img/fig2-patterns.svg" alt="Eight orchestration patterns: hierarchy, pipeline, fan-out / fan-in and blackboard are available; debate, ensemble voting, router and evaluator loop are planned" width="100%">
+  <img src="docs/img/fig2-patterns.svg" alt="Eight orchestration patterns: hierarchy, pipeline, fan-out / fan-in, evaluator loop and blackboard are available; debate, ensemble voting and router are planned" width="100%">
 </p>
 
 | Pattern           | Status    | Shape                                                                         |
 |-------------------|-----------|-------------------------------------------------------------------------------|
-| Hierarchy         | available | A lead commands agents, who may command agents. Work flows bottom-up.          |
-| Pipeline          | available | plan, act, verify, review, with loops back on failure.                         |
-| Fan-out / fan-in  | available | A commander splits the work among subordinates and merges their reports. Agents take turns; truly parallel branches are planned. |
+| Hierarchy         | available | The Lead plans and hands work to its agents, and sends the responsible one back when the Goal check fails. One level; deeper chains of command are planned. |
+| Pipeline          | available | Agents in a line, each handing its report and diff to the next; plan, act, verify, review for a single agent. |
+| Fan-out / fan-in  | available | A Dispatcher runs branches of agents at the same time, each in its own worktree, then merges their work. |
 | Debate            | planned   | Agents critique each other for N rounds; a judge decides.                      |
 | Ensemble / vote   | planned   | The same task to several models; majority or a scorer picks.                  |
 | Router            | planned   | A cheap classifier sends each task to the cheapest model that can handle it.   |
-| Evaluator loop    | planned   | A maker and a judge iterate until a bar is met (reflection).                   |
-| Blackboard        | available | Agents share one worktree and see each other's reports as they arrive. Turn order follows the tree; opportunistic turns are planned. |
+| Evaluator loop    | available | A Report or Approve link between a maker and a reviewer: the work goes back until the reviewer accepts it, within the link's round limit. |
+| Blackboard        | available | Agents share a notebook (and the worktree) and read each other's notes. Turn order follows the flow; opportunistic turns are planned. |
 
 The point of having all of them in one harness is that they can be compared on equal terms: same tasks, same
 models, same accounting.
@@ -106,9 +108,9 @@ The goal is split into parts, and each part runs with the pattern (and the model
 its result to the next. Metrics are recorded per agent, so you can see what each part cost and what it delivered,
 and swap a pattern out on the next run where it did not pay off.
 
-Today this works within the orchestra tree: every commander's subtree can take its own shape, such as a wide
-fan-out of readers under one commander and a deeper chain of command under another, each with its own models.
-Debate, voting, the router and the evaluator loop join the mix as they arrive in the pattern library.
+Today this works within one flow: a Dispatcher's branches for the wide reading, a line of builders after it, a
+reviewer linked back to them, each node with its own model. Debate, voting and the router join the mix as they
+arrive in the pattern library.
 
 ## Metrics
 
@@ -143,19 +145,19 @@ some machine", and the coordinator will plan with each machine's resources and c
 
 Roadmap, roughly in order:
 
-- [x] Single agent and hierarchical orchestra with a visual team editor
+- [x] Single agent and orchestra flows with a visual node editor (Lead, agents, Dispatchers, Goal, notebooks)
 - [x] Hybrid local/cloud routing, escalation and a hard monthly budget
 - [x] External agents over ACP (Claude Code, Gemini CLI, Codex, Qwen Code, Cursor, Copilot, OpenCode, Goose)
 - [x] Headless CLI agents that run with your installed setup (`claude -p`, `codex exec`, `gemini`, `cursor-agent`, `copilot`, `agy`, `aider`)
 - [x] Prompt caching and per-agent token/cost metrics
-- [x] Agent contracts (owned files, acceptance criteria, verify commands) and team templates
-- [x] Fan-out / fan-in and blackboard-style shared state, through the orchestra tree
-- [x] Agents ask questions; you answer, or their commander does
+- [x] Role playbooks, success criteria with an independent judge, and preflight checks
+- [x] Truly parallel fan-out branches, review and evaluator loops over links, shared notebooks
+- [x] Autonomy modes with approvals, and per-agent internet access
+- [x] Agents ask questions; you answer, or the Lead does
 - [x] Outputs in the UI: preview images, SVG, web pages, markdown and code a run produced
 - [x] Measurements page: every run measured, any runs compared side by side
-- [ ] Pattern library: debate, voting, router, evaluator loop
-- [ ] Parallel fan-out branches and opportunistic blackboard turns
-- [ ] Free-form node graph (any pattern, not only trees)
+- [ ] Pattern library: debate, voting, router
+- [ ] Deeper chains of command and opportunistic blackboard turns
 - [ ] Benchmark mode: one goal, many orchestrations launched together, a comparison report
 - [ ] Remote orchopork nodes and cross-server orchestration
 
@@ -174,8 +176,8 @@ Anyone who can reach that port can then make the agents run commands on this mac
 your firewall only on private networks. For more protection, turn on **Settings → Remote access → Require an access
 token**: other devices then open the link shown there (such as `http://192.168.1.10:7878/?token=…`) once, which keeps
 the token in that browser; scripts can send it as `Authorization: Bearer <token>`. Requests from this machine never
-need it. The setting is saved in `~/.orchopork/server.json` and is off by default. The token is kept in
-`~/.orchopork/access-token` (or pass `--token`, or set `ORCHOPORK_TOKEN`); delete that file to issue a new one.
+need it. The setting is saved in `~/.orchopork/server.json` and is off by default; tokens are kept in
+`~/.orchopork/tokens.json` and can only be managed from this machine.
 Without a token, other devices must use the IP address, not a host name: that is what keeps web pages from reaching
 orchopork through DNS rebinding.
 
@@ -183,30 +185,40 @@ The interface is a chat box. When you send a message, orchopork asks **"Activate
 
 - **No, single agent.** Pick a model (local or cloud). One agent with tools works on the request like a classic
   coding assistant. Replying continues the same conversation. This is also your baseline.
-- **Yes, orchestra.** Pick a lead model. The lead drafts a team, and you review it on a canvas before anything
-  runs.
+- **Yes, orchestra.** Pick a lead model. The Lead designs a flow of agents, and you review it on a canvas before
+  anything runs.
 
-### The team editor
+### The flow editor
 
 ```text
-                    [ lead ]                       general      > 1000 under command
-                   /        \                      major        <= 1000
-            [ backend ]   [ tests ]                captain      <= 100
-             /      \          \                   corporal     <= 10
-      [ api ]   [ storage ]  [ e2e ]               private      none
+                          ┌─► [ html ] ─┐
+  [ Lead ] ──► [ Dispatcher ]           ├─► [ reviewer ] ──► [ Goal ]
+                          └─► [ css  ] ─┘
+                    notebook: shared by html and css
 ```
 
-- each agent is a node with an auto-assigned decimal rank, based on how many agents are under its command;
-- **drag** an agent onto another to put it under that commander; any agent can command any number of agents;
-- **drag from the reserve** (coder, tester, reviewer, researcher, docs writer, refactorer) onto an agent to add a
-  subordinate;
-- **double-click** an agent to edit its name, role, task, model and commander;
-- `Ctrl+Z` undo, `Delete` remove (its subordinates move up), `A` add a subordinate, `Enter` edit; pan by dragging
-  the background, zoom with the wheel.
+- work flows **left to right**, from the **Lead** (start) through the agents to the **Goal** (end). The Goal is
+  optional: without one the run ends when every node has finished;
+- **drag a node's right port** onto another node to connect them. Every socket takes one link, so the flow is one
+  line; for parallel work use a **Dispatcher**;
+- **drag from the palette** (Dispatcher, coder, tester, visual tester, reviewer, researcher, docs writer,
+  refactorer) onto the canvas to add a node;
+- **double-click** an agent to edit its role, task, model, role playbook, internet access and shared notebook, and
+  a link to choose what it lets the two agents do;
+- **teams**: select agents and press `Ctrl+G` (or right-click → Make a team) to show them as one node, like a node
+  group in Blender; `Tab` or a double-click opens it, `Alt+G` ungroups. It is only a view;
+- **Notebooks** (toolbar) creates, renames and removes the flow's shared notebooks; **Workers** sets the model of
+  every agent without one of its own; **Questions** sets who answers the agents' questions;
+- **select** with a box or `Shift`/`Ctrl`-click, then drag, `Delete` or `Ctrl+D` duplicate; **right-click** a node, a
+  link or the background for its options; `Ctrl+Z` undo, `Enter` edit; pan with the middle mouse button or
+  `Space` + drag, zoom with the wheel. On touch screens drag to pan, pinch to zoom and long-press for options;
+- problems (a cycle, two links on one socket, an agent with no path to the Goal, …) show as you edit and block
+  deploying. **Check** calls every model once (does it load, take native tool calls, see images) and looks for
+  mistakes that only show later, such as vague success criteria.
 
-**Approve & deploy** starts it. The same tree then shows live status (who is working, who reported, who has a
-question for you, turns, time, tokens and cost per agent), and clicking an agent opens its feed, where you can
-message that agent directly.
+**Deploy Orchestra** starts it. The same canvas then shows live status (who is working or reviewing, what is done,
+who has a question for you, turns, time, tokens and cost per agent, links lighting up as work passes), and clicking
+a node opens its feed, where you can message that agent directly; clicking a link shows everything that crossed it.
 
 ### Questions from agents
 
@@ -217,16 +229,19 @@ question goes is up to you, per run, and can be changed while it runs (**Questio
 - **to you** (the default): the run stops in *needs your answer*, the sidebar lists it under *Waiting for your
   answer*, and a toast (or desktop notification) tells you. Answer on the question card, pick one of the offered
   options, or *Let it decide*; the answer goes to that agent only, and the run continues.
-- **to the commander**: in an orchestra, the asking agent's commander answers at once from the mission, its brief and
-  the reports so far (one call of its own model, Claude Code included), and the agent continues. A commander that
-  cannot decide passes the question on to you. The lead's questions always come to you.
+- **to the Lead**: in an orchestra, the Lead answers at once from the goal, its plan and the reports so far (a short
+  read-only session of its own model), and the agent continues. A Lead that cannot decide passes the question on to
+  you. The Lead's own questions always come to you.
+
+Agents can also ask each other directly, over a link with **Consult**. An agent inside a Dispatcher's parallel
+branch does not ask you (waiting there would hold up the whole run); it decides itself or consults a teammate.
 
 From the CLI: `orchopork answer <run> "…"`.
 
 ### Outputs
 
-Whatever a run creates or changes is one click away: an **Outputs** card under the conversation (and under the
-lead's feed) shows thumbnails of pictures, SVGs and web pages and lists every other file; **Files** opens a browser
+Whatever a run creates or changes is one click away: an **Outputs** card under the conversation (and an
+**Outputs** button on a flow) shows thumbnails of pictures, SVGs and web pages and lists every other file; **Files** opens a browser
 with a live preview (images, SVG, HTML with its scripts in a sandbox, markdown, code with line numbers, PDF, audio,
 video) and each file's diff. Files are served only from the run's worktree, under a sandboxing content security
 policy, so a generated page can never act as orchopork. Ask for "an SVG of a pelican riding a bicycle" and you see
@@ -234,39 +249,51 @@ the pelican, not a path.
 
 ### How an orchestra executes
 
-An agent acts only after all of its subordinates have reported, so work flows bottom-up. Commanders read their
-subordinates' reports and can **`delegate`** work back to a direct subordinate with an order. `finish` sends a
-report to the commander **with the diff of that agent's changes attached**, so commanders review diffs instead of
-re-reading files. Teammates under the same commander see each other's reports as they arrive, so later agents build
-on earlier work instead of re-exploring it. When the lead finishes, the optional verification command gates
-completion.
+The Lead investigates and plans; with agents after it, it can read and search but not edit files or run commands,
+so it hands the work over instead of doing it itself. Then the agents act one at a time on the run's worktree:
 
-Each agent's brief can also carry a contract (the lead drafts it, starting from an enabled team template when one
-fits, and you can edit it on the canvas):
+- **every link carries the work forward**: when an agent calls `finish`, its report goes to the next agent **with
+  the diff of its changes attached** (or the report only, set per link to save tokens);
+- **Dispatchers run work in parallel**: each branch gets its own git worktree and the branches work at the same
+  time. The Dispatcher's policy decides when the flow goes on (**wait for all**, the **first to finish**, or **the
+  Dispatcher decides** from the reports). For code, finished branches are merged into the run's worktree and the
+  Dispatcher's model resolves conflicts; for research, only the reports and notes are kept;
+- **link abilities** (double-click a link) let two agents work together: **Consult** (ask the other a question),
+  **Suggest** (ask for improvement suggestions), **Test** (have the other run a test and report pass or fail),
+  **Report** (the second agent's report goes back to the first, who accepts it or sends it back) and **Approve**
+  (before the second agent starts, it reviews the first one's work). Each has a per-link limit;
+- **notebooks** are shared memory (`notebook_write` / `notebook_read`) for the agents that use them, for this run
+  only, and rewind with it;
+- **the Goal** holds the success criteria and decides whether they are met: the agent connected to it, an
+  independent judge model, or only a verification command (which, when set, always runs first). If the goal is not
+  reached, the Lead gets the reasons and sends the responsible agent back with `rerun`;
+- **stuck agents hand back**: an agent that uses up its turns on one assignment, or keeps getting the same error,
+  hands the problem to the Lead with what it tried;
+- **role playbooks**: every agent gets the team rules (`team-protocol`) and the playbook of its role (`role-coder`,
+  `role-tester`, `role-visual-tester`, `role-reviewer`, `role-researcher`, `role-docs-writer`, `role-refactorer`,
+  `role-lead`, `role-dispatcher`), guessed from its name and role unless you pick one.
 
-- **Owns**: files, `folders/` or globs (`src/**/*.rs`) that only this agent's unit may edit. An edit to a file
-  another unit owns is refused with the owner's name, so agents report what must change instead of overwriting each
-  other; shared files such as manifests are best left to the lead, who may edit anything.
-- **Done when**: the acceptance criterion its commander reviews the report against.
-- **Verify**: a command (e.g. a targeted test) that must exit 0 before the report is accepted; on failure the agent
-  gets the output and tries again. The lead's verify command joins the final verification. Being model-proposed,
-  verify commands run only while `allow_commands` is on.
+Each run has an **autonomy** mode, switchable from its header: **Full auto** asks before nothing, **Semi-auto** before
+commands, background processes, deletions and skill tools, **Manual** before every change. A call that needs approval
+pauses the run on an approval card. **Internet access** (per agent, in its dialog) goes from none through local
+pages and documentation to full. **Re-orchestrate** (run menu) cancels a task and has the Lead design a new flow
+for a new goal.
 
-All agents share the run's worktree and act one at a time. The whole command state is checkpointed with every
-step, so pause, resume and rewind work exactly as they do for single runs.
+The whole flow state, parallel branches included, is checkpointed with every step, so pause, resume and rewind
+work exactly as they do for single runs.
 
 ### Token economy: a strong lead with cheaper workers
 
-A typical setup is one Opus lead with two Sonnet workers. In the team editor, **Workers** sets the model of every
-agent below the lead that has no model of its own. The engine is built so such a team spends fewer tokens than the
+A typical setup is one Opus lead with two Sonnet workers. In the flow editor, **Workers** sets the model of every
+agent after the Lead that has no model of its own. The engine is built so such a team spends fewer tokens than the
 lead model working alone:
 
 - **Prompt caching (Claude).** Each turn's context is split into a stable part and a volatile tail. The stable part
   (the mission, the repository as it was when the run started, the agent's role and its conversation so far) is
   sent with cache breakpoints and re-read at a fraction of the input price. What changes every turn goes after the
-  last breakpoint. Commanders, who wait between turns, use the 1-hour cache.
-- **A window that moves in steps.** When the conversation outgrows the context budget, old turns are dropped a
-  third of the budget at a time, so the cached prefix survives many turns in a row.
+  last breakpoint. Flow agents, who often wait for others between turns, use the 1-hour cache.
+- **A window that moves in steps.** When the conversation outgrows the context budget, the oldest turns are folded
+  into a summary a third of the budget at a time, so the cached prefix survives many turns in a row.
 - **Reports carry diffs**, and teammates see each other's reports: fewer turns spent re-reading files.
 
 Cached tokens are billed at their real rates (reads 0.1x, or 0.05x on Opus 5.5; writes 1.25x, 2x for 1 hour); the
@@ -279,7 +306,7 @@ budget guard still reserves the uncached worst case.
 - **`Ctrl/Cmd K`** jumps to any conversation, recent project or action.
 - **Background updates.** When a task you are not looking at finishes or stops, a toast links to it; desktop
   notifications can be turned on from the sidebar.
-- **Drafts are kept.** Unsent text in any composer, and a team the lead drafted, survive navigation, reloads and
+- **Drafts are kept.** Unsent text in any composer, and a flow the Lead drafted, survive navigation, reloads and
   project switches.
 - **Rewind from the UI.** *Rewind here* on any step, *Edit & resend* on any of your messages, *Start over* to reset
   the branch, *Retry as new* to run the same goal again with another model or another orchestration while keeping
@@ -429,7 +456,7 @@ File tools are confined to the worktree: no absolute paths, no `..`, no symlinks
 
 ## Skills
 
-Tone, tools, output checks and team templates are declarative files in `.orchopork/skills/` (`*.yaml`, or `*.md` with YAML front
+Tone, tools, output checks and role playbooks are declarative files in `.orchopork/skills/` (`*.yaml`, or `*.md` with YAML front
 matter whose body becomes `prompt_injection`). They hot-reload from Settings or with `orchopork skills reload`, and
 conflicting skills are refused when you enable them.
 
@@ -473,32 +500,17 @@ validator:
   command: "cargo fmt --check"
 ```
 
-```yaml
-# team_template: a starting-point team the orchestra designer adapts when the
-# mission fits `description`. Costs context only in the one team-design call.
-name: "team-bugfix"
-version: "1.0.0"
-type: "team_template"
-description: "Fixing a reported bug: reproduce it with a failing test, fix the cause, prove the fix."
-team:
-  - {id: lead, role: integrates and reviews, task: "...", done_when: "..."}
-  - {id: reproducer, parent: lead, role: writes the failing test, task: "...", done_when: "..."}
-  - {id: fixer, parent: lead, role: fixes the cause, task: "...", owns: ["src/"]}
-```
+**Who a skill is for.** A skill with `roles` applies only to orchestra agents of that role, and not to
+single-agent chats: `roles: [tester]` for one role key (`lead`, `coder`, `tester`, `visual-tester`, `reviewer`,
+`researcher`, `docs`, `refactorer`, `dispatcher`, or a key of your own that you give an agent as its playbook),
+`roles: ["*"]` for every orchestra agent; without `roles` a skill applies everywhere. Copy a bundled `role-*.yaml`
+to tune a playbook for your project (the file in `.orchopork/skills/` is yours; updates never overwrite it).
 
-**Who a skill is for.** Any skill can say `applies_to: [...]`; without it, it applies everywhere. Entries are
-`solo` (the single-agent actor), `planner`, `critic`, `designer`, `lead`, `commander` (any orchestra agent with
-subordinates), `worker` (any agent below the lead), or `role:<text>` (an orchestra agent whose id, name or role
-contains the text). A leading `!` excludes: `applies_to: ["worker", "!role:doc"]` reaches every worker except the
-docs writer. This keeps, say, test-first rules away from the lead and the reviewer, and saves their context. A
-`validator` whose `command` should check one agent's report (e.g. a `role:test` validator running the test suite)
-gates that agent's `finish`; an unscoped validator only gates the final finish, so a full test suite is not rerun at
-every report.
-
-Bundled skills: `anti-sycophancy-terse`, `test-driven-loop` (for the solo actor and workers, not the docs writer)
-and the team templates `team-bugfix`, `team-feature` and `team-refactor` (enabled by default), plus
-`explain-like-principal` and `markdown-memory-sync` (solo actor and lead only), which are off by default because
-every enabled modifier costs context on every call.
+Bundled skills: `anti-sycophancy-terse`, `test-driven-loop` and `no-false-claims` (enabled by default; the last one
+makes the engine reject reports that claim more than the agent checked), the orchestra playbooks `team-protocol`
+and `role-*` (enabled by default; an agent receives only the team rules and its own role), plus
+`explain-like-principal` and `markdown-memory-sync`, which are off by default because every enabled modifier costs
+context on every call.
 
 ## Files
 
@@ -520,8 +532,10 @@ every enabled modifier costs context on every call.
 - By default the server binds `127.0.0.1` only. It rejects requests whose `Host` is not local, and state-changing
   requests whose `Origin` is not local. This blocks DNS rebinding and cross-site requests; the API can run commands
   through the agent, so no web page may reach it.
-- With `--host`, every request that is not from this machine needs the access token, and changes must be
-  same-origin.
+- With `--host`, other machines get in by IP address (a host name is refused, which keeps DNS rebinding out), or,
+  with the access token required, only with a token; changes must come from orchopork's own page either way.
+- Run previews and generated pages run in an opaque origin, and requests from sandboxed pages (`Origin: null`)
+  never reach the API, even with a token in the page's URL.
 - Files a run produced are served from its worktree only, with `X-Content-Type-Options: nosniff` and a sandboxing
   `Content-Security-Policy`, so a generated HTML or SVG file runs (if at all) in an opaque origin.
 - Secrets never pass through wizard state or any API response.
@@ -541,9 +555,9 @@ Requires Rust 1.89+ and `git` on `PATH`.
 
 ```text
 src/
-  graph/        engine, orchestra, questions, prompts, action protocol, tools
+  graph/        engine, flow graph, parallel branches, approvals, browser, questions, prompts, tools
   providers/    gateway, budget, pricing
-  storage/      SQLite checkpoints and spend ledger
+  storage/      SQLite checkpoints, spend ledger, the flow graph model
   skills/       loader, composition, model
   git/          worktrees and branches through hardened git calls
   server/       HTTP API, setup wizard, access control, outputs and measurements

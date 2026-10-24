@@ -12,10 +12,14 @@ use crate::error::Result;
 pub fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
+    // Unique per call: two writers of the same file in one process must not
+    // share (and rename away) each other's temp file.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let tmp = dir.join(format!(
-        ".{}.tmp-{}",
+        ".{}.tmp-{}-{}",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
-        std::process::id()
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     {
         let mut opts = std::fs::OpenOptions::new();
@@ -72,9 +76,62 @@ pub fn clip(s: &str, max: usize) -> String {
     format!("{start}\n[... {} chars omitted ...]\n{end}", count - head - tail)
 }
 
+/// Standard base64 (RFC 4648, with padding).
+pub fn base64(input: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(T[(n >> (18 - 6 * i)) as usize & 63] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// Decodes standard base64 (padding optional, whitespace ignored).
+pub fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let val = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' | b'-' => Some(62),
+        b'/' | b'_' => Some(63),
+        _ => None,
+    };
+    let clean: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace() && *b != b'=').collect();
+    let mut out = Vec::with_capacity(clean.len() * 3 / 4);
+    for chunk in clean.chunks(4) {
+        if chunk.len() == 1 {
+            return None;
+        }
+        let mut n = 0u32;
+        for (i, c) in chunk.iter().enumerate() {
+            n |= u32::from(val(*c)?) << (18 - 6 * i);
+        }
+        let bytes = n.to_be_bytes();
+        out.extend_from_slice(&bytes[1..chunk.len()]);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_round_trips() {
+        for s in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+            assert_eq!(base64_decode(&base64(s.as_bytes())).unwrap(), s.as_bytes(), "{s}");
+        }
+        assert_eq!(base64_decode("Zm9v\nYmFy").unwrap(), b"foobar");
+        assert!(base64_decode("Zm9v*").is_none());
+    }
 
     #[test]
     fn clip_keeps_head_and_tail() {

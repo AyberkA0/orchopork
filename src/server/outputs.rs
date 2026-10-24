@@ -281,7 +281,12 @@ pub async fn measure(run: &Run, steps: &[Step]) -> Value {
     let mut total = Tally::default();
     let mut agents: BTreeMap<String, Tally> = BTreeMap::new();
     let mut by_model: BTreeMap<String, Tally> = BTreeMap::new();
-    let root = run.spec.root().map(|r| r.id.clone());
+    // Steps without an agent belong to the lead (a flow graph's Lead node,
+    // or a legacy orchestra's root).
+    let root = match &run.spec.graph {
+        Some(g) => g.lead().map(|n| n.id.clone()),
+        None => run.spec.root().map(|r| r.id.clone()),
+    };
     let (mut verify_pass, mut verify_fail, mut reviews_revise) = (0u64, 0u64, 0u64);
     let mut timeline = Vec::new();
     for s in steps {
@@ -326,8 +331,10 @@ pub async fn measure(run: &Run, steps: &[Step]) -> Value {
         "status": run.status,
         "model": run.spec.model,
         "worker_model": run.spec.worker_model,
-        "agents_planned": run.spec.agents.len(),
-        "retry_of": run.spec.retry_of,
+        "agents_planned": match &run.spec.graph {
+            Some(g) => g.nodes.iter().filter(|n| n.kind == crate::storage::flowgraph::NodeKind::Agent).count(),
+            None => run.spec.agents.len(),
+        },
         "wall_secs": (ended - started).max(0),
         "steps": steps.len(),
         "verify": { "passed": verify_pass, "failed": verify_fail },

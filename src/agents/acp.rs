@@ -43,14 +43,20 @@ struct Conn<'a> {
     cancel_sent: Option<Instant>,
 }
 
-/// Errors and cancels drop the connection: stop the agent's whole tree.
 impl Drop for Conn<'_> {
     fn drop(&mut self) {
-        kill_tree(&mut self.child);
+        self.shutdown();
     }
 }
 
 impl<'a> Conn<'a> {
+    /// Stops the agent with everything it started. Killing only the child
+    /// is not enough: on Windows it is `cmd /C npx …`, and the node process
+    /// actually running the agent would be left behind.
+    fn shutdown(&mut self) {
+        kill_tree(&mut self.child);
+    }
+
     fn open(agent: &'a ExternalAgent, cwd: &Path, policy: Policy) -> Result<Self> {
         let mut child = spawn(agent, cwd, &agent.args, false)?;
         let stdin = child.stdin.take().expect("piped");
@@ -146,7 +152,7 @@ impl<'a> Conn<'a> {
             return Ok(());
         };
         let reply = match method {
-            "session/request_permission" => Ok(self.permission(params)),
+            "session/request_permission" => Ok(self.permission(params).await),
             "fs/read_text_file" => self.read_file(params).await,
             "fs/write_text_file" => self.write_file(params).await,
             other => Err((-32601, format!("method not supported: {other}"))),
@@ -202,9 +208,14 @@ impl<'a> Conn<'a> {
     }
 
     /// Picks an allow option unless policy forbids this kind of call.
-    fn permission(&self, p: &Value) -> Value {
+    async fn permission(&self, p: &Value) -> Value {
         let kind = p["toolCall"]["kind"].as_str().unwrap_or("other");
-        let allowed = kind != "execute" || self.policy.allow_execute;
+        let mut allowed =
+            (kind != "execute" || self.policy.allow_execute) && !self.policy.deny.iter().any(|d| d == kind);
+        if allowed && let Some(approve) = &self.policy.approve {
+            let title = p["toolCall"]["title"].as_str().unwrap_or("tool call").to_string();
+            allowed = approve(kind.to_string(), title, p["toolCall"].clone()).await;
+        }
         let options = p["options"].as_array().cloned().unwrap_or_default();
         let pick = |kinds: &[&str]| {
             options
@@ -228,8 +239,9 @@ impl<'a> Conn<'a> {
         if p.components().any(|c| matches!(c, Component::ParentDir)) {
             return Err((-32602, "path must not contain ..".into()));
         }
+        // A dangling symlink counts as existing, and fails to resolve below.
         let mut probe = p.as_path();
-        while !probe.exists() {
+        while std::fs::symlink_metadata(probe).is_err() {
             probe = probe.parent().ok_or((-32602, "invalid path".to_string()))?;
         }
         let real = crate::fsutil::canonical(probe).map_err(|e| (-32603, e.to_string()))?;
@@ -254,6 +266,9 @@ impl<'a> Conn<'a> {
     }
 
     async fn write_file(&self, p: &Value) -> std::result::Result<Value, (i64, String)> {
+        if self.policy.deny.iter().any(|d| d == "edit") {
+            return Err((-32000, "you may not edit files in this role; hand the change to a teammate".into()));
+        }
         let path = self.inside(p["path"].as_str().unwrap_or(""))?;
         if let Some(dir) = path.parent() {
             tokio::fs::create_dir_all(dir).await.map_err(|e| (-32603, e.to_string()))?;
@@ -383,6 +398,7 @@ pub async fn run(
         )
         .await?;
     let stop_reason = result["stopReason"].as_str().unwrap_or("end_turn").to_string();
+    c.shutdown();
     Ok(Outcome {
         cancelled: stop_reason == "cancelled",
         text: c.text.trim().to_string(),
@@ -399,11 +415,13 @@ pub async fn run(
 pub async fn discover(agent: &ExternalAgent, cwd: &Path) -> Result<Vec<Value>> {
     let never = AtomicBool::new(false);
     let deadline = Instant::now() + Duration::from_secs(90);
-    let mut c = Conn::open(agent, cwd, Policy { allow_execute: false })?;
+    let mut c = Conn::open(agent, cwd, Policy { allow_execute: false, ..Default::default() })?;
     let on: &mut (dyn FnMut(Update) + Send) = &mut |_| {};
     c.handshake(deadline, &never, on).await?;
     let cwd_str = c.root.to_string_lossy().into_owned();
-    let session = c.request("session/new", json!({ "cwd": cwd_str, "mcpServers": [] }), deadline, &never, on).await?;
+    let session = c.request("session/new", json!({ "cwd": cwd_str, "mcpServers": [] }), deadline, &never, on).await;
+    c.shutdown();
+    let session = session?;
     Ok(config_options(&session)
         .into_iter()
         .filter(|o| o["category"] != "mode" && o["id"] != "mode" && o["type"] == "select")
@@ -417,8 +435,10 @@ pub async fn discover(agent: &ExternalAgent, cwd: &Path) -> Result<Vec<Value>> {
 /// `initialize` only: checks that the agent starts and speaks ACP.
 pub async fn probe(agent: &ExternalAgent, cwd: &Path) -> Result<Value> {
     let never = AtomicBool::new(false);
-    let mut c = Conn::open(agent, cwd, Policy { allow_execute: false })?;
-    c.handshake(Instant::now() + Duration::from_secs(90), &never, &mut |_| {}).await
+    let mut c = Conn::open(agent, cwd, Policy { allow_execute: false, ..Default::default() })?;
+    let r = c.handshake(Instant::now() + Duration::from_secs(90), &never, &mut |_| {}).await;
+    c.shutdown();
+    r
 }
 
 #[cfg(all(test, unix))]
@@ -473,7 +493,7 @@ while True:
                 d.path(),
                 "hi",
                 &opts,
-                Policy { allow_execute: allow },
+                Policy { allow_execute: allow, ..Default::default() },
                 Duration::from_secs(20),
                 &never,
                 |u| {
@@ -499,9 +519,17 @@ while True:
         let ids: Vec<&str> = found.iter().filter_map(|o| o["id"].as_str()).collect();
         assert_eq!(ids, ["model", "effort"], "permission modes are not offered");
         let bad: BTreeMap<String, String> = [("model".to_string(), "gpt".to_string())].into();
-        let err =
-            run(&agent, d.path(), "hi", &bad, Policy { allow_execute: false }, Duration::from_secs(20), &never, |_| {})
-                .await;
+        let err = run(
+            &agent,
+            d.path(),
+            "hi",
+            &bad,
+            Policy { allow_execute: false, ..Default::default() },
+            Duration::from_secs(20),
+            &never,
+            |_| {},
+        )
+        .await;
         assert!(err.unwrap_err().to_string().contains("not offered"));
     }
 
@@ -514,7 +542,7 @@ while True:
             Path::new("."),
             "hi",
             &BTreeMap::new(),
-            Policy { allow_execute: false },
+            Policy { allow_execute: false, ..Default::default() },
             Duration::from_secs(5),
             &never,
             |_| {},

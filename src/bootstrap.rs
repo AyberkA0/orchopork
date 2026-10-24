@@ -23,6 +23,8 @@ pub struct Workspace {
     pub root: PathBuf,
     pub state_dir: PathBuf,
     config: RwLock<Config>,
+    /// Serializes `update_config`'s read-modify-write.
+    config_write: std::sync::Mutex<()>,
     pub secrets: SecretStore,
     pub skills: Arc<SkillRegistry>,
     pub store: Store,
@@ -60,7 +62,17 @@ impl Workspace {
             repo.ensure_state_dir_excluded().await?;
         }
 
-        let ws = Arc::new(Self { root, state_dir, config: RwLock::new(config), secrets, skills, store, gateway, repo });
+        let ws = Arc::new(Self {
+            root,
+            state_dir,
+            config: RwLock::new(config),
+            config_write: std::sync::Mutex::new(()),
+            secrets,
+            skills,
+            store,
+            gateway,
+            repo,
+        });
         ws.register_providers();
         Ok(ws)
     }
@@ -72,6 +84,9 @@ impl Workspace {
     /// Validates, persists and applies a new config (providers are
     /// re-registered so URL or cap changes take effect immediately).
     pub fn update_config(&self, f: impl FnOnce(&mut Config)) -> Result<Config> {
+        // One writer at a time: two concurrent updates (say, adding an
+        // endpoint while settings are saved) must not overwrite each other.
+        let _g = self.config_write.lock().unwrap_or_else(|p| p.into_inner());
         let mut next = self.config();
         f(&mut next);
         next.save(&self.state_dir.join("config.yaml"))?;
@@ -98,19 +113,21 @@ impl Workspace {
         let cfg = self.config();
         let gw = &self.gateway;
         gw.set_cap(cfg.monthly_cap_usd);
-        gw.unregister_all();
-        gw.register(Box::new(OllamaProvider::new(cfg.ollama_url.clone(), cfg.ollama_num_ctx)));
+        // Built first and swapped in at once: a call starting meanwhile
+        // must never see an empty provider set.
+        let mut set: Vec<Box<dyn crate::providers::Provider>> = Vec::new();
+        set.push(Box::new(OllamaProvider::new(cfg.ollama_url.clone(), cfg.ollama_num_ctx)));
         if let Some(url) = cfg.llamacpp_url.as_deref().filter(|u| !u.trim().is_empty()) {
-            gw.register(Box::new(OpenAiCompatProvider::llamacpp(url.trim())));
+            set.push(Box::new(OpenAiCompatProvider::llamacpp(url.trim())));
         }
         if let Some(k) = self.secrets.provider_key(ProviderId::Claude) {
-            gw.register(Box::new(ClaudeProvider::new(k)));
+            set.push(Box::new(ClaudeProvider::new(k)));
         }
         if let Some(k) = self.secrets.provider_key(ProviderId::DeepSeek) {
-            gw.register(Box::new(OpenAiCompatProvider::deepseek(k)));
+            set.push(Box::new(OpenAiCompatProvider::deepseek(k)));
         }
         if let Some(k) = self.secrets.provider_key(ProviderId::Gemini) {
-            gw.register(Box::new(OpenAiCompatProvider::gemini(k)));
+            set.push(Box::new(OpenAiCompatProvider::gemini(k)));
         }
         if !cfg.endpoints.is_empty() {
             let eps = cfg
@@ -127,7 +144,8 @@ impl Workspace {
                     price: e.price_in.zip(e.price_out),
                 })
                 .collect();
-            gw.register(Box::new(CompatRouter::new(eps)));
+            set.push(Box::new(CompatRouter::new(eps)));
         }
+        gw.replace_all(set);
     }
 }

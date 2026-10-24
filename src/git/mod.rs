@@ -25,6 +25,14 @@ pub struct GitRepo {
     root: PathBuf,
 }
 
+/// (pathspec excluding it from checkpoints, `git clean -e` pattern).
+const DEPENDENCY_DIRS: &[(&str, &str)] = &[
+    (":(exclude,glob)**/node_modules/**", "node_modules"),
+    (":(exclude,glob)**/.venv/**", ".venv"),
+    (":(exclude,glob)**/__pycache__/**", "__pycache__"),
+    (":(exclude,glob).orchopork-shots/**", ".orchopork-shots"),
+];
+
 impl GitRepo {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
@@ -40,6 +48,9 @@ impl GitRepo {
             .arg(&self.root)
             .args(["-c", "user.name=orchopork", "-c", "user.email=orchopork@localhost", "-c", "commit.gpgsign=false"])
             .args(["-c", "core.quotepath=off"])
+            // Dependency trees (node_modules) easily exceed Windows' 260-char
+            // path limit; without this `git add` fails on them.
+            .args(["-c", "core.longpaths=true"])
             .args(args)
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null())
@@ -137,7 +148,12 @@ impl GitRepo {
     /// checkpoint maps 1:1 to a commit. Hooks are skipped: these are machine
     /// checkpoints, not authored history.
     pub async fn commit_all(&self, message: &str) -> Result<String> {
-        self.run(&["add", "-A"]).await?;
+        // Installed dependencies are not the agent's work: checkpointing them
+        // bloats the repository and slows every step, even when the project
+        // has no .gitignore for them yet.
+        let mut args = vec!["add", "-A", "--", "."];
+        args.extend(DEPENDENCY_DIRS.iter().map(|(pathspec, _)| *pathspec));
+        self.run(&args).await?;
         self.run(&["commit", "--allow-empty", "--no-verify", "-q", "-m", message]).await?;
         self.head().await?.ok_or_else(|| Error::Git("no HEAD after commit".into()))
     }
@@ -148,7 +164,12 @@ impl GitRepo {
         // Files the agent created after the target step are untracked there;
         // remove them too so the tree really matches the checkpoint. Ignored
         // files (build caches) are kept.
-        self.run(&["clean", "-fdq"]).await.map(drop)
+        // Dependencies are never checkpointed (see `commit_all`); keep them.
+        let mut args = vec!["clean", "-fdq"];
+        for (_, dir) in DEPENDENCY_DIRS {
+            args.extend(["-e", dir]);
+        }
+        self.run(&args).await.map(drop)
     }
 
     pub async fn update_ref(&self, name: &str, commit: &str) -> Result<()> {
@@ -220,13 +241,19 @@ impl GitRepo {
     /// `git diff <base>` shows them: an agent's new files must be in the
     /// diff of its report before its step is checkpointed. Only ever used
     /// in a run's worktree, where every step commits everything anyway.
+    /// Leaves out what `commit_all` leaves out (dependencies, screenshots).
     async fn see_new_files(&self) {
-        let _ = self.run(&["add", "--intent-to-add", "--all"]).await;
+        let mut args = vec!["add", "--intent-to-add", "--all", "--", "."];
+        args.extend(DEPENDENCY_DIRS.iter().map(|(pathspec, _)| *pathspec));
+        let _ = self.run(&args).await;
     }
 
-    /// Untracked, not ignored files (an agent's work before its checkpoint).
+    /// Untracked, not ignored files (an agent's work before its checkpoint),
+    /// without dependencies and screenshots.
     pub async fn untracked(&self) -> Result<Vec<String>> {
-        let out = self.run(&["ls-files", "--others", "--exclude-standard"]).await?;
+        let mut args = vec!["ls-files", "--others", "--exclude-standard", "--", "."];
+        args.extend(DEPENDENCY_DIRS.iter().map(|(pathspec, _)| *pathspec));
+        let out = self.run(&args).await?;
         Ok(out.lines().map(str::to_string).collect())
     }
 
@@ -257,7 +284,28 @@ impl GitRepo {
         }
     }
 
-    /// Diff of the working tree (committed or not) against `base`.
+    /// (stat, patch) between two commits.
+    pub async fn diff_between(&self, from: &str, to: &str) -> Result<(String, String)> {
+        validate_commit(from)?;
+        validate_commit(to)?;
+        let stat = self.run(&["diff", "--stat", "--no-color", from, to]).await?;
+        let patch = self.run(&["diff", "--no-color", from, to]).await?;
+        Ok((stat, patch))
+    }
+
+    /// Lines added and removed since `base` (working tree included).
+    pub async fn numstat_from(&self, base: &str) -> Result<(u64, u64)> {
+        validate_commit(base)?;
+        self.see_new_files().await;
+        let out = self.run(&["diff", "--numstat", base]).await?;
+        Ok(out.lines().fold((0, 0), |(a, r), l| {
+            let mut f = l.split_whitespace();
+            let n = |x: Option<&str>| x.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+            (a + n(f.next()), r + n(f.next()))
+        }))
+    }
+
+    /// (stat, patch) of the working tree (committed or not) against `base`.
     pub async fn diff_from(&self, base: &str) -> Result<(String, String)> {
         validate_commit(base)?;
         self.see_new_files().await;
@@ -286,6 +334,51 @@ impl GitRepo {
         }
         Ok(text.trim().to_string())
     }
+
+    /// Merges `branch` into this worktree and commits. On conflicts the
+    /// merge is left in progress and the conflicted files are returned:
+    /// resolve them and `commit_all`, or `abort_merge`.
+    pub async fn merge_or_conflicts(&self, branch: &str, message: &str) -> Result<std::result::Result<(), Vec<String>>> {
+        validate_ref_name(&format!("refs/heads/{branch}"))?;
+        let args = ["merge", "--no-ff", "--no-verify", "-m", message, branch];
+        let out = self.output(self.command(&args), &args).await?;
+        if out.status.success() {
+            return Ok(Ok(()));
+        }
+        let files: Vec<String> = self
+            .run(&["diff", "--name-only", "--diff-filter=U"])
+            .await
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .filter(|l| !l.is_empty())
+            .collect();
+        if files.is_empty() {
+            self.abort_merge().await;
+            let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            return Err(Error::Git(format!("merge of {branch} failed: {}", text.trim())));
+        }
+        Ok(Err(files))
+    }
+
+    /// Abandons a merge in progress (no-op without one).
+    pub async fn abort_merge(&self) {
+        let _ = self.run(&["merge", "--abort"]).await;
+    }
+
+    /// Merges `branch` into the current working directory.
+    pub async fn merge(&self, branch: &str, message: &str) -> Result<String> {
+        validate_ref_name(&format!("refs/heads/{branch}"))?;
+        let args = ["merge", "--no-ff", "-m", message, branch];
+        let out = self.output(self.command(&args), &args).await?;
+        let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        if !out.status.success() {
+            // Never leave the user's checkout half-merged with conflict markers.
+            let _ = self.run(&["merge", "--abort"]).await;
+            return Err(Error::Git(format!("merge failed (aborted, your checkout is unchanged): {}", text.trim())));
+        }
+        Ok(text.trim().to_string())
+    }
 }
 
 /// Only full/abbreviated hex object names: cannot be parsed as an option.
@@ -306,22 +399,7 @@ fn validate_ref_name(name: &str) -> Result<()> {
     if ok { Ok(()) } else { Err(Error::Git(format!("refusing ref name {name:?}"))) }
 }
 
-fn base64(input: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in input.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(T[(n >> (18 - 6 * i)) as usize & 63] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
-}
+use crate::fsutil::base64;
 
 #[cfg(test)]
 mod tests {
@@ -365,18 +443,6 @@ mod tests {
         assert!(wt.grep("h.", ".").await.unwrap().contains("new.txt:1:hi"));
         assert!(wt.grep("absent", ".").await.unwrap().is_empty());
 
-        // A file an agent just created, before its step is committed.
-        tokio::fs::write(
-            wt_path.join("fresh.svg"),
-            "<svg/>
-",
-        )
-        .await
-        .unwrap();
-        let (stat, _) = wt.diff_from(&base).await.unwrap();
-        assert!(stat.contains("fresh.svg"), "{stat}");
-        assert_eq!(wt.numstat(&base).await.unwrap()["fresh.svg"], (Some(1), Some(0)));
-
         tokio::fs::write(wt_path.join("stray.txt"), "x").await.unwrap();
         wt.reset_hard(&base).await.unwrap();
         assert!(!wt_path.join("new.txt").exists() && !wt_path.join("stray.txt").exists());
@@ -400,5 +466,63 @@ mod tests {
         inner.init().await.unwrap();
         assert!(inner.is_repo().await);
         assert!(inner.enclosing_repo().await.is_none());
+    }
+
+    /// A conflicting merge must not leave the user's checkout mid-merge.
+    #[tokio::test]
+    async fn a_conflicting_merge_is_aborted() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = GitRepo::new(d.path());
+        repo.init().await.unwrap();
+        std::fs::write(d.path().join("a.txt"), "base\n").unwrap();
+        let base = repo.commit_all("base").await.unwrap();
+        let wt_path = d.path().join(STATE_DIR).join("worktrees/r1");
+        repo.worktree_add(&wt_path, "orchopork/r1", &base).await.unwrap();
+        std::fs::write(wt_path.join("a.txt"), "theirs\n").unwrap();
+        GitRepo::new(&wt_path).commit_all("theirs").await.unwrap();
+        std::fs::write(d.path().join("a.txt"), "mine\n").unwrap();
+        let mine = repo.commit_all("mine").await.unwrap();
+
+        let err = repo.merge("orchopork/r1", "merge").await.unwrap_err().to_string();
+        assert!(err.contains("aborted"), "{err}");
+        // (`core.autocrlf` may turn the line ending into CRLF on Windows.)
+        assert_eq!(std::fs::read_to_string(d.path().join("a.txt")).unwrap().trim_end(), "mine");
+        assert_eq!(repo.head().await.unwrap().as_deref(), Some(mine.as_str()));
+        assert!(repo.run(&["rev-parse", "-q", "--verify", "MERGE_HEAD"]).await.is_err(), "no merge in progress");
+    }
+
+    #[tokio::test]
+    async fn checkpoints_skip_dependency_folders_and_rewinds_keep_them() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = GitRepo::new(d.path());
+        repo.init().await.unwrap();
+        let base = repo.commit_all("base").await.unwrap();
+        let deep = d.path().join("web").join("node_modules").join("pkg");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("index.js"), "x").unwrap();
+        std::fs::write(d.path().join("web").join("app.js"), "y").unwrap();
+        repo.commit_all("work").await.unwrap();
+        let files = repo.ls_files_at(&repo.head().await.unwrap().unwrap()).await.unwrap();
+        assert!(files.contains(&"web/app.js".to_string()), "{files:?}");
+        assert!(!files.iter().any(|f| f.contains("node_modules")), "{files:?}");
+        repo.reset_hard(&base).await.unwrap();
+        assert!(!d.path().join("web").join("app.js").exists(), "the agent's work is rewound");
+        assert!(deep.join("index.js").exists(), "installed dependencies stay");
+    }
+
+    #[tokio::test]
+    async fn new_files_show_in_diffs_before_their_checkpoint() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = GitRepo::new(d.path());
+        repo.init().await.unwrap();
+        let base = repo.commit_all("base").await.unwrap();
+        // A file an agent just created, and a screenshot it took.
+        std::fs::write(d.path().join("fresh.svg"), "<svg/>\n").unwrap();
+        std::fs::create_dir_all(d.path().join(".orchopork-shots")).unwrap();
+        std::fs::write(d.path().join(".orchopork-shots").join("home.png"), "png").unwrap();
+        let (stat, _) = repo.diff_from(&base).await.unwrap();
+        assert!(stat.contains("fresh.svg") && !stat.contains("orchopork-shots"), "{stat}");
+        assert_eq!(repo.numstat(&base).await.unwrap()["fresh.svg"], (Some(1), Some(0)));
+        assert!(repo.changed_names(&base).await.unwrap().contains("A\tfresh.svg"));
     }
 }

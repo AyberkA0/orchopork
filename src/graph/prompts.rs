@@ -199,7 +199,7 @@ pub fn actor_groups(steps: &[Step], obs_chars: usize) -> Vec<Group> {
                     Message::user(format!("Result of {tool} ({status}):\n{}", clip(obs, obs_chars))),
                 ]
             }
-            StepKind::Inject => vec![Message::user(format!("Message from the user:\n{}", s.output))],
+            StepKind::Inject => vec![Message::user(format!("{}:\n{}", inject_label(s), s.output))],
             StepKind::Verify => {
                 vec![Message::user(format!("Verification after your finish:\n{}\n\n{}", s.output, clip(obs, obs_chars)))]
             }
@@ -324,6 +324,11 @@ fn merge_same_role(msgs: Vec<Message>) -> Vec<Message> {
         }
     }
     out
+}
+
+/// How a message from the user is introduced to the agent.
+pub fn inject_label(s: &Step) -> &'static str {
+    if s.meta.get("answer_to").is_some() { "Answer from the user" } else { "Message from the user" }
 }
 
 #[cfg(test)]

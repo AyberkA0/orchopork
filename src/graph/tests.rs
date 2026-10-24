@@ -137,6 +137,32 @@ async fn happy_path_plans_acts_verifies_reviews_and_leaves_main_checkout_alone()
 }
 
 #[tokio::test]
+async fn a_question_waits_for_the_user_and_the_answer_continues_the_run() {
+    let (_d, engine) = setup(|_| {}).await;
+    let ask = r#"Need a decision. {"tool": "ask", "args": {"question": "Which greeting?", "options": ["hello", "hi"]}}"#;
+    let actor = Scripted::new(ProviderId::Ollama, &["plan", ask, WRITE, FINISH]);
+    register(&engine, &actor);
+
+    let run = engine.create_run("create hello.txt", None, RunSpec::default()).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Waiting, "error: {:?}", run.error);
+    assert_eq!(run.error.as_deref(), Some("The agent asks: Which greeting?"));
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    let q = ask::waiting_on(&steps).expect("an open question");
+    assert_eq!(q.meta["options"], json!(["hello", "hi"]));
+    assert!(steps.iter().all(|s| s.kind == StepKind::Inject || s.meta.get("ms").is_some()), "every step is timed");
+
+    assert!(engine.answer(&run.id, q.seq + 1, "hello").await.is_err(), "only the open question can be answered");
+    engine.answer(&run.id, q.seq, "hello").await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert!(ask::waiting_on(&steps).is_none());
+    let saw = actor.seen.lock().unwrap()[2].messages.iter().any(|m| m.content.contains("Answer from the user:\nhello"));
+    assert!(saw, "the agent must see the answer");
+}
+
+#[tokio::test]
 async fn failed_verification_sends_the_actor_back_to_work() {
     let (_d, engine) = setup(|_| {}).await;
     let fix = r#"{"tool": "write_file", "args": {"path": "ok", "content": ""}}"#;
@@ -458,6 +484,30 @@ port is 8080"), "notes reach b without reading: {b_ctx}");
     let finish = seen[6].tools.iter().find(|t| t.name == "finish").unwrap();
     assert_eq!(finish.parameters["required"], json!(["summary", "notes"]));
     assert!(!seen[0].tools.iter().any(|t| t.name == "notebook_write"), "only connected agents get the notebook");
+}
+
+#[tokio::test]
+async fn a_flow_node_asks_the_user_and_carries_on_with_the_answer() {
+    let (_d, engine) = setup(|_| {}).await;
+    let ask = r#"{"tool": "ask", "args": {"question": "Greeting text?"}}"#;
+    let replies = [fin("dev: write hello.txt").as_str(), ask, WRITE, &fin("hello.txt written")].map(str::to_string);
+    let model = Scripted::new(ProviderId::Ollama, &replies.iter().map(String::as_str).collect::<Vec<_>>());
+    register(&engine, &model);
+    let run = engine.create_run("make hello", None, orch(line(&["dev"], "test -f hello.txt"))).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Waiting, "error: {:?}", run.error);
+    assert_eq!(run.error.as_deref(), Some("DEV asks: Greeting text?"));
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    let q = ask::waiting_on(&steps).unwrap();
+    assert_eq!(q.meta["agent"], "dev");
+    assert!(model.seen.lock().unwrap()[1].tools.iter().any(|t| t.name == "ask"));
+
+    engine.answer(&run.id, q.seq, "hello").await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Done, "error: {:?}", run.error);
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    assert_eq!(who(&steps), ["lead", "dev", "dev", "dev", "dev", "goal"], "the answer goes to dev, who goes on");
+    assert!(ctx(&model.seen.lock().unwrap()[2]).contains("Answer from the user:\nhello"));
 }
 
 #[tokio::test]

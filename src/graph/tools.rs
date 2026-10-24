@@ -669,7 +669,7 @@ impl ToolBox {
     /// tools and unknown names count as commands.
     pub fn class(&self, tool: &str) -> ToolClass {
         match tool {
-            "finish" | "delegate" => ToolClass::Control,
+            "finish" | "delegate" | "ask" => ToolClass::Control,
             _ => BUILTIN.iter().find(|t| t.name == tool).map_or(ToolClass::Exec, |t| t.class),
         }
     }
@@ -702,6 +702,7 @@ impl ToolBox {
     /// `describe` plus the `finish` line, for single-agent runs.
     pub fn describe_with_finish(&self) -> String {
         let mut s = self.describe();
+        s.push_str(super::ask::TOOL_LINE);
         s.push_str("- finish {\"summary\": string}: the goal is complete and verified; summarize what changed.\n");
         s
     }
@@ -754,6 +755,7 @@ impl ToolBox {
     /// `schemas` plus `finish`, for single-agent runs.
     pub fn schemas_with_finish(&self) -> Vec<ToolDef> {
         let mut v = self.schemas();
+        v.push(super::ask::tool_def());
         v.push(finish_def());
         v
     }

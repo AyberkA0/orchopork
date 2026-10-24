@@ -505,6 +505,9 @@ impl Inner {
                     }
                     return BranchEnd::Failed(msg.unwrap_or_else(|| format!("{} stopped", name_of(g, &target))));
                 }
+                // Agents in a branch are not offered `ask`, so this only
+                // happens if one asks anyway: the branch cannot wait.
+                Ok(Some(Stop::Waiting(msg))) => return BranchEnd::Failed(msg),
                 Err(_) if pause.load(Ordering::SeqCst) => return BranchEnd::Paused(None),
                 Err(e) => return BranchEnd::Error(e),
             }

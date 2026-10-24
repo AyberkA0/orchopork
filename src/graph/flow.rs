@@ -1621,7 +1621,7 @@ fn flow_groups(g: &FlowGraph, me: &FlowNode, lead: &str, steps: &[Step], obs_cha
                     msgs.push(Message::user(s.output.clone()));
                 }
             }
-            StepKind::Inject if agent == me.id => msgs.push(Message::user(format!("Message from the user:\n{}", s.output))),
+            StepKind::Inject if agent == me.id => msgs.push(Message::user(format!("{}:\n{}", prompts::inject_label(s), s.output))),
             StepKind::Verify if me.kind == NodeKind::Lead || s.meta["judged"] == me.id.as_str() => {
                 msgs.push(Message::user(format!(
                     "Goal check:\n{}\n\n{}",
@@ -1957,7 +1957,13 @@ impl Inner {
                 sees.insert(n.id.clone());
             }
         }
-        let (extra_text, extra_defs) = flow_tools(g, &me, review.as_ref(), dynamic_left, &sees);
+        let (mut extra_text, mut extra_defs) = flow_tools(g, &me, review.as_ref(), dynamic_left, &sees);
+        // Questions for the user, except while reviewing or inside a
+        // parallel branch (waiting there would hold up the whole run).
+        if review.is_none() && !super::in_branch() {
+            extra_text.push_str(super::ask::TOOL_LINE);
+            extra_defs.push(super::ask::tool_def());
+        }
         let mut schemas = toolbox.schemas();
         schemas.extend(extra_defs);
         let system = format!("{}\n\n{}", prompts::actor_system(&format!("{}{extra_text}", toolbox.describe())), skills.system)
@@ -2045,6 +2051,20 @@ impl Inner {
     ) -> Result<Outcome> {
         let arg = |k: &str| a.str_arg(k).unwrap_or("").trim().to_string();
         match (a.tool.as_str(), review) {
+            ("ask", None) if super::in_branch() => Ok(Outcome::fail(
+                "you run in a parallel branch, where the user cannot be asked: decide yourself, or consult a teammate",
+            )),
+            ("ask", None) => match super::ask::from_args(&a.args) {
+                Some(q) => {
+                    for (k, v) in q.meta().as_object().into_iter().flatten() {
+                        meta[k] = v.clone();
+                    }
+                    let mut o = Outcome::ok("Waiting for the user's answer.");
+                    o.stop = Some(Stop::Waiting(q.status(&me.name)));
+                    Ok(o)
+                }
+                None => Ok(Outcome::fail("ask needs a non-empty \"question\"")),
+            },
             ("review", Some(r)) => {
                 let accept = a.args.get("accept").and_then(Value::as_bool).unwrap_or(false);
                 let feedback = arg("feedback");
@@ -2754,10 +2774,12 @@ impl Inner {
         if delegates {
             deny.extend(["edit", "delete", "move", "execute"].map(String::from));
         }
+        let may_ask = review.is_none() && !super::in_branch();
         let prompt = format!(
-            "{}{}\n\n{tail}{suffix}{limits_note}",
+            "{}{}\n\n{tail}{suffix}{limits_note}{}",
             if playbook.is_empty() { String::new() } else { format!("{playbook}\n\n") },
-            super::external::as_prompt(&messages)
+            super::external::as_prompt(&messages),
+            if may_ask { super::ask::EXTERNAL_HOW } else { "" }
         );
         let out = self.external_turn_denying(cfg, run, model, &me.name, prompt, deny).await?;
         let mut meta = super::external::meta(model, &out);
@@ -2777,6 +2799,15 @@ impl Inner {
                     if !accept {
                         reopen(g, &mut next, &r.subject);
                     }
+                }
+                None if may_ask && super::ask::from_text(&text).is_some() => {
+                    // Not done yet: it continues once the user answers.
+                    let q = super::ask::from_text(&text).expect("checked");
+                    meta["tool"] = json!("ask");
+                    for (k, v) in q.meta().as_object().into_iter().flatten() {
+                        meta[k] = v.clone();
+                    }
+                    stop = Some(Stop::Waiting(q.status(&me.name)));
                 }
                 None => {
                     meta["summary"] = json!(clip(&text, 6_000));

@@ -19,6 +19,7 @@
 //! budget is exhausted, cloud roles fall back to a local actor.
 
 pub mod approvals;
+pub mod ask;
 pub mod browser;
 pub mod screen;
 pub mod external;
@@ -69,6 +70,8 @@ pub enum Event {
 enum Stop {
     Done,
     Paused(Option<String>),
+    /// An agent asked the user something (see `ask`); the status line.
+    Waiting(String),
 }
 
 tokio::task_local! {
@@ -354,6 +357,26 @@ impl Engine {
     /// run executes, while paused, and on a finished run (which re-opens it
     /// for a follow-up; resume to continue).
     pub async fn inject(&self, run_id: &str, text: &str, agent: Option<&str>) -> Result<Step> {
+        self.inject_meta(run_id, text, agent, json!({})).await
+    }
+
+    /// Answers the question the run is waiting on (step `seq`) and
+    /// continues the run.
+    pub async fn answer(&self, run_id: &str, seq: i64, text: &str) -> Result<Run> {
+        let (_, steps) = self.run_detail(run_id).await?;
+        let q = ask::waiting_on(&steps)
+            .filter(|q| q.seq == seq)
+            .ok_or_else(|| Error::Conflict("that question was already answered or is no longer open".into()))?;
+        let agent = q.meta["agent"].as_str().map(str::to_string);
+        self.inject_meta(run_id, text, agent.as_deref(), json!({ "answer_to": seq })).await?;
+        if self.is_active(run_id) {
+            return self.inner.ws.store.get_run(run_id).await;
+        }
+        self.start(run_id).await
+    }
+
+    /// `inject`, with `extra` merged into the step's metadata.
+    async fn inject_meta(&self, run_id: &str, text: &str, agent: Option<&str>, extra: serde_json::Value) -> Result<Step> {
         let text = text.trim();
         if text.is_empty() {
             return Err(Error::InvalidRequest("message is empty".into()));
@@ -384,6 +407,9 @@ impl Engine {
         } else if state.phase == Phase::Done {
             state.phase = Phase::Act;
             state.reviews = 0;
+        }
+        for (k, v) in extra.as_object().into_iter().flatten() {
+            meta[k] = v.clone();
         }
         // Human guidance resets the failure streak.
         state.failures = 0;
@@ -547,6 +573,7 @@ impl Inner {
         let (status, error) = match self.drive_loop(&run_id, &pause).await {
             Ok(Stop::Done) => (RunStatus::Done, None),
             Ok(Stop::Paused(msg)) => (RunStatus::Paused, msg),
+            Ok(Stop::Waiting(msg)) => (RunStatus::Waiting, Some(msg)),
             Err(e) => (RunStatus::Paused, Some(e.to_string())),
         };
         // Status before releasing the slot: a resume that sneaks in between
@@ -942,6 +969,7 @@ Write the updated summary in at most {limit} characters.",
         let mut meta = call_meta(&out);
         meta["escalated"] = json!(escalated);
         let mut next = state.clone();
+        let mut asked = None;
         let violations = skills.check_output(&out.text);
         let (observation, ok) = if !violations.is_empty() {
             let list: Vec<String> = violations.iter().map(|v| format!("{} (reply {})", v.skill, v.detail)).collect();
@@ -964,6 +992,19 @@ Write the updated summary in at most {limit} characters.",
                         "Could not parse an action: {e}.{cut} Reply with a short note and exactly one JSON object, e.g. {{\"tool\": \"read_file\", \"args\": {{\"path\": \"README.md\"}}}}."
                     );
                     (msg, Some(false))
+                }
+                Ok(a) if a.tool == "ask" => {
+                    meta["tool"] = json!("ask");
+                    match ask::from_args(&a.args) {
+                        Some(q) => {
+                            for (k, v) in q.meta().as_object().into_iter().flatten() {
+                                meta[k] = v.clone();
+                            }
+                            asked = Some(q.status("The agent"));
+                            ("Waiting for the user's answer.".to_string(), Some(true))
+                        }
+                        None => ("ask needs a non-empty \"question\"".to_string(), Some(false)),
+                    }
                 }
                 Ok(a) if a.tool == "finish" => {
                     meta["tool"] = json!("finish");
@@ -1005,6 +1046,9 @@ Write the updated summary in at most {limit} characters.",
         count_outcome(cfg, &mut meta, &mut next, ok);
         let cost = out.cost_usd + memory_cost;
         self.append(run, StepKind::Act, &out.text, Some(&observation), meta, &next, cost).await?;
+        if let Some(status) = asked {
+            return Ok(Some(Stop::Waiting(status)));
+        }
         if next.failures >= cfg.limits.max_failures {
             return Ok(Some(Stop::Paused(Some(format!(
                 "{} consecutive failed turns; inject guidance or pick a stronger actor model, then resume",

@@ -171,10 +171,20 @@ impl Inner {
             cfg.limits.cloud_context_chars,
             cfg.limits.tool_output_chars,
         );
-        let prompt = format!("{}\n\n{tail}{SUFFIX}", as_prompt(&messages));
+        let prompt = format!("{}\n\n{tail}{SUFFIX}{}", as_prompt(&messages), super::ask::EXTERNAL_HOW);
         let name = self.agent_display(cfg, model);
         let out = self.external_turn(cfg, run, model, &name, prompt).await?;
         let mut next = RunState { failures: 0, escalate: false, ..state };
+        let question = (!out.cancelled).then(|| super::ask::from_text(&out.text)).flatten();
+        if let Some(q) = question {
+            let mut m = meta(model, &out);
+            m["tool"] = json!("ask");
+            for (k, v) in q.meta().as_object().into_iter().flatten() {
+                m[k] = v.clone();
+            }
+            self.append(run, StepKind::Act, &out.text, Some(&tool_lines(&out)), m, &next, 0.0).await?;
+            return Ok(Some(Stop::Waiting(q.status(&name))));
+        }
         if !out.cancelled {
             let skills = self.ws.skills.compose("")?;
             next.phase = if !verify_commands(run, &skills).is_empty() {

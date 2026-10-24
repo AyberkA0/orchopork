@@ -223,6 +223,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/runs/{id}/inject", post(inject_run))
         .route("/api/runs/{id}/rewind", post(rewind_run))
         .route("/api/runs/{id}/diff", get(diff_run))
+        .route("/api/runs/{id}/answer", post(answer_run))
         .route("/api/runs/{id}/files", get(outputs::files))
         .route("/api/runs/{id}/file", get(outputs::file))
         .route("/api/runs/{id}/raw/{*path}", get(outputs::raw))
@@ -1421,6 +1422,17 @@ async fn preview_root(UrlPath(id): UrlPath<String>) -> Response {
 
 async fn preview_root_t(UrlPath((token, id)): UrlPath<(String, String)>) -> Response {
     axum::response::Redirect::permanent(&format!("/pvt/{token}/{id}/")).into_response()
+}
+
+#[derive(Deserialize)]
+struct AnswerReq {
+    /// The question's step.
+    seq: i64,
+    text: String,
+}
+
+async fn answer_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(req): Json<AnswerReq>) -> ApiResult {
+    Ok(Json(json!({ "run": s.engine()?.answer(&id, req.seq, &req.text).await? })))
 }
 
 /// `GET /api/access`: whether other machines need a token.

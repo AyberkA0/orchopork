@@ -34,7 +34,7 @@ macro_rules! text_enum {
     };
 }
 
-text_enum!(RunStatus { Running => "running", Paused => "paused", Done => "done" });
+text_enum!(RunStatus { Running => "running", Paused => "paused", Done => "done", Waiting => "waiting" });
 text_enum!(Phase { Plan => "plan", Act => "act", Verify => "verify", Review => "review", Done => "done" });
 text_enum!(StepKind { Plan => "plan", Act => "act", Verify => "verify", Review => "review", Inject => "inject" });
 

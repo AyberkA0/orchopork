@@ -190,9 +190,14 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .addcard:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
 .addcard b { font-size: 13.5px; }
 .conn { display: grid; grid-template-columns: 1fr auto auto; gap: 6px 10px; align-items: center; }
-.fp { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; text-align: left; }
+.fp { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; text-align: left; min-width: 0; max-width: 100%; }
 .fp .crumbs { display: flex; flex-wrap: wrap; gap: 2px; padding: 8px 10px; background: var(--bg2); border-bottom: 1px solid var(--line); font: 12px var(--mono); }
-.fp .crumbs span { cursor: pointer; padding: 2px 4px; border-radius: 6px; } .fp .crumbs span:hover { background: var(--glow); }
+.fp .crumbs span { cursor: pointer; padding: 2px 4px; border-radius: 6px; min-width: 0; overflow-wrap: anywhere; } .fp .crumbs span:hover { background: var(--glow); }
+.fp .crumbs .home { display: inline-flex; align-items: center; }
+.fp .dirs .name { min-width: 0; overflow-wrap: anywhere; }
+.fp .foot > * { min-width: 0; }
+.fp .foot .ghost { flex: none; white-space: nowrap; }
+.fp .foot .open { flex: 0 1 auto; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .fp .dirs { max-height: 280px; overflow: auto; }
 .fp .foot { display: flex; gap: 8px; align-items: center; padding: 10px; border-top: 1px solid var(--line); background: var(--bg2); }
 .recent { display: grid; gap: 6px; text-align: left; }
@@ -451,7 +456,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--frame); box-shad
 details.out pre, pre.block { background: var(--bg2); border-color: var(--line); }
 .verify-in { border-top-color: var(--line); }
 .theme-btn { padding: 6px 8px; font-size: 13px; }
-svg.ico { display: inline-block; vertical-align: -2px; flex: none; }
+svg.ico { display: inline-block; vertical-align: -4px; flex: none; }
 /* An icon and its label sit side by side (text nodes do not count for
    :last-child, so spacing comes from a flex gap). */
 button:has(> svg.ico), .pill:has(> svg.ico) { display: inline-flex; align-items: center; gap: 7px; }
@@ -562,6 +567,10 @@ const $ = (s, el = document) => el.querySelector(s);
 // strokes (`s`). The interface never uses emoji: they render differently on
 // every system and clash with the look.
 const ICONS = {
+  home: { f: "M12 2.8 1.8 11.3l1.5 1.8 1.2-1V21h6v-6h3v6h6v-8.9l1.2 1 1.5-1.8Z" },
+  folder: { f: "M2.5 5.5A1.5 1.5 0 0 1 4 4h5.6l2.2 2.5H20a1.5 1.5 0 0 1 1.5 1.5v10.5A1.5 1.5 0 0 1 20 20H4a1.5 1.5 0 0 1-1.5-1.5Z" },
+  up: { f: "M12 3.2 19.5 11h-5v9.5h-5V11h-5Z" },
+  plus: { f: "M10.6 3.5h2.8v7.1h7.1v2.8h-7.1v7.1h-2.8v-7.1H3.5v-2.8h7.1Z" },
   gear: { f: "M19.48 10.17 L21.89 10.51 L21.89 13.49 L19.48 13.83 L18.58 15.99 L20.05 17.93 L17.93 20.05 L15.99 18.58 L13.83 19.48 L13.49 21.89 L10.51 21.89 L10.17 19.48 L8.01 18.58 L6.07 20.05 L3.95 17.93 L5.42 15.99 L4.52 13.83 L2.11 13.49 L2.11 10.51 L4.52 10.17 L5.42 8.01 L3.95 6.07 L6.07 3.95 L8.01 5.42 L10.17 4.52 L10.51 2.11 L13.49 2.11 L13.83 4.52 L15.99 5.42 L17.93 3.95 L20.05 6.07 L18.58 8.01Z M15.2 12a3.2 3.2 0 1 0-6.4 0a3.2 3.2 0 1 0 6.4 0Z" },
   chart: { f: "M3.5 19h17v2.5h-17z M5 11h3.5v6.5H5z M10.25 5h3.5v12.5h-3.5z M15.5 8.5H19v9h-3.5z" },
   sun: { f: "M12 16.8a4.8 4.8 0 1 0 0-9.6 4.8 4.8 0 0 0 0 9.6Z", s: "M12 2.5v1.8M12 19.7v1.8M2.5 12h1.8M19.7 12h1.8M5.3 5.3l1.3 1.3M17.4 17.4l1.3 1.3M5.3 18.7l1.3-1.3M17.4 6.6l1.3-1.3" },
@@ -580,10 +589,12 @@ const ICONS = {
   push: { f: "M12 2.5l7 7.8h-4.5V17h-5v-6.7H5z M4.5 19h15v2.5h-15z" },
   edit: { f: "M3.5 20.5l1.2-5.4L15.4 4.4a2.3 2.3 0 0 1 3.2 0l1 1a2.3 2.3 0 0 1 0 3.2L8.9 19.3l-5.4 1.2Z" },
 };
+// Sizes at call sites are relative; ICON_SCALE sets how large icons are overall.
+const ICON_SCALE = 1.25;
 function icon(name, { size = 14 } = {}) {
   const NS = "http://www.w3.org/2000/svg", spec = ICONS[name] || {};
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("width", size); svg.setAttribute("height", size);
+  const svg = document.createElementNS(NS, "svg"), px = Math.round(size * ICON_SCALE);
+  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("width", px); svg.setAttribute("height", px);
   svg.setAttribute("class", "ico"); svg.setAttribute("aria-hidden", "true");
   if (spec.f) {
     const p = document.createElementNS(NS, "path");
@@ -900,22 +911,22 @@ function folderPicker(start, noticeBox, onOpened) {
     const parts = d.path.split(/[\\/]/).filter(Boolean);
     const crumbs = h("div", { class: "crumbs" }, d.path.startsWith("/") && h("span", { text: "/", onclick: () => load("/") }),
       parts.map((p, i) => { const full = (d.path.startsWith("/") ? "/" : "") + parts.slice(0, i + 1).join(sep) + (i === 0 && /:$/.test(p) ? sep : ""); return [h("span", { text: p, onclick: () => load(full) }), i < parts.length - 1 && h("i", { class: "faint", text: sep })]; }),
-      h("span", { class: "grow" }), d.home && h("span", { title: "Home", text: "⌂", onclick: () => load(d.home) }));
+      h("span", { class: "grow" }), d.home && h("span", { class: "home", title: "Home", onclick: () => load(d.home) }, icon("home")));
     const dirs = h("div", { class: "dirs" },
-      d.parent && h("div", { class: "mitem", onclick: () => load(d.parent) }, h("span", { text: "↰" }), h("span", { class: "muted", text: "Up" })),
+      d.parent && h("div", { class: "mitem", onclick: () => load(d.parent) }, h("span", { class: "faint" }, icon("up")), h("span", { class: "muted", text: "Up" })),
       d.dirs.map((x) => h("div", { class: "mitem", title: x.path, onclick: () => load(x.path), ondblclick: () => go_(x.path) },
-        h("span", { text: "▸" }), h("span", { class: "grow", text: x.name }),
+        h("span", { class: "faint" }, icon("folder")), h("span", { class: "grow name", text: x.name }),
         x.project ? h("span", { class: "pill done", text: "project" }) : x.repo && h("span", { class: "pill", text: "git" }))),
       !d.dirs.length && h("div", { class: "mitem muted", style: { cursor: "default" }, text: "No sub-folders." }));
     const nameIn = h("input", { placeholder: "new-folder-name", style: { display: "none" } });
-    const mk = h("button", { class: "ghost", text: "＋ New folder", onclick: guard(async () => {
+    const mk = h("button", { class: "ghost", onclick: guard(async () => {
       if (nameIn.style.display === "none") { nameIn.style.display = ""; nameIn.focus(); return; }
       if (!nameIn.value.trim()) return;
       const r = await api("/api/fs/mkdir", { body: { parent: d.path, name: nameIn.value } });
       go_(r.path);
-    }) });
+    }) }, icon("plus"), "New folder");
     nameIn.addEventListener("keydown", (e) => { if (e.key === "Enter") mk.click(); });
-    const openBtn = h("button", { class: "primary", text: `Open ${baseName(d.path)}`, onclick: () => go_(d.path) });
+    const openBtn = h("button", { class: "primary open", title: d.path, text: `Open ${baseName(d.path)}`, onclick: () => go_(d.path) });
     box.replaceChildren(crumbs, dirs, h("div", { class: "foot" }, mk, h("div", { class: "grow" }, nameIn), openBtn));
   });
   const go_ = guard(async (path) => { if (await openProject(path, noticeBox)) onOpened && onOpened(); });

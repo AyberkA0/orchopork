@@ -52,9 +52,22 @@ pub struct AppState {
     /// Pre-filled in the workspace picker (the `--workspace` argument).
     default_root: Option<PathBuf>,
     pub tokens: Arc<TokenStore>,
+    /// Whether other machines need an access token (Settings → Remote
+    /// access; off by default). Saved in `access_file`.
+    require_token: std::sync::atomic::AtomicBool,
+    access_file: PathBuf,
 }
 
 pub type Shared = Arc<AppState>;
+
+/// Reads the saved "require an access token" setting (default: off).
+fn load_require_token(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v["require_token"].as_bool())
+        .unwrap_or(false)
+}
 
 impl AppState {
     /// If `default_root` is an already-onboarded workspace, bind it and go
@@ -67,6 +80,11 @@ impl AppState {
         } else {
             expand_home("~/.orchopork/tokens.json")
         };
+        let access_file = if cfg!(test) {
+            std::env::temp_dir().join(format!("orchopork-test-server-{}.json", uuid::Uuid::new_v4().simple()))
+        } else {
+            expand_home("~/.orchopork/server.json")
+        };
         let state = Arc::new(Self {
             cloud_models: Default::default(),
             models_cache: Mutex::new(None),
@@ -75,6 +93,8 @@ impl AppState {
             wizard: Mutex::new(Wizard::default()),
             default_root: default_root.clone(),
             tokens: Arc::new(TokenStore::open(tokens_path)?),
+            require_token: std::sync::atomic::AtomicBool::new(load_require_token(&access_file)),
+            access_file,
         });
         if let Some(ref root) = default_root
             && Workspace::is_initialized(root) {
@@ -222,6 +242,7 @@ pub fn router(state: Shared) -> Router {
         .route("/pvt/{token}/{id}/", get(preview_index_t))
         .route("/pvt/{token}/{id}/{*path}", get(preview_file_t))
         .route("/api/tokens", get(list_tokens).post(create_token))
+        .route("/api/access", get(get_access).put(put_access))
         .route("/api/tokens/{id}", delete(delete_token))
         .route("/api/events", get(events))
         // Client-side-routed SPA: every other GET gets the same shell.
@@ -231,13 +252,23 @@ pub fn router(state: Shared) -> Router {
         .with_state(state)
 }
 
-fn is_local_host(host: &str) -> bool {
-    let name = if let Some(rest) = host.strip_prefix('[') {
+/// The host part of a `Host` header (`[::1]:80` → `::1`).
+fn host_name(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
         rest.split(']').next().unwrap_or("")
     } else {
         host.rsplit_once(':').map_or(host, |(h, p)| if p.bytes().all(|b| b.is_ascii_digit()) { h } else { host })
-    };
-    matches!(name.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
+    }
+}
+
+fn is_local_host(host: &str) -> bool {
+    matches!(host_name(host).to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
+}
+
+/// An IP address or `localhost`: never a name a web page could point at
+/// this machine (DNS rebinding), so it is safe to serve without a token.
+fn is_ip_host(host: &str) -> bool {
+    is_local_host(host) || host_name(host).parse::<std::net::IpAddr>().is_ok()
 }
 
 async fn local_or_token_auth(State(s): State<Shared>, req: Request, next: Next) -> Response {
@@ -291,9 +322,12 @@ async fn local_or_token_auth(State(s): State<Shared>, req: Request, next: Next) 
         return (StatusCode::FORBIDDEN, Json(json!({ "error": "sandboxed pages cannot call the API" }))).into_response();
     }
 
-    // Token management is for the machine owner only: a leaked remote token
-    // must not be able to list, mint or revoke other tokens.
-    if !is_local && req.uri().path().starts_with("/api/tokens") {
+    // Token management, and whether tokens are needed at all, is for the
+    // machine owner only: a remote client must not be able to list, mint
+    // or revoke tokens, or lock others (or itself) out.
+    let owner_only = req.uri().path().starts_with("/api/tokens")
+        || (req.uri().path() == "/api/access" && *req.method() != Method::GET);
+    if !is_local && owner_only {
         return (
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "access tokens can only be managed from the local machine (localhost)" })),
@@ -314,6 +348,20 @@ async fn local_or_token_auth(State(s): State<Shared>, req: Request, next: Next) 
             Some(o) => o.split_once("://").is_some_and(|(_, rest)| is_local_host(rest.trim_end_matches('/'))),
         };
         if !state_changing || origin_ok {
+            return next.run(req).await;
+        }
+    }
+
+    // Token check off (the default): other machines get in by IP address.
+    // A host name is refused, which keeps DNS rebinding out, and changes
+    // must come from orchopork's own page.
+    if !is_local && !s.require_token.load(std::sync::atomic::Ordering::SeqCst) && is_ip_host(host) {
+        let state_changing = !matches!(*req.method(), Method::GET | Method::HEAD);
+        let same_origin = headers
+            .get(header::ORIGIN)
+            .and_then(|h| h.to_str().ok())
+            .is_none_or(|o| o.split_once("://").is_some_and(|(_, rest)| rest.trim_end_matches('/') == host));
+        if !state_changing || same_origin {
             return next.run(req).await;
         }
     }
@@ -1369,6 +1417,25 @@ async fn preview_root_t(UrlPath((token, id)): UrlPath<(String, String)>) -> Resp
     axum::response::Redirect::permanent(&format!("/pvt/{token}/{id}/")).into_response()
 }
 
+/// `GET /api/access`: whether other machines need a token.
+async fn get_access(State(s): State<Shared>) -> ApiResult {
+    Ok(Json(json!({ "require_token": s.require_token.load(std::sync::atomic::Ordering::SeqCst) })))
+}
+
+#[derive(Deserialize)]
+struct AccessReq {
+    require_token: bool,
+}
+
+/// `PUT /api/access` (this machine only): turns the token check on or off,
+/// saved across restarts.
+async fn put_access(State(s): State<Shared>, Json(req): Json<AccessReq>) -> ApiResult {
+    let body = json!({ "require_token": req.require_token }).to_string();
+    crate::fsutil::write_atomic(&s.access_file, body.as_bytes(), true)?;
+    s.require_token.store(req.require_token, std::sync::atomic::Ordering::SeqCst);
+    Ok(Json(json!({ "require_token": req.require_token })))
+}
+
 async fn list_tokens(State(s): State<Shared>) -> ApiResult {
     let tokens: Vec<Value> = s
         .tokens
@@ -1565,6 +1632,30 @@ mod tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status().as_u16(), 200);
+
+        // Token check off (the default): other machines get in by IP, not by
+        // a host name, and only this machine may turn the check on.
+        let lan = |method: &str, uri: &str, origin: Option<&str>| {
+            let mut b = Request::builder().method(method).uri(uri).header("host", "192.168.1.16:7878");
+            if let Some(o) = origin {
+                b = b.header("origin", o);
+            }
+            let mut r = b.header("content-type", "application/json").body(Body::from(r#"{"require_token": true}"#)).unwrap();
+            r.extensions_mut().insert(axum::extract::ConnectInfo("192.168.1.50:5000".parse::<std::net::SocketAddr>().unwrap()));
+            r
+        };
+        assert_eq!(app.clone().oneshot(lan("GET", "/api/state", None)).await.unwrap().status().as_u16(), 200);
+        assert_eq!(
+            app.clone().oneshot(lan("PUT", "/api/access", Some("http://192.168.1.16:7878"))).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            app.clone().oneshot(lan("POST", "/api/runs", Some("http://evil.example"))).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+        state.require_token.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(app.clone().oneshot(lan("GET", "/api/state", None)).await.unwrap().status(), StatusCode::FORBIDDEN);
+        state.require_token.store(false, std::sync::atomic::Ordering::SeqCst);
 
         // ...but not from a sandboxed preview page that read it from its URL.
         let req = Request::builder()

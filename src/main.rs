@@ -336,9 +336,9 @@ async fn serve(root: Option<PathBuf>, host: &str, port: u16) -> anyhow::Result<(
     println!("orchopork is running at:");
     println!("  Local:  http://localhost:{port}");
     if host == "0.0.0.0" {
-        println!("  Remote: http://<ip>:{port} (authentication token required)");
+        println!("  Remote: http://<ip>:{port} (access token: Settings → Remote Access & Tokens)");
     } else {
-        println!("  Remote: http://{host}:{port} (authentication token required)");
+        println!("  Remote: http://{host}:{port} (access token: Settings → Remote Access & Tokens)");
     }
     let loopback = host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()) || host == "localhost";
     if cfg!(windows) && !loopback {

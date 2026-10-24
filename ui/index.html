@@ -4398,12 +4398,23 @@ async function viewModels(main) {
   });
   newLabel.addEventListener("keydown", (e) => { if (e.key === "Enter") genBtn.click(); });
 
+  // Whether other devices need a token. Applies at once; only this
+  // computer may change it.
+  const requireBox = h("input", { type: "checkbox", style: { width: "auto" }, onchange: guard(async (e) => {
+    e.target.disabled = true;
+    try { await api("/api/access", { method: "PUT", body: { require_token: e.target.checked } }); toast(e.target.checked ? "Access token required" : "Access token off"); }
+    catch (x) { e.target.checked = !e.target.checked; throw x; }
+    finally { e.target.disabled = false; }
+  }) });
+  const requireRow = h("label", { class: "row", style: { color: "var(--text)", marginTop: "10px" } }, requireBox, "Require an access token for other devices");
+  api("/api/access").then((a) => { requireBox.checked = !!a.require_token; }).catch(() => {});
   const tokensCard = h("div", { class: "card" },
     h("div", { class: "row", style: { gap: "8px" } },
       icon("key", 18, { color: "var(--accent-fg)" }),
       h("h3", { class: "grow", style: { margin: 0 }, text: "Remote Access & Tokens" })
     ),
-    h("p", { class: "small muted", style: { margin: "8px 0 12px" }, text: "Manage security tokens for remote access via port forwarding or static IP. Local requests (localhost / 127.0.0.1) are always authenticated. Remote requests without a valid token will be blocked." }),
+    requireRow,
+    h("p", { class: "small muted", style: { margin: "8px 0 12px" }, text: "Manage security tokens for remote access via port forwarding or static IP. Local requests (localhost / 127.0.0.1) are always authenticated. With the token check on, remote requests without a valid token are blocked; with it off, any device that can reach this port can use orchopork by its IP address." }),
     h("div", { class: "row", style: { gap: "8px", marginBottom: "8px" } }, h("div", { class: "grow" }, extInp)),
     h("div", { class: "row wrap", style: { gap: "8px" } },
       h("div", { class: "grow", style: { flexBasis: "200px" } }, newLabel),

@@ -728,6 +728,12 @@ details.out pre, pre.block, .md code { background: var(--surface); }
 .node.sel { background: var(--surface); outline: 2px solid var(--glow); }
 .node.active { background: var(--glow); } .node.active::after { display: none; }
 .node.drop { background: var(--glow); outline: 3px solid var(--glow); }
+/* Flow nodes have no frame to colour, so their states show as an outline and a tint. */
+.fnode.sel { background: var(--surface); outline: 2px solid var(--accent); outline-offset: 2px; }
+.fnode.active { background: var(--glow); }
+.fnode.drop { outline: 2px solid var(--ok); outline-offset: 2px; }
+.fnode.nodrop { outline: 2px solid var(--bad); outline-offset: 2px; }
+.elabel.sel { background: var(--glow); outline: 1.5px solid var(--accent); }
 .node .rank::before { background: var(--surface2); }
 .node.lead .rank::before { background: var(--accent); }
 /* tables and lists: rhythm instead of rules */

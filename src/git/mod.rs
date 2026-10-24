@@ -233,7 +233,35 @@ impl GitRepo {
     /// `M path` / `A path` / `D path` line per changed file.
     pub async fn changed_names(&self, base: &str) -> Result<String> {
         validate_commit(base)?;
+        self.see_new_files().await;
         self.run(&["diff", "--name-status", "--no-color", "--no-renames", base]).await
+    }
+
+    /// Marks new, not ignored files as intended for the next commit, so
+    /// `git diff <base>` shows them: an agent's new files must be in the
+    /// diff of its report before its step is checkpointed. Only ever used
+    /// in a run's worktree, where every step commits everything anyway.
+    /// Leaves out what `commit_all` leaves out (dependencies, screenshots).
+    async fn see_new_files(&self) {
+        let mut args = vec!["add", "--intent-to-add", "--all", "--", "."];
+        args.extend(DEPENDENCY_DIRS.iter().map(|(pathspec, _)| *pathspec));
+        let _ = self.run(&args).await;
+    }
+
+    /// Lines added and removed per file in the working tree against `base`
+    /// (`None` for binary files).
+    pub async fn numstat(&self, base: &str) -> Result<std::collections::BTreeMap<String, (Option<u64>, Option<u64>)>> {
+        validate_commit(base)?;
+        self.see_new_files().await;
+        let out = self.run(&["diff", "--numstat", "--no-color", "--no-renames", base]).await?;
+        Ok(out
+            .lines()
+            .filter_map(|l| {
+                let mut it = l.splitn(3, '\t');
+                let (a, r, p) = (it.next()?, it.next()?, it.next()?);
+                Some((p.to_string(), (a.parse().ok(), r.parse().ok())))
+            })
+            .collect())
     }
 
     /// `git grep` over tracked and untracked files. No match is `Ok("")`.
@@ -259,6 +287,7 @@ impl GitRepo {
     /// Lines added and removed since `base` (working tree included).
     pub async fn numstat_from(&self, base: &str) -> Result<(u64, u64)> {
         validate_commit(base)?;
+        self.see_new_files().await;
         let out = self.run(&["diff", "--numstat", base]).await?;
         Ok(out.lines().fold((0, 0), |(a, r), l| {
             let mut f = l.split_whitespace();
@@ -270,6 +299,7 @@ impl GitRepo {
     /// (stat, patch) of the working tree (committed or not) against `base`.
     pub async fn diff_from(&self, base: &str) -> Result<(String, String)> {
         validate_commit(base)?;
+        self.see_new_files().await;
         let stat = self.run(&["diff", "--stat", "--no-color", base]).await?;
         let patch = self.run(&["diff", "--no-color", base]).await?;
         Ok((stat, patch))
@@ -469,5 +499,21 @@ mod tests {
         repo.reset_hard(&base).await.unwrap();
         assert!(!d.path().join("web").join("app.js").exists(), "the agent's work is rewound");
         assert!(deep.join("index.js").exists(), "installed dependencies stay");
+    }
+
+    #[tokio::test]
+    async fn new_files_show_in_diffs_before_their_checkpoint() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = GitRepo::new(d.path());
+        repo.init().await.unwrap();
+        let base = repo.commit_all("base").await.unwrap();
+        // A file an agent just created, and a screenshot it took.
+        std::fs::write(d.path().join("fresh.svg"), "<svg/>\n").unwrap();
+        std::fs::create_dir_all(d.path().join(".orchopork-shots")).unwrap();
+        std::fs::write(d.path().join(".orchopork-shots").join("home.png"), "png").unwrap();
+        let (stat, _) = repo.diff_from(&base).await.unwrap();
+        assert!(stat.contains("fresh.svg") && !stat.contains("orchopork-shots"), "{stat}");
+        assert_eq!(repo.numstat(&base).await.unwrap()["fresh.svg"], (Some(1), Some(0)));
+        assert!(repo.changed_names(&base).await.unwrap().contains("A\tfresh.svg"));
     }
 }

@@ -103,6 +103,9 @@ struct Inner {
     /// Per run: one approval request at a time (parallel branches may ask
     /// together; the dashboard shows one).
     approval_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// When each run's agents last finished a step (`run/agent`, and
+    /// `run/` for the run itself), so every step records how long it took.
+    clocks: Mutex<HashMap<String, std::time::Instant>>,
     /// Held for the engine's lifetime: one executing process per workspace.
     _lock: std::fs::File,
 }
@@ -137,6 +140,7 @@ impl Engine {
                 events,
                 append_lock: tokio::sync::Mutex::new(()),
                 approval_gates: Mutex::new(HashMap::new()),
+                clocks: Mutex::new(HashMap::new()),
                 _lock: lock,
             }),
         })
@@ -557,6 +561,13 @@ impl Inner {
 
     async fn drive_loop(&self, run_id: &str, pause: &AtomicBool) -> Result<Stop> {
         let mut taken = 0u32;
+        // Time spent paused is not part of any step.
+        {
+            let prefix = format!("{run_id}/");
+            let mut clocks = self.clocks.lock().unwrap();
+            clocks.retain(|k, _| !k.starts_with(&prefix));
+            clocks.insert(prefix, std::time::Instant::now());
+        }
         loop {
             if pause.load(Ordering::SeqCst) {
                 return Ok(Stop::Paused(None));
@@ -648,12 +659,26 @@ impl Inner {
     ) -> Result<()> {
         let _g = self.append_lock.lock().await;
         let label = meta["tool"].as_str().map(|t| format!(" {t}")).unwrap_or_default();
+        // How long the step took: since this agent's previous step (or the
+        // run's start or resume). Messages from the user take no time.
+        let mut meta = meta;
+        if kind != StepKind::Inject {
+            let now = std::time::Instant::now();
+            let agent = format!("{}/{}", run.id, meta["agent"].as_str().unwrap_or(""));
+            let mut clocks = self.clocks.lock().unwrap();
+            let since = clocks.get(&agent).or_else(|| clocks.get(&format!("{}/", run.id))).copied();
+            if let Some(t) = since
+                && meta.get("ms").is_none()
+            {
+                meta["ms"] = json!(now.duration_since(t).as_millis() as u64);
+            }
+            clocks.insert(agent, now);
+        }
         let commit =
             GitRepo::new(&run.worktree).commit_all(&format!("orchopork {}: {}{label}", run.id, kind.as_str())).await?;
         // A branch's step checkpoints the branch worktree and the branch's
         // state inside the run's; the step itself points at the run's
         // worktree, which the branches do not touch.
-        let mut meta = meta;
         let branch = BRANCH.try_with(Arc::clone).ok();
         let (state, commit) = match &branch {
             Some(b) => {

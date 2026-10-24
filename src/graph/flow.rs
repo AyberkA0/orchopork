@@ -42,7 +42,7 @@ use crate::providers::{CompletionRequest, Image, Message, ProviderId, ToolDef};
 use crate::skills::Audience;
 use crate::storage::{
     EdgeContext, FlowEdge, FlowGraph, FlowNode, GoalJudge, NodeKind, Phase, ReviewKind, Run, RunState, Step, StepKind,
-    flowgraph::auto_layout,
+    flowgraph::{QuestionRoute, auto_layout},
 };
 
 /// Turns a consulted / reviewing / judging agent gets inside a side session.
@@ -480,7 +480,7 @@ impl Engine {
             }
         }
         if g.goal().is_some() && !gs.criteria.contains('\n') && gs.criteria.len() < 80 {
-            warnings.push(json!({ "node": g.goal().map(|n| n.id.clone()), "text": "The Goal's success criteria are vague: make them a checklist (✨ Make detailed)." }));
+            warnings.push(json!({ "node": g.goal().map(|n| n.id.clone()), "text": "The Goal's success criteria are vague: make them a checklist (Make detailed)." }));
         }
         // Tasks that rely on talking to someone without a link that allows it.
         for n in g.nodes.iter().filter(|n| n.is_worker()) {
@@ -2059,6 +2059,11 @@ impl Inner {
                     for (k, v) in q.meta().as_object().into_iter().flatten() {
                         meta[k] = v.clone();
                     }
+                    if let Some((lead, answer, cost)) = self.lead_answer(cfg, run, g, me, &q, meta).await? {
+                        let mut o = Outcome::ok(format!("{} answers:\n{answer}", lead.name));
+                        o.cost = cost;
+                        return Ok(o);
+                    }
                     let mut o = Outcome::ok("Waiting for the user's answer.");
                     o.stop = Some(Stop::Waiting(q.status(&me.name)));
                     Ok(o)
@@ -2787,6 +2792,7 @@ impl Inner {
         let mut next = RunState { failures: 0, escalate: false, ..state.clone() };
         let text = if out.text.is_empty() { format!("({} finished without a report)", me.name) } else { out.text.clone() };
         let mut stop = out.cancelled.then_some(Stop::Paused(None));
+        let mut lead_reply: Option<(String, String, f64)> = None;
         if !out.cancelled {
             match &review {
                 Some(r) => {
@@ -2801,13 +2807,18 @@ impl Inner {
                     }
                 }
                 None if may_ask && super::ask::from_text(&text).is_some() => {
-                    // Not done yet: it continues once the user answers.
+                    // Not done yet: it continues once the question is answered.
                     let q = super::ask::from_text(&text).expect("checked");
                     meta["tool"] = json!("ask");
                     for (k, v) in q.meta().as_object().into_iter().flatten() {
                         meta[k] = v.clone();
                     }
-                    stop = Some(Stop::Waiting(q.status(&me.name)));
+                    match self.lead_answer(cfg, run, g, me, &q, &mut meta).await? {
+                        // The answer reaches it on its next turn, as the
+                        // user's would.
+                        Some((lead, answer, cost)) => lead_reply = Some((lead.id.clone(), answer, cost)),
+                        None => stop = Some(Stop::Waiting(q.status(&me.name))),
+                    }
                 }
                 None => {
                     meta["summary"] = json!(clip(&text, 6_000));
@@ -2825,7 +2836,56 @@ impl Inner {
         state = next;
         let obs = super::external::tool_lines(&out);
         self.append(run, StepKind::Act, &text, Some(&obs), meta, &state, 0.0).await?;
+        if let Some((lead, answer, cost)) = lead_reply {
+            let asked = self.ws.store.head_step(&run.id).await?.map(|s| s.seq);
+            let m = json!({ "agent": me.id, "from": lead, "answer_to": asked });
+            self.append(run, StepKind::Inject, &answer, None, m, &state, cost).await?;
+        }
         Ok(stop)
+    }
+
+    /// Lets the Lead answer `me`'s question when the graph routes questions
+    /// to it: a short read-only side session. Records the route in `meta`
+    /// and returns (Lead, answer, cost), or `None` when the question goes to
+    /// the user (routed there, asked by the Lead, or passed on by it).
+    async fn lead_answer<'g>(
+        &self,
+        cfg: &Config,
+        run: &Run,
+        g: &'g FlowGraph,
+        me: &FlowNode,
+        q: &super::ask::Question,
+        meta: &mut Value,
+    ) -> Result<Option<(&'g FlowNode, String, f64)>> {
+        meta["route"] = json!("user");
+        let lead = match g.lead() {
+            Some(l) if g.questions == QuestionRoute::Lead && l.id != me.id => l,
+            _ => return Ok(None),
+        };
+        self.log(&run.id, format!("{} asks {}: {}", me.name, lead.name, clip(&q.text, 120)));
+        let options: String = q.options.iter().map(|o| format!("\n- {o}")).collect();
+        let ask = format!(
+            "{} ({}) asks you:\n{}{options}\n\nAnswer it yourself, directly and briefly, so they can continue: decide from \
+             the goal, your plan and the reports so far, checking the code if needed. Do not change any files. Only if this \
+             truly needs the user (a decision nobody in the team can make), answer with exactly {}.",
+            me.name,
+            me.id,
+            q.text,
+            super::ask::ASK_USER
+        );
+        let finish = tool("answer", "Your answer to the question.", json!({ "text": { "type": "string" } }), &["text"]);
+        let side = self.side_session(cfg, run, g, lead, &ask, READ_ONLY, finish, None, vec![]).await?;
+        let text = side.args.get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        if text.is_empty() || text.contains(super::ask::ASK_USER) {
+            meta["passed_on_by"] = json!(lead.id);
+            self.log(&run.id, format!("{} passes the question on to you", lead.name));
+            return Ok(None);
+        }
+        meta["route"] = json!("lead");
+        meta["answered_by"] = json!(lead.id);
+        meta["answer"] = json!(text);
+        meta["comm"] = json!({ "cap": "answer", "with": lead.id, "turns": side.turns, "cost": side.cost });
+        Ok(Some((lead, text, side.cost)))
     }
 
     /// Runs the Goal check once every node before the Goal finished.

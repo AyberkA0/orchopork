@@ -309,11 +309,32 @@ impl FlowEdge {
     }
 }
 
+/// Who answers an agent's question (the `ask` tool, or `QUESTION:` from an
+/// external agent).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestionRoute {
+    /// The run waits for you.
+    #[default]
+    User,
+    /// The Lead answers at once from the goal, its plan and the reports so
+    /// far; it can still pass a question on to you. The Lead's own
+    /// questions always come to you.
+    Lead,
+}
+
+fn is_user_route(r: &QuestionRoute) -> bool {
+    *r == QuestionRoute::User
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FlowGraph {
     pub nodes: Vec<FlowNode>,
     pub edges: Vec<FlowEdge>,
+    /// Who answers the agents' questions.
+    #[serde(skip_serializing_if = "is_user_route")]
+    pub questions: QuestionRoute,
     /// Teams: agents the editor shows as one node. Purely visual; the run
     /// treats their members like any other node.
     #[serde(skip_serializing_if = "Vec::is_empty")]

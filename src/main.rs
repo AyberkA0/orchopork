@@ -346,12 +346,13 @@ async fn serve(root: Option<PathBuf>, host: &str, port: u16) -> anyhow::Result<(
     let listener = tokio::net::TcpListener::bind((host, port)).await?;
     println!("orchopork is running at:");
     println!("  Local:  http://localhost:{port}");
-    if host == "0.0.0.0" {
-        println!("  Remote: http://<ip>:{port} (access token: Settings → Remote Access & Tokens)");
-    } else {
-        println!("  Remote: http://{host}:{port} (access token: Settings → Remote Access & Tokens)");
-    }
     let loopback = host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()) || host == "localhost";
+    if !loopback {
+        let shown = if host == "0.0.0.0" || host == "::" { lan_ip().unwrap_or_else(|| "<ip>".into()) } else { host.to_string() };
+        let base = format!("http://{shown}:{port}");
+        println!("  Remote: {base} (access token: Settings → Remote access)");
+        state.set_remote_base(base);
+    }
     if cfg!(windows) && !loopback {
         // Windows drops inbound connections silently unless allowed, so a
         // remote browser just spins forever. Say how to allow it.
@@ -363,6 +364,15 @@ async fn serve(root: Option<PathBuf>, host: &str, port: u16) -> anyhow::Result<(
     }
     axum::serve(listener, server::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(shutdown_signal()).await?;
     Ok(())
+}
+
+/// This machine's address on the local network (no packet is sent:
+/// connecting a UDP socket only picks a route).
+fn lan_ip() -> Option<String> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("192.0.2.1:9").ok()?;
+    let ip = s.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then(|| ip.to_string())
 }
 
 async fn shutdown_signal() {

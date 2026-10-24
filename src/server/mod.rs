@@ -57,9 +57,15 @@ pub struct AppState {
     /// access; off by default). Saved in `access_file`.
     require_token: std::sync::atomic::AtomicBool,
     access_file: PathBuf,
+    /// The base URL other machines use (`http://192.168.1.16:7878`), when
+    /// the server listens beyond this machine.
+    remote_base: Mutex<Option<String>>,
 }
 
 pub type Shared = Arc<AppState>;
+
+/// The cookie that keeps the access token after the startup link was opened.
+const TOKEN_COOKIE: &str = "orchopork_token";
 
 /// Reads the saved "require an access token" setting (default: off).
 fn load_require_token(path: &Path) -> bool {
@@ -74,6 +80,20 @@ impl AppState {
     /// If `default_root` is an already-onboarded workspace, bind it and go
     /// straight to the dashboard; otherwise start the wizard and touch
     /// nothing on disk until the user picks a directory.
+    /// Records that other machines reach the server at `base`.
+    pub fn set_remote_base(&self, base: String) {
+        *self.remote_base.lock().unwrap() = Some(base);
+    }
+
+    /// The token the Remote access card links with: the first one, made on
+    /// first use.
+    fn link_token(&self) -> Result<String> {
+        match self.tokens.list().into_iter().next() {
+            Some(t) => Ok(t.token),
+            None => Ok(self.tokens.create("default")?.token),
+        }
+    }
+
     pub async fn new(default_root: Option<PathBuf>) -> Result<Shared> {
         // Tests must never mint real remote-access tokens in the user's home.
         let tokens_path = if cfg!(test) {
@@ -96,6 +116,7 @@ impl AppState {
             tokens: Arc::new(TokenStore::open(tokens_path)?),
             require_token: std::sync::atomic::AtomicBool::new(load_require_token(&access_file)),
             access_file,
+            remote_base: Mutex::new(None),
         });
         if let Some(ref root) = default_root
             && Workspace::is_initialized(root) {
@@ -241,6 +262,7 @@ pub fn router(state: Shared) -> Router {
         .route("/api/runs/{id}/flow", axum::routing::put(edit_flow))
         .route("/api/orchestra/criteria", post(detail_criteria))
         .route("/api/runs/{id}/autonomy", post(set_autonomy))
+        .route("/api/runs/{id}/questions", post(set_questions))
         .route("/api/browser/status", get(browser_status))
         .route("/preview/{id}", get(preview_root))
         .route("/preview/{id}/", get(preview_index))
@@ -300,6 +322,12 @@ async fn local_or_token_auth(State(s): State<Shared>, req: Request, next: Next) 
         && let Some(t) = headers.get("x-orchopork-token").and_then(|a| a.to_str().ok()) {
             token_val = Some(t.trim().to_string());
         }
+    if token_val.is_none() {
+        token_val = headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).find_map(|c| {
+            c.split(';').find_map(|kv| kv.trim().strip_prefix(&format!("{TOKEN_COOKIE}=")).map(str::to_string))
+        });
+    }
+    let from_link = req.uri().query().is_some_and(|q| q.split('&').any(|kv| kv.starts_with("token=")));
     // Remote previews carry the token in the path (`/pvt/<token>/<run>/…`),
     // so relative subresources of a sandboxed page stay authenticated.
     if token_val.is_none()
@@ -342,8 +370,19 @@ async fn local_or_token_auth(State(s): State<Shared>, req: Request, next: Next) 
             .into_response();
     }
 
-    // If request has valid token: allow access from anywhere
+    // If request has valid token: allow access from anywhere. The startup
+    // link (`/?token=…`) leaves the token in a cookie and drops it from the URL.
     if is_authenticated {
+        let path = req.uri().path();
+        if from_link && *req.method() == Method::GET && !path.starts_with("/api/") && !path.starts_with("/pvt/") {
+            let token = token_val.unwrap_or_default();
+            let mut resp = axum::response::Redirect::to(path).into_response();
+            let cookie = format!("{TOKEN_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000");
+            if let Ok(v) = cookie.parse() {
+                resp.headers_mut().insert(header::SET_COOKIE, v);
+            }
+            return resp;
+        }
         return next.run(req).await;
     }
 
@@ -1374,6 +1413,22 @@ struct AutonomyReq {
     autonomy: crate::storage::Autonomy,
 }
 
+#[derive(Deserialize)]
+struct QuestionsReq {
+    /// "user", or "lead" (also accepted as "commander", the tree's name for it).
+    route: String,
+}
+
+async fn set_questions(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(req): Json<QuestionsReq>) -> ApiResult {
+    use crate::storage::flowgraph::QuestionRoute;
+    let route = match req.route.as_str() {
+        "user" => QuestionRoute::User,
+        "lead" | "commander" => QuestionRoute::Lead,
+        other => return Err(Error::InvalidRequest(format!("unknown question route {other:?}")).into()),
+    };
+    Ok(Json(json!({ "run": s.engine()?.set_questions(&id, route).await? })))
+}
+
 async fn set_autonomy(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(req): Json<AutonomyReq>) -> ApiResult {
     Ok(Json(json!({ "run": s.engine()?.set_autonomy(&id, req.autonomy).await? })))
 }
@@ -1435,9 +1490,19 @@ async fn answer_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(
     Ok(Json(json!({ "run": s.engine()?.answer(&id, req.seq, &req.text).await? })))
 }
 
-/// `GET /api/access`: whether other machines need a token.
+/// `GET /api/access`: what Settings → Remote access shows.
 async fn get_access(State(s): State<Shared>) -> ApiResult {
-    Ok(Json(json!({ "require_token": s.require_token.load(std::sync::atomic::Ordering::SeqCst) })))
+    Ok(Json(describe_access(&s)?))
+}
+
+fn describe_access(s: &AppState) -> Result<Value> {
+    let require = s.require_token.load(std::sync::atomic::Ordering::SeqCst);
+    let base = s.remote_base.lock().unwrap().clone();
+    let link = match &base {
+        Some(b) => Some(format!("{b}/?token={}", s.link_token()?)),
+        None => None,
+    };
+    Ok(json!({ "remote": base.is_some(), "require_token": require, "url": base, "link": link }))
 }
 
 #[derive(Deserialize)]
@@ -1451,7 +1516,7 @@ async fn put_access(State(s): State<Shared>, Json(req): Json<AccessReq>) -> ApiR
     let body = json!({ "require_token": req.require_token }).to_string();
     crate::fsutil::write_atomic(&s.access_file, body.as_bytes(), true)?;
     s.require_token.store(req.require_token, std::sync::atomic::Ordering::SeqCst);
-    Ok(Json(json!({ "require_token": req.require_token })))
+    Ok(Json(describe_access(&s)?))
 }
 
 async fn list_tokens(State(s): State<Shared>) -> ApiResult {

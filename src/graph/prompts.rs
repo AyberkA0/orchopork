@@ -328,7 +328,12 @@ fn merge_same_role(msgs: Vec<Message>) -> Vec<Message> {
 
 /// How a message from the user is introduced to the agent.
 pub fn inject_label(s: &Step) -> &'static str {
-    if s.meta.get("answer_to").is_some() { "Answer from the user" } else { "Message from the user" }
+    match (s.meta.get("answer_to").is_some(), s.meta["from"].is_string()) {
+        // Only the Lead answers on the user's behalf (flow graph `questions`).
+        (true, true) => "Answer from the Lead",
+        (true, false) => "Answer from the user",
+        _ => "Message from the user",
+    }
 }
 
 #[cfg(test)]

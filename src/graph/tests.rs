@@ -510,6 +510,51 @@ async fn a_flow_node_asks_the_user_and_carries_on_with_the_answer() {
     assert!(ctx(&model.seen.lock().unwrap()[2]).contains("Answer from the user:\nhello"));
 }
 
+/// A flow whose questions go to the Lead first.
+fn lead_answers(mut spec: RunSpec) -> RunSpec {
+    spec.graph.as_mut().unwrap().questions = crate::storage::flowgraph::QuestionRoute::Lead;
+    spec
+}
+
+#[tokio::test]
+async fn the_lead_answers_a_question_and_the_agent_carries_on() {
+    let (_d, engine) = setup(|_| {}).await;
+    let ask = r#"{"tool": "ask", "args": {"question": "Greeting text?", "options": ["hello", "hi"]}}"#;
+    let answer = r#"{"tool": "answer", "args": {"text": "use hello"}}"#;
+    let replies = [fin("dev: write hello.txt").as_str(), ask, answer, WRITE, &fin("hello.txt written")].map(str::to_string);
+    let model = Scripted::new(ProviderId::Ollama, &replies.iter().map(String::as_str).collect::<Vec<_>>());
+    register(&engine, &model);
+    let run = engine.create_run("make hello", None, lead_answers(orch(line(&["dev"], "test -f hello.txt")))).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Done, "no waiting for the user: {:?}", run.error);
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    let q = steps.iter().find(|s| s.meta["tool"] == "ask").unwrap();
+    assert_eq!((q.meta["route"].as_str(), q.meta["answered_by"].as_str()), (Some("lead"), Some("lead")));
+    assert_eq!(q.meta["answer"], "use hello");
+    assert!(q.observation.as_deref().unwrap().contains("use hello"));
+    assert!(ask::waiting_on(&steps).is_none());
+    let seen = model.seen.lock().unwrap();
+    let to_lead = ctx(&seen[2]);
+    assert!(to_lead.contains("Greeting text?") && to_lead.contains("- hi") && to_lead.contains(ask::ASK_USER), "{to_lead}");
+    assert!(!seen[2].tools.iter().any(|t| t.name == "write_file"), "the Lead answers read-only");
+}
+
+#[tokio::test]
+async fn the_lead_passes_a_question_it_cannot_decide_to_the_user() {
+    let (_d, engine) = setup(|_| {}).await;
+    let ask = r#"{"tool": "ask", "args": {"question": "Which brand colour?"}}"#;
+    let pass = r#"{"tool": "answer", "args": {"text": "ASK_USER"}}"#;
+    let replies = [fin("dev: style it").as_str(), ask, pass].map(str::to_string);
+    let model = Scripted::new(ProviderId::Ollama, &replies.iter().map(String::as_str).collect::<Vec<_>>());
+    register(&engine, &model);
+    let run = engine.create_run("style", None, lead_answers(orch(line(&["dev"], "echo ok")))).await.unwrap();
+    let run = wait_idle(&engine, &run.id).await;
+    assert_eq!(run.status, RunStatus::Waiting, "error: {:?}", run.error);
+    let (_, steps) = engine.run_detail(&run.id).await.unwrap();
+    let q = ask::waiting_on(&steps).expect("now the user's question");
+    assert_eq!((q.meta["route"].as_str(), q.meta["passed_on_by"].as_str()), (Some("user"), Some("lead")));
+}
+
 #[tokio::test]
 async fn the_user_can_edit_the_flow_while_it_is_idle() {
     let (_d, engine) = setup(|_| {}).await;

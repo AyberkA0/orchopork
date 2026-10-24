@@ -484,6 +484,19 @@ impl Engine {
         Ok(run)
     }
 
+    /// Who answers the agents' questions in a flow run from now on.
+    pub async fn set_questions(&self, run_id: &str, route: crate::storage::flowgraph::QuestionRoute) -> Result<Run> {
+        let store = &self.inner.ws.store;
+        let run = store.get_run(run_id).await?;
+        let mut spec = run.spec.clone();
+        let g = spec.graph.as_mut().ok_or_else(|| Error::InvalidRequest("only a team's questions can go to its Lead".into()))?;
+        g.questions = route;
+        store.set_run_spec(run_id, &spec).await?;
+        let run = store.get_run(run_id).await?;
+        self.inner.emit(Event::Run { run: run.clone() });
+        Ok(run)
+    }
+
     /// Removes the run, its worktree and its branch. Spend stays recorded.
     pub async fn delete(&self, run_id: &str) -> Result<()> {
         if self.is_active(run_id) {

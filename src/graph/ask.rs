@@ -2,10 +2,15 @@
 //!
 //! An internal agent asks with the `ask` tool; an external one (Claude
 //! Code, Codex…) ends its reply with a `QUESTION:` line. Either way the
-//! question becomes an `act` step with `tool: "ask"`, and the run stops in
-//! `waiting` until the user answers (`Engine::answer`) or messages that
-//! agent. Agents can also ask each other, over `consult` edges; this is for
-//! what only a person can decide.
+//! question becomes an `act` step with `tool: "ask"`, and then:
+//!
+//! - routed to the user, the run stops in `waiting` until the user answers
+//!   (`Engine::answer`) or messages that agent;
+//! - routed to the Lead (the graph's `questions` setting), the Lead
+//!   answers at once in a short read-only side session and the agent goes
+//!   on. A Lead that cannot decide passes the question on to the user.
+//!
+//! Agents can also ask each other directly, over `consult` edges.
 //!
 //! A question is not taken from an agent inside a Dispatcher's parallel
 //! branch: waiting there would hold up the whole run, so such an agent
@@ -18,6 +23,9 @@ use serde_json::{Value, json};
 
 use crate::providers::ToolDef;
 use crate::storage::{Step, StepKind};
+
+/// What the Lead replies when only the user can answer.
+pub const ASK_USER: &str = "ASK_USER";
 
 /// The line external agents are told to end with when they need a decision.
 pub const EXTERNAL_HOW: &str = "\n\nIf you cannot continue without a decision only a person can make (missing information, \
@@ -94,10 +102,13 @@ pub fn from_args(args: &serde_json::Map<String, Value>) -> Option<Question> {
     (!text.is_empty()).then_some(Question { text, options })
 }
 
-/// The question the run is waiting on: the latest `ask` with no message
-/// for its agent after it.
+/// The question the run is waiting on: the latest `ask` routed to the user
+/// with no message for its agent after it.
 pub fn waiting_on(steps: &[Step]) -> Option<&Step> {
     let q = steps.iter().rev().find(|s| s.kind == StepKind::Act && s.meta["tool"] == "ask")?;
+    if q.meta["route"].as_str().is_some_and(|r| r != "user") {
+        return None;
+    }
     let agent = q.meta["agent"].as_str();
     let answered = steps
         .iter()

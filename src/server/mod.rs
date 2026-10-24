@@ -4,6 +4,7 @@
 //! never be able to reach it).
 
 mod setup;
+pub mod tokens;
 pub mod wizard;
 
 use std::collections::BTreeMap;
@@ -16,7 +17,7 @@ use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -30,6 +31,7 @@ use crate::graph::Engine;
 use crate::providers::{OllamaProvider, OpenAiCompatProvider, Provider, ProviderId, pricing};
 use crate::secrets::GITHUB;
 use crate::storage::RunSpec;
+use tokens::TokenStore;
 use wizard::{Event, VcsStatus, Wizard};
 
 /// Single-file embedded SPA; client JS routes off `wizard.step`.
@@ -48,7 +50,8 @@ pub struct AppState {
     engine: RwLock<Option<Engine>>,
     wizard: Mutex<Wizard>,
     /// Pre-filled in the workspace picker (the `--workspace` argument).
-    default_root: PathBuf,
+    default_root: Option<PathBuf>,
+    pub tokens: Arc<TokenStore>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -57,7 +60,13 @@ impl AppState {
     /// If `default_root` is an already-onboarded workspace, bind it and go
     /// straight to the dashboard; otherwise start the wizard and touch
     /// nothing on disk until the user picks a directory.
-    pub async fn new(default_root: PathBuf) -> Result<Shared> {
+    pub async fn new(default_root: Option<PathBuf>) -> Result<Shared> {
+        // Tests must never mint real remote-access tokens in the user's home.
+        let tokens_path = if cfg!(test) {
+            std::env::temp_dir().join(format!("orchopork-test-tokens-{}.json", uuid::Uuid::new_v4().simple()))
+        } else {
+            expand_home("~/.orchopork/tokens.json")
+        };
         let state = Arc::new(Self {
             cloud_models: Default::default(),
             models_cache: Mutex::new(None),
@@ -65,15 +74,17 @@ impl AppState {
             engine: RwLock::new(None),
             wizard: Mutex::new(Wizard::default()),
             default_root: default_root.clone(),
+            tokens: Arc::new(TokenStore::open(tokens_path)?),
         });
-        if Workspace::is_initialized(&default_root) {
-            let ws = Workspace::open(&default_root).await?;
-            if ws.config().onboarded || ws.repo.is_repo().await {
-                let engine = Engine::new(ws).await?;
-                *state.engine.write().unwrap() = Some(engine);
-                state.wizard.lock().unwrap().apply(Event::Resume)?;
+        if let Some(ref root) = default_root
+            && Workspace::is_initialized(root) {
+                let ws = Workspace::open(root).await?;
+                if ws.config().onboarded || ws.repo.is_repo().await {
+                    let engine = Engine::new(ws).await?;
+                    *state.engine.write().unwrap() = Some(engine);
+                    state.wizard.lock().unwrap().apply(Event::Resume)?;
+                }
             }
-        }
         Ok(state)
     }
 
@@ -191,10 +202,30 @@ pub fn router(state: Shared) -> Router {
         .route("/api/runs/{id}/rewind", post(rewind_run))
         .route("/api/runs/{id}/diff", get(diff_run))
         .route("/api/runs/{id}/push", post(push_run))
+        .route("/api/runs/{id}/merge", post(merge_run))
+        .route("/api/runs/{id}/approval", post(decide_approval))
+        .route("/api/runs/{id}/kill", post(kill_run))
+        .route("/api/runs/{id}/steps/{seq}/diff", get(step_diff))
+        .route("/api/runs/{id}/lessons", post(suggest_lessons))
+        .route("/api/lessons", post(save_lessons))
+        .route("/api/orchestra/preflight", post(preflight))
+        .route("/api/runs/{id}/reorchestrate", post(reorchestrate))
+        .route("/api/runs/{id}/flow", axum::routing::put(edit_flow))
+        .route("/api/orchestra/criteria", post(detail_criteria))
+        .route("/api/runs/{id}/autonomy", post(set_autonomy))
+        .route("/api/browser/status", get(browser_status))
+        .route("/preview/{id}", get(preview_root))
+        .route("/preview/{id}/", get(preview_index))
+        .route("/preview/{id}/{*path}", get(preview_file))
+        .route("/pvt/{token}/{id}", get(preview_root_t))
+        .route("/pvt/{token}/{id}/", get(preview_index_t))
+        .route("/pvt/{token}/{id}/{*path}", get(preview_file_t))
+        .route("/api/tokens", get(list_tokens).post(create_token))
+        .route("/api/tokens/{id}", delete(delete_token))
         .route("/api/events", get(events))
         // Client-side-routed SPA: every other GET gets the same shell.
         .fallback(get(spa_index))
-        .layer(middleware::from_fn(local_only))
+        .layer(middleware::from_fn_with_state(state.clone(), local_or_token_auth))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -208,19 +239,96 @@ fn is_local_host(host: &str) -> bool {
     matches!(name.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
 }
 
-async fn local_only(req: Request, next: Next) -> Response {
+async fn local_or_token_auth(State(s): State<Shared>, req: Request, next: Next) -> Response {
     let headers = req.headers();
-    let host_ok = headers.get(header::HOST).and_then(|h| h.to_str().ok()).is_some_and(is_local_host);
-    let origin_ok = match headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) {
-        None => true,
-        Some(o) => o.split_once("://").is_some_and(|(_, rest)| is_local_host(rest.trim_end_matches('/'))),
-    };
-    let state_changing = !matches!(*req.method(), Method::GET | Method::HEAD);
-    if !host_ok || (state_changing && !origin_ok) {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "orchopork only accepts local requests" })))
+    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
+    // A reverse proxy or port forward on this machine may rewrite `Host` to
+    // localhost, so the socket peer must be loopback too. (No peer info, as
+    // in unit tests, counts as loopback.)
+    let peer_loopback = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .is_none_or(|c| c.0.ip().to_canonical().is_loopback());
+    let is_local = is_local_host(host) && peer_loopback;
+
+    // 1. Extract token from header or query parameter
+    let mut token_val = None;
+    if let Some(auth) = headers.get(header::AUTHORIZATION).and_then(|a| a.to_str().ok())
+        && let Some(bearer) = auth.strip_prefix("Bearer ").or_else(|| auth.strip_prefix("bearer ")) {
+            token_val = Some(bearer.trim().to_string());
+        }
+    if token_val.is_none()
+        && let Some(t) = headers.get("x-orchopork-token").and_then(|a| a.to_str().ok()) {
+            token_val = Some(t.trim().to_string());
+        }
+    // Remote previews carry the token in the path (`/pvt/<token>/<run>/…`),
+    // so relative subresources of a sandboxed page stay authenticated.
+    if token_val.is_none()
+        && let Some(rest) = req.uri().path().strip_prefix("/pvt/")
+    {
+        token_val = rest.split('/').next().map(str::to_string);
+    }
+    if token_val.is_none()
+        && let Some(q) = req.uri().query() {
+            for pair in q.split('&') {
+                if let Some((k, v)) = pair.split_once('=')
+                    && k == "token" {
+                        token_val = Some(v.to_string());
+                        break;
+                    }
+            }
+        }
+
+    let is_authenticated = token_val.as_ref().is_some_and(|t| s.tokens.validate(t));
+
+    // Run previews are sandboxed pages with an opaque origin, which the
+    // browser reports as `Origin: null`. A remote preview's URL carries the
+    // token (`/pvt/<token>/…`), so agent-written JavaScript could read it and
+    // call the API with it. The dashboard itself never sends `null`.
+    let opaque_origin = headers.get(header::ORIGIN).is_some_and(|o| o.as_bytes().eq_ignore_ascii_case(b"null"));
+    if opaque_origin && req.uri().path().starts_with("/api/") {
+        return (StatusCode::FORBIDDEN, Json(json!({ "error": "sandboxed pages cannot call the API" }))).into_response();
+    }
+
+    // Token management is for the machine owner only: a leaked remote token
+    // must not be able to list, mint or revoke other tokens.
+    if !is_local && req.uri().path().starts_with("/api/tokens") {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "access tokens can only be managed from the local machine (localhost)" })),
+        )
             .into_response();
     }
-    next.run(req).await
+
+    // If request has valid token: allow access from anywhere
+    if is_authenticated {
+        return next.run(req).await;
+    }
+
+    // If local and not authenticated:
+    if is_local {
+        let state_changing = !matches!(*req.method(), Method::GET | Method::HEAD);
+        let origin_ok = match headers.get(header::ORIGIN).and_then(|h| h.to_str().ok()) {
+            None => true,
+            Some(o) => o.split_once("://").is_some_and(|(_, rest)| is_local_host(rest.trim_end_matches('/'))),
+        };
+        if !state_changing || origin_ok {
+            return next.run(req).await;
+        }
+    }
+
+    // Allow serving the HTML shell / assets for non-API GET requests so browser can prompt user for token
+    let path = req.uri().path();
+    let protected = ["/api/", "/preview/", "/pvt/"].iter().any(|p| path.starts_with(p));
+    if !protected && matches!(*req.method(), Method::GET | Method::HEAD) {
+        return next.run(req).await;
+    }
+
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": "orchopork only accepts local requests or requests with a valid access token" })),
+    )
+        .into_response()
 }
 
 struct ApiError(Error);
@@ -289,13 +397,14 @@ async fn budget_json(ws: &Workspace) -> Result<Value> {
 async fn get_state(State(s): State<Shared>) -> ApiResult {
     let wizard = s.wizard.lock().unwrap().clone();
     let engine = s.engine.read().unwrap().clone();
+    let def_root = s.default_root.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
     let Some(engine) = engine else {
-        return Ok(Json(json!({ "wizard": wizard, "default_root": s.default_root, "workspace": null })));
+        return Ok(Json(json!({ "wizard": wizard, "default_root": def_root, "workspace": null })));
     };
     let ws = engine.workspace();
     Ok(Json(json!({
         "wizard": wizard,
-        "default_root": s.default_root,
+        "default_root": def_root,
         "workspace": {
             "root": ws.root,
             "vcs": vcs_status(ws).await,
@@ -867,8 +976,81 @@ struct ProposeReq {
 }
 
 async fn propose_team(State(s): State<Shared>, Json(req): Json<ProposeReq>) -> ApiResult {
-    let agents = s.engine()?.propose_team(&req.goal, &req.model).await?;
-    Ok(Json(json!({ "agents": agents })))
+    let graph = s.engine()?.propose_flow(&req.goal, &req.model).await?;
+    Ok(Json(json!({ "graph": graph })))
+}
+
+async fn step_diff(State(s): State<Shared>, UrlPath((id, seq)): UrlPath<(String, i64)>) -> ApiResult {
+    let (stat, patch) = s.engine()?.step_diff(&id, seq).await?;
+    Ok(Json(json!({ "stat": stat, "patch": crate::fsutil::clip(&patch, 200_000) })))
+}
+
+async fn suggest_lessons(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    Ok(Json(json!({ "lessons": s.engine()?.suggest_lessons(&id).await? })))
+}
+
+#[derive(Deserialize)]
+struct LessonsReq {
+    lessons: Vec<String>,
+}
+
+async fn save_lessons(State(s): State<Shared>, Json(req): Json<LessonsReq>) -> ApiResult {
+    Ok(Json(json!({ "total": s.engine()?.save_lessons(&req.lessons)? })))
+}
+
+#[derive(Deserialize)]
+struct PreflightReq {
+    #[serde(default)]
+    verify_command: Option<String>,
+    #[serde(flatten)]
+    spec: RunSpec,
+}
+
+async fn preflight(State(s): State<Shared>, Json(req): Json<PreflightReq>) -> ApiResult {
+    Ok(Json(s.engine()?.preflight(&req.spec, req.verify_command.as_deref()).await?))
+}
+
+async fn kill_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    Ok(Json(json!({ "run": s.engine()?.kill(&id).await? })))
+}
+
+#[derive(Deserialize)]
+struct EditFlowReq {
+    graph: crate::storage::FlowGraph,
+}
+
+async fn edit_flow(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(req): Json<EditFlowReq>) -> ApiResult {
+    Ok(Json(json!({ "run": s.engine()?.edit_flow(&id, req.graph).await? })))
+}
+
+#[derive(Deserialize)]
+struct CriteriaReq {
+    goal: String,
+    #[serde(default)]
+    criteria: String,
+    model: crate::config::ModelRef,
+}
+
+async fn detail_criteria(State(s): State<Shared>, Json(req): Json<CriteriaReq>) -> ApiResult {
+    Ok(Json(json!({ "criteria": s.engine()?.detail_criteria(&req.goal, &req.criteria, &req.model).await? })))
+}
+
+#[derive(Deserialize)]
+struct ReorchestrateReq {
+    goal: String,
+    /// Start from the cancelled run's latest state instead of HEAD.
+    #[serde(default)]
+    continue_current: bool,
+}
+
+async fn reorchestrate(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(req): Json<ReorchestrateReq>) -> ApiResult {
+    use crate::graph::flow::Reorchestration;
+    Ok(Json(match s.engine()?.reorchestrate(&id, &req.goal, req.continue_current).await? {
+        Reorchestration::Started(run) => json!({ "run": run }),
+        Reorchestration::Draft { spec, base, verify } => {
+            json!({ "draft": { "goal": req.goal.trim(), "spec": spec, "base_commit": base, "verify_command": verify } })
+        }
+    }))
 }
 
 // ---- settings ---------------------------------------------------------------------
@@ -962,14 +1144,17 @@ struct CreateRunReq {
     goal: String,
     #[serde(default)]
     verify_command: Option<String>,
-    /// mode / model / agents; defaults to a classic run.
+    /// Start from this commit instead of HEAD (re-orchestration).
+    #[serde(default)]
+    base_commit: Option<String>,
+    /// mode / model / graph; defaults to a classic run.
     #[serde(flatten)]
     spec: RunSpec,
 }
 
 async fn create_run(State(s): State<Shared>, Json(req): Json<CreateRunReq>) -> ApiResult {
     let engine = s.engine()?;
-    let run = engine.create_run(&req.goal, req.verify_command.as_deref(), req.spec).await?;
+    let run = engine.create_run_at(&req.goal, req.verify_command.as_deref(), req.spec, req.base_commit.as_deref()).await?;
     Ok(Json(json!({ "run": run })))
 }
 
@@ -992,7 +1177,72 @@ async fn get_run(
     };
     // `step_count` lets an incremental viewer notice a rewind (fewer steps
     // than it holds) and refetch everything.
-    Ok(Json(json!({ "run": run, "steps": steps, "active": engine.is_active(&id), "partial": q.after.is_some() })))
+    let head = if run.spec.graph.is_some() { engine.workspace().store.head_step(&id).await? } else { None };
+    let state = head.as_ref().map(|h| h.state.clone()).unwrap_or_default();
+    let current = crate::graph::flow::current_graph(&run, &state);
+    let vision = match &current {
+        Some(g) => engine.vision_nodes(&run, g).await,
+        None => vec![],
+    };
+    // Every step, read once (the incremental answer only has the new ones).
+    let all = match (&current, q.after) {
+        (None, _) => Vec::new(),
+        (Some(_), None) => steps.clone(),
+        (Some(_), Some(_)) => engine.workspace().store.steps(&id).await?,
+    };
+    let node_stats = match &current {
+        Some(g) => Value::Object(engine.node_stats(&run, g, &all).await),
+        None => Value::Null,
+    };
+    let lines = crate::git::GitRepo::new(&run.worktree)
+        .numstat_from(&run.base_commit)
+        .await
+        .ok()
+        .map(|(a, r)| json!({ "added": a, "removed": r }));
+    // Where the flow stands: finished nodes and who acts next.
+    let flow = match (&current, &head) {
+        (Some(g), Some(h)) => {
+            let next = crate::graph::flow::next_actor(g, &all, &h.state);
+            // A Dispatcher at work: its branches' progress, and the agent
+            // each running branch is at.
+            let mut done = h.state.flow.done.clone();
+            let mut working: Vec<String> = next.iter().map(|(n, _)| n.clone()).collect();
+            let branches: Vec<Value> = h.state.flow.parallel.iter().flat_map(|p| &p.branches).map(|b| {
+                let bdone = b.state.as_ref().map(|x| x.flow.done.clone()).unwrap_or_default();
+                let now = b.nodes.iter().find(|n| !bdone.contains(n)).cloned();
+                for n in b.nodes.iter().filter(|n| bdone.contains(n)) {
+                    if !done.contains(n) {
+                        done.push(n.clone());
+                    }
+                }
+                if b.status == crate::storage::BranchStatus::Running && let Some(n) = &now {
+                    working.push(n.clone());
+                }
+                json!({ "head": b.head, "nodes": b.nodes, "status": b.status, "now": now, "report": b.report })
+            }).collect();
+            json!({ "done": done, "goal_rounds": h.state.flow.goal_rounds,
+                    "next": next.as_ref().map(|(n, _)| n), "reviewing": next.and_then(|(_, r)| r),
+                    "working": working, "branches": branches })
+        }
+        (Some(g), None) => json!({ "done": [], "goal_rounds": 0, "next": g.lead().map(|l| l.id.clone()), "reviewing": null }),
+        _ => Value::Null,
+    };
+    Ok(Json(json!({
+        "run": run,
+        "steps": steps,
+        "active": engine.is_active(&id),
+        "partial": q.after.is_some(),
+        "approval": engine.pending_approval(&id),
+        "flow": flow,
+        "vision": vision,
+        "node_stats": node_stats,
+        "lines": lines,
+        // The flow as it stands now, with the Lead's runtime changes.
+        "graph": current.map(|mut g| {
+            crate::storage::flowgraph::auto_layout(&mut g);
+            g
+        }),
+    })))
 }
 
 async fn delete_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult {
@@ -1037,6 +1287,130 @@ async fn diff_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiR
 
 async fn push_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult {
     Ok(Json(json!({ "output": s.engine()?.push(&id).await? })))
+}
+
+async fn merge_run(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    let output = s.engine()?.merge(&id).await?;
+    Ok(Json(json!({ "output": output })))
+}
+
+#[derive(Deserialize)]
+struct DecideReq {
+    id: String,
+    allow: bool,
+    #[serde(default)]
+    always: bool,
+    #[serde(default)]
+    note: String,
+}
+
+async fn decide_approval(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(req): Json<DecideReq>) -> ApiResult {
+    s.engine()?.decide(&id, &req.id, req.allow, req.always, &req.note)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct AutonomyReq {
+    autonomy: crate::storage::Autonomy,
+}
+
+async fn set_autonomy(State(s): State<Shared>, UrlPath(id): UrlPath<String>, Json(req): Json<AutonomyReq>) -> ApiResult {
+    Ok(Json(json!({ "run": s.engine()?.set_autonomy(&id, req.autonomy).await? })))
+}
+
+async fn browser_status() -> ApiResult {
+    let exe = crate::graph::browser::find_browser();
+    Ok(Json(json!({ "headless": exe.as_ref().map(|p| p.display().to_string()) })))
+}
+
+/// A run's worktree over http, for the dashboard's browser pane. Pages are
+/// sandboxed (see `browser::serve_file`).
+async fn serve_preview(s: &Shared, id: &str, path: &str) -> Response {
+    let run = match s.engine() {
+        Ok(e) => e.workspace().store.get_run(id).await,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    match run {
+        Ok(run) => crate::graph::browser::serve_file(Path::new(&run.worktree), &format!("/{path}"), true).await,
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn preview_index(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> Response {
+    serve_preview(&s, &id, "").await
+}
+
+async fn preview_index_t(State(s): State<Shared>, UrlPath((_token, id)): UrlPath<(String, String)>) -> Response {
+    serve_preview(&s, &id, "").await
+}
+
+async fn preview_file(State(s): State<Shared>, UrlPath((id, path)): UrlPath<(String, String)>) -> Response {
+    serve_preview(&s, &id, &path).await
+}
+
+async fn preview_file_t(
+    State(s): State<Shared>,
+    UrlPath((_token, id, path)): UrlPath<(String, String, String)>,
+) -> Response {
+    serve_preview(&s, &id, &path).await
+}
+
+// Relative URLs in a page must resolve under the run's prefix.
+async fn preview_root(UrlPath(id): UrlPath<String>) -> Response {
+    axum::response::Redirect::permanent(&format!("/preview/{id}/")).into_response()
+}
+
+async fn preview_root_t(UrlPath((token, id)): UrlPath<(String, String)>) -> Response {
+    axum::response::Redirect::permanent(&format!("/pvt/{token}/{id}/")).into_response()
+}
+
+async fn list_tokens(State(s): State<Shared>) -> ApiResult {
+    let tokens: Vec<Value> = s
+        .tokens
+        .list()
+        .into_iter()
+        .map(|t| {
+            json!({
+                "id": t.id,
+                "name": t.name,
+                "label": t.name,
+                "token": t.token,
+                "created_at": t.created_at,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "tokens": tokens })))
+}
+
+#[derive(Deserialize, Default)]
+struct CreateTokenReq {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+async fn create_token(State(s): State<Shared>, req: Option<Json<CreateTokenReq>>) -> ApiResult {
+    let req = req.map(|Json(r)| r).unwrap_or_default();
+    let name_str = req.name.or(req.label);
+    let name = name_str
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Remote Access");
+    let token = s.tokens.create(name)?;
+    Ok(Json(json!({
+        "id": token.id,
+        "name": token.name,
+        "label": token.name,
+        "token": token.token,
+        "created_at": token.created_at,
+    })))
+}
+
+async fn delete_token(State(s): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult {
+    let removed = s.tokens.delete(&id)?;
+    Ok(Json(json!({ "ok": removed, "deleted": removed })))
 }
 
 /// Live feed of every engine event. If a slow client falls behind, it gets
@@ -1105,7 +1479,7 @@ mod tests {
     async fn wizard_binds_the_chosen_directory_and_rebinds_on_restart() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let state = AppState::new(root.clone()).await.unwrap();
+        let state = AppState::new(Some(root.clone())).await.unwrap();
         assert!(!root.join(".orchopork").exists(), "nothing is written before the user picks a directory");
         let app = router(state.clone());
         let h = "127.0.0.1:7878";
@@ -1142,14 +1516,15 @@ mod tests {
         // A restart in the same directory skips the wizard.
         drop(app);
         drop(state);
-        let state = AppState::new(root.clone()).await.unwrap();
+        let state = AppState::new(Some(root.clone())).await.unwrap();
         assert_eq!(state.wizard.lock().unwrap().step, wizard::Step::Dashboard);
     }
 
     #[tokio::test]
     async fn foreign_hosts_and_origins_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let app = router(AppState::new(dir.path().to_path_buf()).await.unwrap());
+        let state = AppState::new(Some(dir.path().to_path_buf())).await.unwrap();
+        let app = router(state.clone());
         assert_eq!(call(&app, "GET", "/api/state", "evil.example:7878", None, Value::Null).await.0, 403);
         let (code, _) =
             call(&app, "POST", "/api/wizard/initialize", "127.0.0.1:7878", Some("http://evil.example"), json!({}))
@@ -1159,5 +1534,41 @@ mod tests {
             call(&app, "POST", "/api/wizard/initialize", "127.0.0.1:7878", Some("http://localhost:7878"), json!({}))
                 .await;
         assert_eq!(code, 200);
+
+        // Previews of run files are never public.
+        let r = app
+            .clone()
+            .oneshot(Request::builder().uri("/preview/x/index.html").header("host", "remote.example:7878").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+        let r = app
+            .clone()
+            .oneshot(Request::builder().uri("/pvt/op_wrong/x/index.html").header("host", "remote.example:7878").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN);
+
+        // Foreign host WITH valid token is accepted
+        let token = state.tokens.create("test-remote").unwrap();
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/state")
+            .header("host", "remote.example:7878")
+            .header("authorization", format!("Bearer {}", token.token))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+
+        // ...but not from a sandboxed preview page that read it from its URL.
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/runs/x/kill?token={}", token.token))
+            .header("host", "remote.example:7878")
+            .header("origin", "null")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(app.clone().oneshot(req).await.unwrap().status(), StatusCode::FORBIDDEN);
     }
 }

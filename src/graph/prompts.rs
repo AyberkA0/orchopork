@@ -4,7 +4,7 @@
 
 use crate::fsutil::clip;
 use crate::providers::{Message, Role};
-use crate::storage::{Step, StepKind};
+use crate::storage::{Memory, Step, StepKind};
 
 pub const PLANNER: &str = "You are the planning phase of an autonomous coding agent that works inside a git repository.
 Write a concise, numbered plan (typically 3-10 steps) for achieving the goal. Each step should name the files or
@@ -28,12 +28,42 @@ Reply with a short note on what you will do next, then exactly one action as a J
 {{\"tool\": \"<name>\", \"args\": {{ ... }}}}
 ```
 Rules:
+- Every reply MUST include exactly one tool call JSON object. Describing changes in prose does not change any file;
+  only tool calls do. Do not hide the call inside thinking; put it in your visible reply.
 - One action per reply. Never invent tool results; wait for them.
-- Read files before editing them. Use edit_file for small changes and write_file for new files.
+- Messages from the user override the plan. If the user declines a call, do not repeat it.
+
+Files:
+- read_file before you edit a file. Copy `old` for edit_file exactly from what read_file showed, without the line
+  numbers, and include enough surrounding lines to be unique.
+- edit_file changes a part of an existing file. To create a file, or to rewrite most of one, use write_file with the
+  COMPLETE new content. Never call edit_file with an empty `old`. Never write files through run_command
+  (`cat <<EOF`, `echo >`, `printf >`).
+- After a change that did not help, look at the file again before the next change: repeated edits easily leave
+  duplicated or half-replaced code behind.
 - Inside JSON strings, escape newlines as \\n and double quotes as \\\".
-- A failed call is information: read the error and change approach instead of repeating the same call.
-- Messages from the user override the plan.
-- Verify your work (build, tests) before calling finish, and call finish only when the goal is fully achieved.
+
+Commands and processes:
+- run_command waits for the command to end (tests, builds, scripts). Servers and watchers never end: start them with
+  start_process, read them with process_output, stop them with stop_process when done.
+
+Web pages and images:
+- Open pages you build with the browser tool (a repo file like index.html needs no server; a localhost URL works only
+  for a server you started) and read the console errors and failed requests: a 404 for a texture, model or script
+  means that part is missing even when the console is clean. Open the page once after each change, not again and
+  again without changing anything.
+- To judge how something looks, take a screenshot (screenshot_page); if your model can see images it is shown to you,
+  otherwise consult a teammate who can see images and pass the screenshot in images. To check that something moves
+  or changes over time, take a screenshot_sequence: it reports which frames differ.
+- web_search / web_fetch find documentation, correct library URLs and error explanations.
+
+When you are stuck:
+- A failed call is information: read the error and change your approach. Never repeat the same call with the same
+  arguments; identical repeats are not run.
+- If the same error comes back a second time, or you do not understand an error, or you lack knowledge about a
+  library or technique, STOP retrying. Get help first: consult a teammate who can help (see \"Who can help you\"),
+  or web_search the exact error message. Guessing again wastes turns.
+- Verify your work (build, tests, the page) before calling finish, and finish only when your part is done.
 
 Tools:
 {tools}"
@@ -108,10 +138,101 @@ pub fn changes_note(name_status: &str) -> String {
 /// of the run (mission, repository overview), `own` is this agent's part.
 /// Both must stay byte-identical across turns so they can be cached;
 /// anything that changes per turn belongs in the request's `tail`.
+#[derive(Clone)]
 pub struct Pinned {
     pub shared: String,
     pub own: String,
 }
+
+/// A transcript group (a tool call with its result, a message, …) and the
+/// sequence number of the step it came from.
+pub type Group = (i64, Vec<Message>);
+
+/// Fitting a conversation into its budget.
+pub enum Window {
+    Fits(Vec<Message>),
+    /// These oldest groups must be folded into the agent's memory summary
+    /// (covering steps up to `upto`) before the rest fits.
+    Fold { fold: Vec<Vec<Message>>, upto: i64 },
+}
+
+/// Like `windowed`, but instead of dropping what does not fit, asks for it
+/// to be summarized. Groups already covered by `memory` are left out and
+/// the summary goes into the pinned message, where it stays byte-stable
+/// (cacheable) until the next fold.
+pub fn window(mut pinned: Pinned, groups: Vec<Group>, budget_chars: usize, memory: Option<&Memory>) -> Window {
+    let groups: Vec<Group> = groups.into_iter().filter(|(seq, _)| memory.is_none_or(|m| *seq > m.upto)).collect();
+    if let Some(m) = memory.filter(|m| !m.text.trim().is_empty()) {
+        pinned.own.push_str(&format!(
+            "\n# Your memory of earlier turns (a summary; re-read files for exact content)\n{}\n",
+            m.text.trim()
+        ));
+    }
+    let sizes: Vec<usize> = groups.iter().map(|(_, g)| g.iter().map(|m| m.content.len()).sum()).collect();
+    let room = budget_chars.saturating_sub(pinned.shared.len() + pinned.own.len());
+    let omitted = stable_cut(&sizes, room);
+    if omitted == 0 {
+        return Window::Fits(windowed(pinned, groups.into_iter().map(|(_, g)| g).collect(), usize::MAX));
+    }
+    let upto = groups[omitted - 1].0;
+    Window::Fold { fold: groups.into_iter().take(omitted).map(|(_, g)| g).collect(), upto }
+}
+
+/// The single-agent actor's stable first message.
+pub fn actor_pinned(goal: &str, plan: &str, files: &[String]) -> Pinned {
+    let shared = format!("# Goal\n{}\n\n# Plan\n{}\n{}", goal.trim(), clip(plan, 8_000), file_overview(files, 150));
+    Pinned { shared, own: String::new() }
+}
+
+/// The single-agent actor's transcript groups.
+pub fn actor_groups(steps: &[Step], obs_chars: usize) -> Vec<Group> {
+    let mut groups: Vec<Group> = Vec::new();
+    for s in steps {
+        let obs = s.observation.as_deref().unwrap_or("");
+        let g = match s.kind {
+            StepKind::Plan => continue,
+            StepKind::Act => {
+                let tool = s.meta["tool"].as_str().unwrap_or("action");
+                let status = if s.meta["ok"].as_bool().unwrap_or(false) { "ok" } else { "error" };
+                vec![
+                    Message::assistant(s.output.clone()),
+                    Message::user(format!("Result of {tool} ({status}):\n{}", clip(obs, obs_chars))),
+                ]
+            }
+            StepKind::Inject => vec![Message::user(format!("Message from the user:\n{}", s.output))],
+            StepKind::Verify => {
+                vec![Message::user(format!("Verification after your finish:\n{}\n\n{}", s.output, clip(obs, obs_chars)))]
+            }
+            StepKind::Review => {
+                if s.meta["verdict"].as_str() != Some("revise") {
+                    continue;
+                }
+                vec![Message::user(format!("The reviewer requested changes:\n{}", s.output))]
+            }
+        };
+        groups.push((s.seq, g));
+    }
+    groups
+}
+
+/// Transcript text for the summarizer.
+pub fn render_groups(groups: &[Vec<Message>], per_message: usize) -> String {
+    let mut out = String::new();
+    for g in groups {
+        for m in g {
+            let who = if m.role == Role::Assistant { "Agent" } else { "Input" };
+            out.push_str(&format!("[{who}]\n{}\n\n", clip(&m.content, per_message)));
+        }
+    }
+    out
+}
+
+pub const SUMMARIZER: &str = "You maintain the working memory of an AI coding agent whose conversation no longer fits its \
+context. Merge the previous summary and the new transcript into one updated summary for the agent itself, written in the \
+second person (\"You ...\"). Keep what it needs to continue: decisions and why, facts learned (file paths, function names, \
+APIs, commands and their results), what is finished, what failed and why, open problems and next steps, and any \
+instructions from the user or other agents. Drop chit-chat and file contents that can be re-read. Plain text, terse bullet \
+points, no preamble.";
 
 /// The actor's conversation: a pinned first message (goal, plan, file
 /// overview), then as many of the most recent turns as fit in
@@ -131,35 +252,8 @@ pub fn actor_messages(
     budget_chars: usize,
     obs_chars: usize,
 ) -> Vec<Message> {
-    let mut groups: Vec<Vec<Message>> = Vec::new();
-    for s in steps {
-        let obs = s.observation.as_deref().unwrap_or("");
-        match s.kind {
-            StepKind::Plan => {}
-            StepKind::Act => {
-                let tool = s.meta["tool"].as_str().unwrap_or("action");
-                let status = if s.meta["ok"].as_bool().unwrap_or(false) { "ok" } else { "error" };
-                groups.push(vec![
-                    Message::assistant(s.output.clone()),
-                    Message::user(format!("Result of {tool} ({status}):\n{}", clip(obs, obs_chars))),
-                ]);
-            }
-            StepKind::Inject => groups.push(vec![Message::user(format!("Message from the user:\n{}", s.output))]),
-            StepKind::Verify => groups.push(vec![Message::user(format!(
-                "Verification after your finish:\n{}\n\n{}",
-                s.output,
-                clip(obs, obs_chars)
-            ))]),
-            StepKind::Review => {
-                if s.meta["verdict"].as_str() == Some("revise") {
-                    groups.push(vec![Message::user(format!("The reviewer requested changes:\n{}", s.output))]);
-                }
-            }
-        }
-    }
-
-    let pinned = format!("# Goal\n{}\n\n# Plan\n{}\n{}", goal.trim(), clip(plan, 8_000), file_overview(files, 150));
-    windowed(Pinned { shared: pinned, own: String::new() }, groups, budget_chars)
+    let groups = actor_groups(steps, obs_chars).into_iter().map(|(_, g)| g).collect();
+    windowed(actor_pinned(goal, plan, files), groups, budget_chars)
 }
 
 /// How many of the oldest groups to drop so the rest fit in `room` chars.

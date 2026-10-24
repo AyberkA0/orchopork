@@ -3,10 +3,13 @@
 //! `RunState` the loop needs to continue from it — so resuming, restarting
 //! after a crash, and rewinding are all just "load step N".
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::sqlite::SqliteRow;
 
+use super::flowgraph::{FlowGraph, GraphPatch};
 use super::{Store, now_unix};
 use crate::config::ModelRef;
 use crate::error::{Error, Result};
@@ -48,6 +51,20 @@ pub enum RunMode {
     Orchestra,
 }
 
+/// How much the agent may do without asking. Reads never ask.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Autonomy {
+    /// Every tool call runs immediately.
+    #[default]
+    Full,
+    /// File edits run immediately; commands, processes, deletions and
+    /// custom tools wait for approval.
+    Semi,
+    /// Every call that changes something waits for approval.
+    Manual,
+}
+
 /// One member of an orchestra. `parent == None` marks the single root.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentSpec {
@@ -73,7 +90,12 @@ pub struct RunSpec {
     /// Orchestra: the model of every agent below the lead that does not
     /// pick its own, e.g. a strong lead with cheaper workers.
     pub worker_model: Option<ModelRef>,
+    /// Legacy hierarchical orchestras (read-only history).
     pub agents: Vec<AgentSpec>,
+    pub autonomy: Autonomy,
+    /// Orchestra: the flow graph (see `storage::flowgraph`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph: Option<FlowGraph>,
 }
 
 impl RunSpec {
@@ -141,11 +163,124 @@ pub struct RunState {
     /// Orchestra only: agents whose task is complete.
     #[serde(default)]
     pub done: Vec<String>,
+    /// Flow orchestras.
+    #[serde(default)]
+    pub flow: FlowState,
+    /// Summaries of turns that no longer fit an agent's context, by agent
+    /// id ("" for single-agent runs).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub memory: BTreeMap<String, Memory>,
+}
+
+/// Where a flow orchestra stands.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FlowState {
+    /// Nodes that finished in the current pass.
+    pub done: Vec<String>,
+    /// A report/approve review that must happen before the flow moves on.
+    pub review: Option<ReviewTask>,
+    /// Agents the Lead added or removed.
+    pub patch: GraphPatch,
+    /// Failed Goal checks so far.
+    pub goal_rounds: u32,
+    /// The flow as the user last edited it (replaces the run's original
+    /// graph from that step on; `patch` applies on top).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph: Option<FlowGraph>,
+    /// A Dispatcher whose branches are running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel: Option<ParallelRun>,
+}
+
+/// A Dispatcher at work: its branches, each in its own worktree.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ParallelRun {
+    /// The Dispatcher node.
+    pub node: String,
+    /// The run worktree's commit the branches started from.
+    pub fork: String,
+    pub branches: Vec<BranchRun>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BranchStatus {
+    #[default]
+    Running,
+    /// Its last agent finished; `report` holds what it handed back.
+    Finished,
+    /// It could not finish (an agent got stuck or kept failing).
+    Failed,
+    /// The Dispatcher moved on without it.
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BranchRun {
+    /// The branch's first agent; also the branch's id.
+    pub head: String,
+    /// Its agents in order.
+    pub nodes: Vec<String>,
+    pub worktree: String,
+    pub git_branch: String,
+    /// The branch worktree's commit after its latest step.
+    pub commit: String,
+    pub status: BranchStatus,
+    pub report: String,
+    /// The branch's own loop state (its agents' progress and memory).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<Box<RunState>>,
+}
+
+impl ParallelRun {
+    pub fn branch(&self, head: &str) -> Option<&BranchRun> {
+        self.branches.iter().find(|b| b.head == head)
+    }
+    pub fn branch_mut(&mut self, head: &str) -> Option<&mut BranchRun> {
+        self.branches.iter_mut().find(|b| b.head == head)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewKind {
+    /// `reviewer` (upstream) accepts `subject`'s report or sends it back.
+    Report,
+    /// `reviewer` (downstream) approves `subject`'s work before starting.
+    Approve,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewTask {
+    pub kind: ReviewKind,
+    pub reviewer: String,
+    pub subject: String,
+    pub edge: String,
+}
+
+/// A running summary of an agent's oldest turns.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Memory {
+    /// Steps up to and including this sequence number are summarized.
+    pub upto: i64,
+    pub text: String,
 }
 
 impl Default for RunState {
     fn default() -> Self {
-        Self { phase: Phase::Plan, failures: 0, reviews: 0, escalate: false, stack: vec![], done: vec![] }
+        Self {
+            phase: Phase::Plan,
+            failures: 0,
+            reviews: 0,
+            escalate: false,
+            stack: vec![],
+            done: vec![],
+            flow: FlowState::default(),
+            memory: BTreeMap::new(),
+        }
     }
 }
 
@@ -470,7 +605,7 @@ mod spec_tests {
 
     #[test]
     fn agent_trees_are_validated() {
-        let ok = RunSpec {
+        let ok = RunSpec { autonomy: Default::default(), graph: None,
             worker_model: None,
             mode: RunMode::Orchestra,
             model: None,

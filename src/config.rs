@@ -21,12 +21,36 @@ use crate::providers::ProviderId;
 /// Options: `effort` for API models (Claude `output_config.effort`, Gemini
 /// `reasoning_effort`); for ACP agents, any session config option the
 /// agent advertises (typically `model` and `effort`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelRef {
     pub provider: ProviderId,
     pub model: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub options: BTreeMap<String, String>,
+}
+
+impl<'de> Deserialize<'de> for ModelRef {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Helper {
+            Str(String),
+            Obj {
+                provider: ProviderId,
+                model: String,
+                #[serde(default)]
+                options: BTreeMap<String, String>,
+            },
+        }
+
+        match Helper::deserialize(deserializer)? {
+            Helper::Str(s) => ModelRef::parse(&s).map_err(serde::de::Error::custom),
+            Helper::Obj { provider, model, options } => Ok(ModelRef { provider, model, options }),
+        }
+    }
 }
 
 impl ModelRef {
@@ -79,6 +103,48 @@ pub struct Routing {
     pub escalation: Option<ModelRef>,
 }
 
+/// How far an agent may reach onto the internet. Ordered: a higher level
+/// includes everything below it, and an agent's own level can only narrow
+/// the workspace's (`Limits::net_for`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetAccess {
+    /// No web tools at all.
+    Off,
+    /// Pages of the project and servers on this computer (browser,
+    /// screenshots), but nothing from the internet.
+    Local,
+    /// `Local`, plus `web_search` and `web_fetch`: documentation and error
+    /// lookups. The browser still opens only local pages.
+    Docs,
+    /// Everything, including the browser on any URL.
+    #[default]
+    Full,
+}
+
+impl NetAccess {
+    pub const ALL: [NetAccess; 4] = [NetAccess::Off, NetAccess::Local, NetAccess::Docs, NetAccess::Full];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NetAccess::Off => "off",
+            NetAccess::Local => "local",
+            NetAccess::Docs => "docs",
+            NetAccess::Full => "full",
+        }
+    }
+
+    /// One line for an agent's prompt.
+    pub fn describe(self) -> &'static str {
+        match self {
+            NetAccess::Off => "none: you have no web tools (no search, fetch or browser). Work from the repository and what you know; if you need outside information, ask a teammate who has internet access.",
+            NetAccess::Local => "local only: you can open pages of this project and servers you started (browser, screenshots), but you cannot search the web or fetch URLs.",
+            NetAccess::Docs => "documentation only: web_search and web_fetch work; the browser opens only this project's pages and local servers.",
+            NetAccess::Full => "full: web_search, web_fetch and a browser for any URL.",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Limits {
@@ -96,7 +162,18 @@ pub struct Limits {
     /// Whether the agent may call `run_command`. Verification commands and
     /// skill tools still run: they are written by you, not by the model.
     pub allow_commands: bool,
+    /// Master switch for the web tools (fetch, search, browser). Off beats
+    /// `network`.
+    pub allow_network: bool,
+    /// The workspace's internet level for agents that do not set their own.
+    pub network: NetAccess,
+    /// Whether agents may capture the whole screen (everything visible on
+    /// this computer, not just their own pages). Off by default.
+    pub allow_screen_capture: bool,
     pub command_timeout_secs: u64,
+    /// Turns a flow agent may take on one assignment before its work goes
+    /// back to the Lead with a report of what it tried.
+    pub node_turns: u32,
     /// Per-observation cap when tool output is fed back to the model.
     pub tool_output_chars: usize,
     /// Transcript budget (in chars) for local and cloud models respectively.
@@ -117,13 +194,30 @@ impl Default for Limits {
             escalate_after: 2,
             max_review_rounds: 3,
             allow_commands: true,
+            allow_network: true,
+            network: NetAccess::Full,
+            allow_screen_capture: false,
             command_timeout_secs: 300,
+            node_turns: 25,
             tool_output_chars: 8_000,
             local_context_chars: 40_000,
             cloud_context_chars: 200_000,
             max_output_tokens: 16_000,
             external_timeout_secs: 3600,
         }
+    }
+}
+
+impl Limits {
+    /// The workspace's internet level.
+    pub fn net(&self) -> NetAccess {
+        if self.allow_network { self.network } else { NetAccess::Off }
+    }
+
+    /// What an agent that asks for `own` actually gets: never more than
+    /// the workspace allows.
+    pub fn net_for(&self, own: Option<NetAccess>) -> NetAccess {
+        own.map_or(self.net(), |o| o.min(self.net()))
     }
 }
 
@@ -249,6 +343,22 @@ mod tests {
             ("claude-code", Some("opus"), Some("high"))
         );
         assert_eq!(t.to_string(), "acp:claude-code?effort=high&model=opus");
+    }
+
+    #[test]
+    fn an_agent_can_only_narrow_the_workspace_network() {
+        let mut l = Limits::default();
+        assert_eq!(l.net_for(None), NetAccess::Full);
+        assert_eq!(l.net_for(Some(NetAccess::Docs)), NetAccess::Docs);
+        l.network = NetAccess::Local;
+        assert_eq!(l.net_for(Some(NetAccess::Full)), NetAccess::Local);
+        assert_eq!(l.net_for(Some(NetAccess::Off)), NetAccess::Off);
+        l.allow_network = false;
+        assert_eq!((l.net(), l.net_for(Some(NetAccess::Full))), (NetAccess::Off, NetAccess::Off));
+        let c: Limits = serde_yaml::from_str("allow_network: true
+network: docs
+").unwrap();
+        assert_eq!(c.net(), NetAccess::Docs);
     }
 
     #[test]

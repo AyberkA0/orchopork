@@ -18,8 +18,12 @@
 //! failures the next turn is escalated to a stronger model; when the cloud
 //! budget is exhausted, cloud roles fall back to a local actor.
 
+pub mod approvals;
+pub mod browser;
+pub mod screen;
 pub mod external;
-pub mod orchestra;
+pub mod flow;
+mod parallel;
 pub mod prompts;
 pub mod protocol;
 pub mod tools;
@@ -40,7 +44,9 @@ use crate::error::{Error, Result};
 use crate::fsutil::clip;
 use crate::git::GitRepo;
 use crate::providers::{CallOutcome, CompletionRequest, Message, ProviderId};
-use crate::storage::{NewStep, Phase, Run, RunMode, RunSpec, RunState, RunStatus, Step, StepKind, now_unix};
+use crate::storage::{Autonomy, NewStep, Phase, Run, RunMode, RunSpec, RunState, RunStatus, Step, StepKind, now_unix};
+use approvals::{Approvals, Decision};
+use protocol::Action;
 use tools::{MAX_STORED_OUTPUT, ToolBox, run_shell};
 
 const EVENT_CHANNEL_CAPACITY: usize = 512;
@@ -54,11 +60,26 @@ pub enum Event {
     Rewound { run_id: String, seq: i64 },
     Deleted { run_id: String },
     Log { run_id: String, message: String },
+    /// A tool call waits for the user (`approval`), or no longer does (`None`).
+    Approval { run_id: String, approval: Option<approvals::Approval> },
+    /// A model's reply while it is being written (the latest part of it).
+    Live { run_id: String, agent: Option<String>, text: String, thinking: bool },
 }
 
 enum Stop {
     Done,
     Paused(Option<String>),
+}
+
+tokio::task_local! {
+    /// Set while one of a Dispatcher's branches takes its turns: steps then
+    /// checkpoint the branch's worktree and state (see `parallel`).
+    static BRANCH: Arc<parallel::BranchCtx>;
+}
+
+/// Whether the current turn belongs to a Dispatcher's branch.
+fn in_branch() -> bool {
+    BRANCH.try_with(|_| ()).is_ok()
 }
 
 #[derive(Clone)]
@@ -67,13 +88,21 @@ pub struct Engine {
 }
 
 struct Inner {
+    /// Itself, for work spawned as tasks of its own (parallel branches).
+    this: std::sync::Weak<Inner>,
     ws: Arc<Workspace>,
     /// Pause flags of runs whose loop is currently executing.
     active: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The tasks driving active runs, so a run can be killed mid-step.
+    tasks: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     events: broadcast::Sender<Event>,
     /// Serializes step appends, so an inject arriving mid-run cannot race
     /// the loop for the next sequence number or a git commit.
     append_lock: tokio::sync::Mutex<()>,
+    approvals: Arc<Approvals>,
+    /// Per run: one approval request at a time (parallel branches may ask
+    /// together; the dashboard shows one).
+    approval_gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Held for the engine's lifetime: one executing process per workspace.
     _lock: std::fs::File,
 }
@@ -99,11 +128,15 @@ impl Engine {
         }
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Ok(Self {
-            inner: Arc::new(Inner {
+            inner: Arc::new_cyclic(|this| Inner {
+                this: this.clone(),
                 ws,
                 active: Mutex::new(HashMap::new()),
+                tasks: Mutex::new(HashMap::new()),
+                approvals: Arc::new(Approvals::new(events.clone())),
                 events,
                 append_lock: tokio::sync::Mutex::new(()),
+                approval_gates: Mutex::new(HashMap::new()),
                 _lock: lock,
             }),
         })
@@ -140,6 +173,18 @@ impl Engine {
     /// HEAD and starts it. Uncommitted changes in your checkout are not
     /// part of the run.
     pub async fn create_run(&self, goal: &str, verify_command: Option<&str>, spec: RunSpec) -> Result<Run> {
+        self.create_run_at(goal, verify_command, spec, None).await
+    }
+
+    /// `create_run` starting from `base` (a commit, e.g. another run's
+    /// latest state) instead of the repository's HEAD.
+    pub async fn create_run_at(
+        &self,
+        goal: &str,
+        verify_command: Option<&str>,
+        mut spec: RunSpec,
+        base: Option<&str>,
+    ) -> Result<Run> {
         let ws = &self.inner.ws;
         let goal = goal.trim();
         if goal.is_empty() {
@@ -153,10 +198,12 @@ impl Engine {
                 return Err(Error::InvalidRequest("choose a model for this chat".into()));
             }
             RunMode::Orchestra => {
-                spec.validate_agents()?;
-                if spec.model.is_none() && spec.agents.iter().any(|a| a.model.is_none()) {
-                    return Err(Error::InvalidRequest("choose a lead model for the orchestra".into()));
-                }
+                let mut g =
+                    spec.graph.take().ok_or_else(|| Error::InvalidRequest("the orchestra has no flow graph".into()))?;
+                g.normalize();
+                flow::check_orchestra(&spec, &g, verify_command)?;
+                crate::storage::flowgraph::auto_layout(&mut g);
+                spec.graph = Some(g);
             }
             _ => {}
         }
@@ -169,7 +216,8 @@ impl Engine {
         let verify = verify_command.map(str::trim).filter(|v| !v.is_empty());
         let run = {
             let _g = self.inner.append_lock.lock().await;
-            let base = ws.repo.ensure_initial_commit().await?;
+            let head = ws.repo.ensure_initial_commit().await?;
+            let base = base.map(str::to_string).unwrap_or(head);
             let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
             let branch = format!("orchopork/{id}");
             let worktree = ws.state_dir.join("worktrees").join(&id);
@@ -207,8 +255,72 @@ impl Engine {
         self.inner.emit(Event::Run { run: run.clone() });
         let inner = self.inner.clone();
         let id = run_id.to_string();
-        tokio::spawn(async move { inner.drive(id, flag).await });
+        // Held while spawning: a loop that ends at once removes its handle
+        // only after it was stored, so no stale handle is left behind.
+        let mut tasks = self.inner.tasks.lock().unwrap();
+        let handle = tokio::spawn(async move { inner.drive(id, flag).await });
+        tasks.insert(run_id.to_string(), handle.abort_handle());
+        drop(tasks);
         Ok(run)
+    }
+
+    /// Stops a run immediately, in the middle of whatever it is doing: the
+    /// model call or tool in flight is dropped (child processes die with
+    /// it), background processes are stopped and a pending approval is
+    /// withdrawn. Everything up to the last completed step is kept.
+    pub async fn kill(&self, run_id: &str) -> Result<Run> {
+        let store = &self.inner.ws.store;
+        let run = store.get_run(run_id).await?;
+        let was_active = match self.inner.active.lock().unwrap().get(run_id) {
+            Some(flag) => {
+                flag.store(true, Ordering::SeqCst);
+                true
+            }
+            None => false,
+        };
+        // Nothing to kill: a finished (or already stopped) run keeps its state.
+        if !was_active && run.status != RunStatus::Running {
+            return Ok(run);
+        }
+        if let Some(h) = self.inner.tasks.lock().unwrap().remove(run_id) {
+            h.abort();
+        }
+        self.inner.active.lock().unwrap().remove(run_id);
+        self.inner.approvals.forget(run_id);
+        self.inner.approvals.withdraw(run_id);
+        if let Ok(root) = crate::fsutil::canonical(Path::new(&run.worktree)) {
+            tools::processes::stop_all(&root);
+        }
+        let run = store.set_run_status(run_id, RunStatus::Paused, Some("killed by the user")).await?;
+        self.inner.emit(Event::Run { run: run.clone() });
+        self.inner.log(run_id, "killed");
+        Ok(run)
+    }
+
+    /// Stops a run for good: pauses it (after the step in progress, if it
+    /// is executing) and records `why` as its note.
+    pub async fn cancel(&self, run_id: &str, why: &str) -> Result<()> {
+        let store = self.inner.ws.store.clone();
+        let run = store.get_run(run_id).await?;
+        if self.is_active(run_id) {
+            self.pause(run_id).await?;
+            let (engine, id, why) = (self.clone(), run_id.to_string(), why.to_string());
+            tokio::spawn(async move {
+                for _ in 0..3600 {
+                    if !engine.is_active(&id) {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                if let Ok(run) = engine.inner.ws.store.set_run_status(&id, RunStatus::Paused, Some(&why)).await {
+                    engine.inner.emit(Event::Run { run });
+                }
+            });
+        } else if run.status != RunStatus::Done {
+            let run = store.set_run_status(run_id, RunStatus::Paused, Some(why)).await?;
+            self.inner.emit(Event::Run { run });
+        }
+        Ok(())
     }
 
     /// Asks the loop to stop after the step in progress.
@@ -248,12 +360,18 @@ impl Engine {
         let mut state = ws.store.head_step(run_id).await?.map(|s| s.state).unwrap_or_default();
         let mut meta = json!({});
         if run.spec.mode == RunMode::Orchestra {
-            let root = run.spec.root().map(|a| a.id.clone()).unwrap_or_default();
-            let target = agent.filter(|a| run.spec.agent(a).is_some()).map(str::to_string).unwrap_or(root);
+            let g = flow::current_graph(&run, &state).ok_or_else(|| {
+                Error::Conflict("this run uses the removed hierarchical orchestra and is read-only".into())
+            })?;
+            let lead = g.lead().map(|n| n.id.clone()).unwrap_or_default();
+            let target = agent
+                .filter(|a| g.node(a).is_some_and(|n| n.is_worker()))
+                .map(str::to_string)
+                .unwrap_or(lead);
             meta["agent"] = json!(target);
-            // Reopening the target (and its chain of command, if it already
-            // reported) is `orchestra_turn`'s job: it re-checks every turn,
-            // so this works whether the run is active or idle. Here we only
+            // Reopening the target (and everything after it, if it already
+            // finished) is `flow_turn`'s job: it re-checks every turn, so
+            // this works whether the run is active or idle. Here we only
             // need to get a finished run out of `Done` so the loop runs at
             // all.
             if state.phase == Phase::Done {
@@ -310,6 +428,32 @@ impl Engine {
         Ok(run)
     }
 
+    /// The tool call this run is waiting on the user for, if any.
+    pub fn pending_approval(&self, run_id: &str) -> Option<approvals::Approval> {
+        self.inner.approvals.pending(run_id)
+    }
+
+    /// Allows or denies the pending call `id`. `always` also allows every
+    /// later call of the same tool in this run without asking.
+    pub fn decide(&self, run_id: &str, id: &str, allow: bool, always: bool, note: &str) -> Result<()> {
+        self.inner.approvals.decide(run_id, id, allow, always, note)?;
+        self.inner.log(run_id, if allow { "approved; running the call" } else { "declined by the user" });
+        Ok(())
+    }
+
+    /// Changes how much the run may do without asking; takes effect on its
+    /// next tool call (and releases a pending one the new mode allows).
+    pub async fn set_autonomy(&self, run_id: &str, autonomy: Autonomy) -> Result<Run> {
+        let store = &self.inner.ws.store;
+        let run = store.get_run(run_id).await?;
+        let spec = RunSpec { autonomy, ..run.spec.clone() };
+        store.set_run_spec(run_id, &spec).await?;
+        self.inner.approvals.reconsider(run_id, autonomy);
+        let run = store.get_run(run_id).await?;
+        self.inner.emit(Event::Run { run: run.clone() });
+        Ok(run)
+    }
+
     /// Removes the run, its worktree and its branch. Spend stays recorded.
     pub async fn delete(&self, run_id: &str) -> Result<()> {
         if self.is_active(run_id) {
@@ -317,10 +461,40 @@ impl Engine {
         }
         let ws = &self.inner.ws;
         let run = ws.store.get_run(run_id).await?;
+        if let Ok(root) = crate::fsutil::canonical(Path::new(&run.worktree)) {
+            tools::processes::stop_all(&root);
+        }
+        self.inner.approvals.forget(run_id);
+        self.inner.approval_gates.lock().unwrap().remove(run_id);
+        parallel::remove_branch_worktrees(ws, &run).await;
         ws.repo.worktree_remove(Path::new(&run.worktree), &run.branch).await?;
         ws.store.delete_run(run_id).await?;
         self.inner.emit(Event::Deleted { run_id: run_id.to_string() });
         Ok(())
+    }
+
+    /// (stat, patch) of what one step changed: its checkpoint against the
+    /// one before it.
+    pub async fn step_diff(&self, run_id: &str, seq: i64) -> Result<(String, String)> {
+        let ws = &self.inner.ws;
+        let run = ws.store.get_run(run_id).await?;
+        let steps = ws.store.steps(run_id).await?;
+        let i = steps.iter().position(|s| s.seq == seq).ok_or_else(|| Error::NotFound(format!("step {seq}")))?;
+        let b = &steps[i].meta["branch"];
+        if let Some(after) = b["commit"].as_str() {
+            // A parallel branch's step: against the branch's previous one.
+            let before = steps[..i]
+                .iter()
+                .rev()
+                .find(|s| s.meta["branch"]["head"] == b["head"])
+                .and_then(|s| s.meta["branch"]["commit"].as_str())
+                .or(b["fork"].as_str())
+                .unwrap_or(&run.base_commit)
+                .to_string();
+            return GitRepo::new(&run.worktree).diff_between(&before, after).await;
+        }
+        let before = if i == 0 { run.base_commit.clone() } else { steps[i - 1].git_commit.clone() };
+        GitRepo::new(&run.worktree).diff_between(&before, &steps[i].git_commit).await
     }
 
     /// (stat, patch) of everything the run changed relative to its base.
@@ -344,10 +518,18 @@ impl Engine {
         };
         GitRepo::new(&run.worktree).push(&run.branch, token.as_deref()).await
     }
+
+    /// Merges the run's branch into the workspace's active checkout.
+    pub async fn merge(&self, run_id: &str) -> Result<String> {
+        let ws = &self.inner.ws;
+        let run = ws.store.get_run(run_id).await?;
+        let msg = format!("orchopork: merge run {} ({})", run.id, run.goal);
+        ws.repo.merge(&run.branch, &msg).await
+    }
 }
 
 impl Inner {
-    fn emit(&self, e: Event) {
+    pub(super) fn emit(&self, e: Event) {
         let _ = self.events.send(e); // no subscribers is fine
     }
 
@@ -370,6 +552,7 @@ impl Inner {
             Err(e) => tracing::error!(run = run_id, "failed to record run status: {e}"),
         }
         self.active.lock().unwrap().remove(&run_id);
+        self.tasks.lock().unwrap().remove(&run_id);
     }
 
     async fn drive_loop(&self, run_id: &str, pause: &AtomicBool) -> Result<Stop> {
@@ -403,7 +586,7 @@ impl Inner {
                     return Ok(Stop::Done);
                 }
                 taken += 1;
-                if let Some(stop) = self.orchestra_turn(&cfg, &run, &steps, state).await? {
+                if let Some(stop) = self.flow_turn(&cfg, &run, &steps, state).await? {
                     return Ok(stop);
                 }
                 continue;
@@ -467,6 +650,24 @@ impl Inner {
         let label = meta["tool"].as_str().map(|t| format!(" {t}")).unwrap_or_default();
         let commit =
             GitRepo::new(&run.worktree).commit_all(&format!("orchopork {}: {}{label}", run.id, kind.as_str())).await?;
+        // A branch's step checkpoints the branch worktree and the branch's
+        // state inside the run's; the step itself points at the run's
+        // worktree, which the branches do not touch.
+        let mut meta = meta;
+        let branch = BRANCH.try_with(Arc::clone).ok();
+        let (state, commit) = match &branch {
+            Some(b) => {
+                let mut run_state = b.shared.lock().await;
+                if let Some(br) = run_state.flow.parallel.as_mut().and_then(|p| p.branch_mut(&b.head)) {
+                    br.commit = commit.clone();
+                    br.state = Some(Box::new(state.clone()));
+                }
+                meta["branch"] = json!({ "head": b.head, "commit": commit, "fork": b.fork });
+                (run_state.clone(), b.main_commit.clone())
+            }
+            None => (state.clone(), commit),
+        };
+        let (state, commit) = (&state, commit);
         let observation = observation.map(|o| clip(o, MAX_STORED_OUTPUT));
         let step = self
             .ws
@@ -488,6 +689,166 @@ impl Inner {
         Ok(())
     }
 
+    /// The conversation for one turn of `key`'s agent, within `budget`
+    /// chars. Turns that no longer fit are folded into the agent's memory
+    /// summary (kept in `state`, so it checkpoints and rewinds with the
+    /// run) instead of being dropped; if summarizing fails they are dropped
+    /// as before. Returns the messages and what summarizing cost.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn fit(
+        &self,
+        cfg: &Config,
+        run: &Run,
+        key: &str,
+        model: &ModelRef,
+        pinned: prompts::Pinned,
+        groups: Vec<prompts::Group>,
+        budget: usize,
+        state: &mut RunState,
+    ) -> (Vec<Message>, f64) {
+        let mut cost = 0.0;
+        // Three folds at most: one normally suffices, more cover a
+        // summary that itself grew too large.
+        for _ in 0..3 {
+            match prompts::window(pinned.clone(), groups.clone(), budget, state.memory.get(key)) {
+                prompts::Window::Fits(m) => return (m, cost),
+                prompts::Window::Fold { fold, upto } => {
+                    let prev = state.memory.get(key).map(|m| m.text.clone()).unwrap_or_default();
+                    let limit = (budget / 8).clamp(1_500, 12_000);
+                    match self.summarize(cfg, run, model, &prev, &fold, limit).await {
+                        Ok((text, c)) => {
+                            cost += c;
+                            self.log(&run.id, format!("{}: older turns folded into memory", if key.is_empty() { "agent" } else { key }));
+                            state.memory.insert(key.to_string(), crate::storage::Memory { upto, text });
+                        }
+                        Err(e) => {
+                            tracing::warn!(run = run.id, "could not summarize old turns ({e}); dropping them instead");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        let groups = groups.into_iter().filter(|(seq, _)| state.memory.get(key).is_none_or(|m| *seq > m.upto));
+        (prompts::windowed(pinned, groups.map(|(_, g)| g).collect(), budget), cost)
+    }
+
+    /// Merges `prev` and `fold` into a summary of at most `limit` chars,
+    /// asking for a shorter one if the first is too long.
+    async fn summarize(
+        &self,
+        cfg: &Config,
+        run: &Run,
+        model: &ModelRef,
+        prev: &str,
+        fold: &[Vec<Message>],
+        limit: usize,
+    ) -> Result<(String, f64)> {
+        let input = format!(
+            "# Previous summary
+{}
+
+# New transcript to fold in
+{}
+
+Write the updated summary in at most {limit} characters.",
+            if prev.trim().is_empty() { "(none)" } else { prev.trim() },
+            prompts::render_groups(fold, 3_000)
+        );
+        let out = self.call(cfg, run, model, prompts::SUMMARIZER.into(), vec![Message::user(input)]).await?;
+        let mut text = out.text.trim().to_string();
+        let mut cost = out.cost_usd;
+        if text.len() > limit {
+            let again = format!("Shorten this summary to at most {limit} characters, keeping the most important facts:
+
+{text}");
+            let out = self.call(cfg, run, model, prompts::SUMMARIZER.into(), vec![Message::user(again)]).await?;
+            cost += out.cost_usd;
+            text = out.text.trim().to_string();
+        }
+        if text.is_empty() {
+            return Err(Error::Provider("the summary came back empty".into()));
+        }
+        Ok((clip(&text, limit + 200), cost))
+    }
+
+    /// Records a user change (e.g. a flow edit) as a step without running
+    /// anything; the worktree is committed as it is.
+    pub(super) async fn record_edit(&self, run: &Run, text: &str, meta: serde_json::Value, state: &RunState) -> Result<()> {
+        self.append(run, StepKind::Inject, text, None, meta, state, 0.0).await
+    }
+
+    /// Streams a reply to the dashboard as `Live` events, at most five a
+    /// second, each with the latest part of what was written so far.
+    pub(super) fn live_sink(&self, run_id: &str, agent: Option<&str>) -> crate::providers::Sink {
+        struct Buf {
+            text: String,
+            thought: String,
+            thinking: bool,
+            last: std::time::Instant,
+        }
+        let buf = Arc::new(Mutex::new(Buf {
+            text: String::new(),
+            thought: String::new(),
+            thinking: false,
+            last: std::time::Instant::now() - Duration::from_secs(1),
+        }));
+        let (events, run_id, agent) = (self.events.clone(), run_id.to_string(), agent.map(str::to_string));
+        crate::providers::Sink(Arc::new(move |piece: &str, thinking: bool| {
+            let mut b = buf.lock().unwrap();
+            if thinking { b.thought.push_str(piece) } else { b.text.push_str(piece) }
+            b.thinking = thinking;
+            if b.last.elapsed() < Duration::from_millis(200) {
+                return;
+            }
+            b.last = std::time::Instant::now();
+            let whole = if b.text.is_empty() { &b.thought } else { &b.text };
+            let start = whole.len().saturating_sub(4_000);
+            let start = (start..whole.len()).find(|&i| whole.is_char_boundary(i)).unwrap_or(whole.len());
+            let _ = events.send(Event::Live {
+                run_id: run_id.clone(),
+                agent: agent.clone(),
+                text: whole[start..].to_string(),
+                thinking: b.text.is_empty(),
+            });
+        }))
+    }
+
+    fn pause_flag(&self, run_id: &str) -> Arc<AtomicBool> {
+        self.active.lock().unwrap().get(run_id).cloned().unwrap_or_else(|| Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Runs one tool call, first asking the user when the run's autonomy
+    /// requires it. `ok` is `None` for a call the user declined (or that a
+    /// pause interrupted): not the model's failure, so it does not count
+    /// towards escalation.
+    pub(super) async fn gated(
+        &self,
+        run: &Run,
+        agent: Option<&str>,
+        toolbox: &ToolBox,
+        a: &Action,
+    ) -> (String, Option<bool>) {
+        let class = toolbox.class(&a.tool);
+        // Fresh from the store: the user may have switched modes mid-run.
+        let autonomy = self.ws.store.get_run(&run.id).await.map(|r| r.spec.autonomy).unwrap_or(run.spec.autonomy);
+        if self.approvals.needed(&run.id, &a.tool, class, autonomy) {
+            let gate = self.approval_gates.lock().unwrap().entry(run.id.clone()).or_default().clone();
+            let _one = gate.lock().await;
+            self.log(&run.id, format!("waiting for your approval: {}", a.tool));
+            let flag = self.pause_flag(&run.id);
+            let d = self
+                .approvals
+                .ask(&run.id, agent, &a.tool, serde_json::Value::Object(a.args.clone()), class, a.tool.clone(), &flag)
+                .await;
+            if !matches!(d, Decision::Allow) {
+                return (approvals::refused_observation(&a.tool, &d), None);
+            }
+        }
+        let r = toolbox.execute(a).await;
+        (r.output, Some(r.ok))
+    }
+
     async fn plan(&self, cfg: &Config, run: &Run, steps: &[Step], state: RunState) -> Result<Option<Stop>> {
         let model = cfg.routing.planner.clone().or_else(|| cfg.routing.actor.clone()).ok_or_else(no_actor)?;
         let wt = GitRepo::new(&run.worktree);
@@ -507,7 +868,7 @@ impl Inner {
         Ok(None)
     }
 
-    async fn act(&self, cfg: &Config, run: &Run, steps: &[Step], state: RunState) -> Result<Option<Stop>> {
+    async fn act(&self, cfg: &Config, run: &Run, steps: &[Step], mut state: RunState) -> Result<Option<Stop>> {
         let actor = cfg.routing.actor.clone().ok_or_else(no_actor)?;
         let (model, escalated) = match (&cfg.routing.escalation, state.escalate) {
             (Some(e), true) => (e.clone(), true),
@@ -517,27 +878,40 @@ impl Inner {
             return self.act_external(cfg, run, steps, state, &model).await;
         }
         let skills = self.ws.skills.compose("")?;
-        let toolbox = ToolBox::new(Path::new(&run.worktree), &cfg.limits, skills.tools.clone())?;
+        let toolbox = ToolBox::new(Path::new(&run.worktree), &cfg.limits, skills.tools.clone())?
+            .with_vision(self.ws.gateway.supports_vision(&model).await);
         let system =
-            format!("{}\n\n{}", prompts::actor_system(&toolbox.describe()), skills.system).trim_end().to_string();
+            format!("{}\n\n{}", prompts::actor_system(&toolbox.describe_with_finish()), skills.system).trim_end().to_string();
         // Files as of the run's start (stable, cacheable) plus what changed
         // since then (volatile, sent after the cache breakpoint).
         let wt = GitRepo::new(&run.worktree);
         let files = wt.ls_files_at(&run.base_commit).await?;
         let tail = prompts::changes_note(&wt.changed_names(&run.base_commit).await?);
         let plan = steps.iter().rev().find(|s| s.kind == StepKind::Plan).map(|s| s.output.as_str()).unwrap_or("");
-        let messages = prompts::actor_messages(
-            &run.goal,
-            plan,
-            &files,
-            steps,
-            cfg.context_chars(&model),
-            cfg.limits.tool_output_chars,
-        );
+        let (messages, memory_cost) = self
+            .fit(
+                cfg,
+                run,
+                "",
+                &model,
+                prompts::actor_pinned(&run.goal, plan, &files),
+                prompts::actor_groups(steps, cfg.limits.tool_output_chars),
+                cfg.context_chars(&model),
+                &mut state,
+            )
+            .await;
         if escalated {
             self.log(&run.id, format!("escalating this turn to {model} after {} failed turns", state.failures));
         }
-        let req = CompletionRequest { system, messages, tail: Some(tail), ..Default::default() };
+        let messages = attach_latest_image(messages, steps, None, &toolbox);
+        let req = CompletionRequest {
+            system,
+            messages,
+            tail: Some(tail),
+            tools: toolbox.schemas_with_finish(),
+            sink: Some(self.live_sink(&run.id, None)),
+            ..Default::default()
+        };
         let out = self.call_req(cfg, run, &model, req).await?;
 
         let mut meta = call_meta(&out);
@@ -551,7 +925,7 @@ impl Inner {
                     "Your reply was rejected by validator skills: {}. Redo the step without that.",
                     list.join("; ")
                 ),
-                false,
+                Some(false),
             )
         } else {
             match protocol::parse_action(&out.text) {
@@ -564,7 +938,7 @@ impl Inner {
                     let msg = format!(
                         "Could not parse an action: {e}.{cut} Reply with a short note and exactly one JSON object, e.g. {{\"tool\": \"read_file\", \"args\": {{\"path\": \"README.md\"}}}}."
                     );
-                    (msg, false)
+                    (msg, Some(false))
                 }
                 Ok(a) if a.tool == "finish" => {
                     meta["tool"] = json!("finish");
@@ -580,24 +954,32 @@ impl Inner {
                         Phase::Review => "Finish requested; sending the change to review.",
                         _ => "Finished.",
                     };
-                    (msg.to_string(), true)
+                    (msg.to_string(), Some(true))
                 }
                 Ok(a) => {
                     meta["tool"] = json!(a.tool);
-                    let r = toolbox.execute(&a).await;
-                    (r.output, r.ok)
+                    if let Some(why) = repeated_call(steps, None, &a) {
+                        meta["repeat"] = json!(true);
+                        (why, Some(false))
+                    } else {
+                        let (obs, ok) = self.gated(run, None, &toolbox, &a).await;
+                        if ok.is_none() {
+                            meta["declined"] = json!(true);
+                        }
+                        note_images(&mut meta, image_of(&a, &obs, ok));
+                        note_lines(&mut meta, &obs, ok);
+                        let stuck = stuck_hint(steps, None, &obs, ok, "web_search the exact error message");
+                        // Being stuck is a failure even when the call itself
+                        // worked: it moves the run to escalation or a pause.
+                        let ok = if stuck.is_empty() { ok } else { Some(false) };
+                        (format!("{obs}{stuck}"), ok)
+                    }
                 }
             }
         };
-        meta["ok"] = json!(ok);
-        if ok {
-            next.failures = 0;
-            next.escalate = false;
-        } else {
-            next.failures += 1;
-            next.escalate = cfg.routing.escalation.is_some() && next.failures >= cfg.limits.escalate_after;
-        }
-        self.append(run, StepKind::Act, &out.text, Some(&observation), meta, &next, out.cost_usd).await?;
+        count_outcome(cfg, &mut meta, &mut next, ok);
+        let cost = out.cost_usd + memory_cost;
+        self.append(run, StepKind::Act, &out.text, Some(&observation), meta, &next, cost).await?;
         if next.failures >= cfg.limits.max_failures {
             return Ok(Some(Stop::Paused(Some(format!(
                 "{} consecutive failed turns; inject guidance or pick a stronger actor model, then resume",
@@ -726,6 +1108,182 @@ fn effective_config(mut cfg: Config, spec: &RunSpec) -> Config {
 
 fn no_actor() -> Error {
     Error::InvalidRequest("no actor model configured".into())
+}
+
+/// The images a tool call produced or asked to see (repo-relative paths).
+pub(super) fn image_of(a: &Action, obs: &str, ok: Option<bool>) -> Vec<String> {
+    if ok != Some(true) {
+        return vec![];
+    }
+    match a.tool.as_str() {
+        "view_image" => tools::image_args(a),
+        "browser" => a.str_arg("screenshot").map(str::to_string).into_iter().collect(),
+        "screenshot_page" | "screenshot_screen" | "screenshot_sequence" => {
+            // Every saved path in the result, in order.
+            let head = obs.split('\n').next().unwrap_or("");
+            let mut out = Vec::new();
+            let mut rest = head;
+            while let Some(start) = rest.find(tools::SHOTS_DIR) {
+                let Some(len) = rest[start..].find(".png") else { break };
+                out.push(rest[start..start + len + 4].to_string());
+                rest = &rest[start + len + 4..];
+            }
+            out
+        }
+        _ => vec![],
+    }
+}
+
+/// A canonical key for a tool call: its name and arguments.
+pub(super) fn call_key(a: &Action) -> String {
+    let sorted: std::collections::BTreeMap<&String, &serde_json::Value> = a.args.iter().collect();
+    format!("{}:{}", a.tool, serde_json::to_string(&sorted).unwrap_or_default())
+}
+
+/// `agent`'s act steps (all act steps when `agent` is `None`).
+fn acts_of<'a>(steps: &'a [Step], agent: Option<&'a str>) -> impl DoubleEndedIterator<Item = &'a Step> + 'a {
+    steps.iter().filter(move |s| s.kind == StepKind::Act && agent.is_none_or(|a| s.meta["agent"] == a))
+}
+
+/// When `agent` already made exactly this call and nothing in the worktree
+/// changed since, the answer would be the same: say so instead of running it.
+pub(super) fn repeated_call(steps: &[Step], agent: Option<&str>, a: &Action) -> Option<String> {
+    if matches!(a.tool.as_str(), "finish" | "process_output" | "notebook_read") {
+        return None;
+    }
+    let key = call_key(a);
+    let same = |s: &&Step| protocol::parse_action(&s.output).is_ok_and(|p| call_key(&p) == key);
+    let prev = acts_of(steps, agent).rev().find(same)?;
+    let head = steps.last().map(|s| s.git_commit.as_str()).unwrap_or("");
+    if prev.git_commit != head {
+        return None; // files changed since: the result may differ
+    }
+    // Other agents, processes and user messages change the world without
+    // touching files (e.g. a dev server was started): then it is no repeat.
+    let changed = steps.iter().filter(|s| s.seq > prev.seq).any(|s| {
+        s.kind != StepKind::Act
+            || agent.is_some_and(|me| s.meta["agent"] != me)
+            || matches!(s.meta["tool"].as_str(), Some("start_process" | "stop_process" | "run_command"))
+    });
+    if changed {
+        return None;
+    }
+    // Quote the result of the last call that really ran, not an earlier
+    // "Not run" notice (those would nest).
+    let original = acts_of(steps, agent).rev().filter(same).find(|s| s.meta["repeat"] != true).unwrap_or(prev);
+    let times = acts_of(steps, agent).filter(same).count() + 1;
+    Some(format!(
+        "Not run (attempt {times} of the same call): nothing has changed since you last made it, so the result would be the same:\n{}\n\n\
+         Do something different: change the code, start what is missing, or get help (consult a teammate, or web_search the error).",
+        clip(original.observation.as_deref().unwrap_or(""), 800)
+    ))
+}
+
+/// What identifies an error in a result: the failure itself, or the page
+/// errors a browser check reported.
+pub(super) fn error_sig(obs: &str, ok: Option<bool>) -> Option<String> {
+    let page: Vec<&str> = obs.lines().filter(|l| l.contains("Uncaught") || l.contains("Failed to load resource")).collect();
+    if !page.is_empty() {
+        return Some(page.join("\n").chars().take(300).collect());
+    }
+    if ok == Some(false) {
+        return Some(obs.lines().find(|l| !l.trim().is_empty() && !l.starts_with('$')).unwrap_or(obs).chars().take(300).collect());
+    }
+    None
+}
+
+/// When this error already happened twice or more to `agent`, a strong hint
+/// to stop retrying and get help (`help` names who or what can help).
+pub(super) fn stuck_hint(steps: &[Step], agent: Option<&str>, obs: &str, ok: Option<bool>, help: &str) -> String {
+    let Some(sig) = error_sig(obs, ok) else { return String::new() };
+    let seen = acts_of(steps, agent)
+        .filter(|s| error_sig(s.observation.as_deref().unwrap_or(""), s.meta["ok"].as_bool()).as_deref() == Some(sig.as_str()))
+        .count();
+    if seen < 2 {
+        return String::new();
+    }
+    format!(
+        "\n\nSTUCK: this same error has now come back {} times. Your approach is not working and guessing again wastes turns. \
+         Get help before the next attempt: {help}. Then change your approach based on what you learn.",
+        seen + 1
+    )
+}
+
+/// How many times `agent` made exactly this call and got exactly this
+/// (failing) result before.
+pub(super) fn identical_failures(steps: &[Step], agent: Option<&str>, a: &Action, obs: &str) -> usize {
+    let key = call_key(a);
+    let sig = error_sig(obs, Some(false));
+    acts_of(steps, agent)
+        .filter(|s| {
+            protocol::parse_action(&s.output).is_ok_and(|p| call_key(&p) == key)
+                && error_sig(s.observation.as_deref().unwrap_or(""), Some(false)) == sig
+        })
+        .count()
+}
+
+/// Records the lines a file tool added and removed.
+pub(super) fn note_lines(meta: &mut serde_json::Value, obs: &str, ok: Option<bool>) {
+    if ok == Some(true)
+        && let Some((a, r)) = tools::lines_of(obs)
+    {
+        meta["lines"] = json!({ "added": a, "removed": r });
+    }
+}
+
+/// Records the images of a step for the dashboard (`image`: the first).
+pub(super) fn note_images(meta: &mut serde_json::Value, images: Vec<String>) {
+    if let Some(first) = images.first() {
+        meta["image"] = json!(first);
+        meta["images"] = json!(images);
+    }
+}
+
+/// Most images shown with one result.
+const MAX_SHOWN_IMAGES: usize = 6;
+
+/// Whether a step showed its images to the agent that made it: `view_image`
+/// always, screenshots when the agent can see.
+pub(super) fn shows_images(tool: &str, sees: bool) -> bool {
+    tool == "view_image" || (sees && matches!(tool, "screenshot_page" | "screenshot_sequence" | "screenshot_screen" | "browser"))
+}
+
+/// When `agent`'s last step showed images (see `shows_images`), sends them
+/// with the last message (only then: images are expensive to resend).
+pub(super) fn attach_latest_image(mut messages: Vec<Message>, steps: &[Step], agent: Option<&str>, toolbox: &ToolBox) -> Vec<Message> {
+    let last = steps.iter().rev().find(|s| s.kind == StepKind::Act && agent.is_none_or(|a| s.meta["agent"] == a));
+    if let Some(s) = last
+        && shows_images(s.meta["tool"].as_str().unwrap_or(""), toolbox.sees())
+        && let Some(m) = messages.last_mut()
+    {
+        let paths: Vec<&str> = match s.meta["images"].as_array() {
+            Some(v) => v.iter().filter_map(|p| p.as_str()).collect(),
+            None => s.meta["image"].as_str().into_iter().collect(),
+        };
+        for p in paths.into_iter().take(MAX_SHOWN_IMAGES) {
+            if let Ok(img) = toolbox.load_image(p) {
+                m.images.push(img);
+            }
+        }
+    }
+    messages
+}
+
+/// Records a turn's outcome: success resets the failure streak, failure
+/// extends it (and may escalate), a declined call leaves it alone.
+fn count_outcome(cfg: &Config, meta: &mut serde_json::Value, next: &mut RunState, ok: Option<bool>) {
+    meta["ok"] = json!(ok.unwrap_or(true));
+    match ok {
+        Some(true) => {
+            next.failures = 0;
+            next.escalate = false;
+        }
+        Some(false) => {
+            next.failures += 1;
+            next.escalate = cfg.routing.escalation.is_some() && next.failures >= cfg.limits.escalate_after;
+        }
+        None => {}
+    }
 }
 
 fn call_meta(out: &CallOutcome) -> serde_json::Value {

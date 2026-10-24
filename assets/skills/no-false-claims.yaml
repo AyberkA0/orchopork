@@ -1,0 +1,13 @@
+name: "no-false-claims"
+version: "1.0.0"
+type: "validator"
+description: "Stops agents from claiming what they did not check. A report that describes how something looks is rejected unless the agent was shown an image in that piece of work; a failed check cannot be reported as success; a report copied word for word from an earlier one is rejected."
+priority: 5
+prompt_injection: |
+  Honesty about evidence:
+  - Report only what your tool results in this piece of work actually showed. If you did not check something, write "not checked".
+  - Describe how a page or screen looks only if you were shown the image yourself in this piece of work. Otherwise never write "verified visually", "looks good", "I can see", "is visible" or the like: say that a teammate who can see reported it (and what they said), or that it was not checked.
+  - A tool call that failed (the page did not load, the command failed, nothing was listening) proves nothing. Never turn a failed check into "works" or "verified".
+  - Never repeat an earlier report as your result: say what you found this time.
+validator:
+  evidence: true

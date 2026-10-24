@@ -9,6 +9,8 @@ pub struct ComposedPrompt {
     pub tools: Vec<ToolSpec>,
     /// (skill name, spec)
     pub validators: Vec<(String, ValidatorSpec)>,
+    /// A validator asks the engine to check claims against evidence.
+    pub honest: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -53,7 +55,18 @@ pub fn compose(base: &str, enabled: &[Skill]) -> Result<ComposedPrompt> {
                 }
             }
             SkillType::Validator => {
+                // A validator may explain its rules to the agents too.
+                if !s.prompt_injection.trim().is_empty() {
+                    if !out.system.is_empty() {
+                        out.system.push_str("\n\n");
+                    }
+                    out.system.push_str(&format!(
+                        "<skill name=\"{}\" version=\"{}\">\n{}\n</skill>",
+                        s.name, s.version, s.prompt_injection
+                    ));
+                }
                 if let Some(v) = &s.validator {
+                    out.honest |= v.evidence;
                     out.validators.push((s.name.clone(), v.clone()));
                 }
             }

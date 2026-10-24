@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
+use super::approvals::{self, Decision};
 use super::{Inner, Stop, prompts, verify_commands};
 use crate::acp::{self, Outcome, Policy, Update};
 use crate::config::{Config, ModelRef};
@@ -72,12 +73,43 @@ impl Inner {
         who: &str,
         prompt: String,
     ) -> Result<Outcome> {
+        self.external_turn_denying(cfg, run, model, who, prompt, Vec::new()).await
+    }
+
+    /// `external_turn`, refusing the permission requests of the given kinds.
+    pub(super) async fn external_turn_denying(
+        &self,
+        cfg: &Config,
+        run: &Run,
+        model: &ModelRef,
+        who: &str,
+        prompt: String,
+        deny: Vec<String>,
+    ) -> Result<Outcome> {
         let agent = cfg.external_agents.iter().find(|a| a.id == model.model).cloned().ok_or_else(|| {
             Error::InvalidRequest(format!("external agent {:?} is not configured (Models & settings)", model.model))
         })?;
         let flag =
             self.active.lock().unwrap().get(&run.id).cloned().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         self.log(&run.id, format!("{who}: starting {}", agent.name));
+        let approve: acp::Approver = {
+            let (approvals, ws, rid, flag, who) =
+                (self.approvals.clone(), self.ws.clone(), run.id.clone(), flag.clone(), who.to_string());
+            Arc::new(move |kind: String, title: String, call: serde_json::Value| {
+                let (approvals, ws, rid, flag, who) =
+                    (approvals.clone(), ws.clone(), rid.clone(), flag.clone(), who.clone());
+                Box::pin(async move {
+                    let class = approvals::acp_class(&kind);
+                    let autonomy = ws.store.get_run(&rid).await.map(|r| r.spec.autonomy).unwrap_or_default();
+                    let key = format!("acp:{kind}");
+                    if !approvals.needed(&rid, &key, class, autonomy) {
+                        return true;
+                    }
+                    let label = format!("{who} · {title}");
+                    matches!(approvals.ask(&rid, None, &label, call, class, key, &flag).await, Decision::Allow)
+                })
+            })
+        };
         let mut last = Instant::now() - Duration::from_secs(5);
         let run_id = run.id.clone();
         acp::run(
@@ -85,7 +117,7 @@ impl Inner {
             Path::new(&run.worktree),
             &prompt,
             &model.options,
-            Policy { allow_execute: cfg.limits.allow_commands },
+            Policy { allow_execute: cfg.limits.allow_commands, deny, approve: Some(approve) },
             Duration::from_secs(cfg.limits.external_timeout_secs.max(30)),
             &flag,
             |u| {

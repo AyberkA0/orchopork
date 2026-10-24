@@ -2,6 +2,7 @@
 //! append-only spend ledger the budget guard reads.
 
 mod checkpoint;
+pub mod flowgraph;
 
 use std::path::Path;
 use std::str::FromStr;
@@ -9,7 +10,14 @@ use std::str::FromStr;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
-pub use checkpoint::{AgentSpec, NewStep, Phase, Run, RunMode, RunSpec, RunState, RunStatus, Step, StepKind};
+pub use checkpoint::{
+    AgentSpec, Autonomy, BranchRun, BranchStatus, FlowState, Memory, NewStep, ParallelRun, Phase, ReviewKind, ReviewTask, Run,
+    RunMode, RunSpec, RunState, RunStatus, Step, StepKind,
+};
+pub use flowgraph::{
+    EdgeCaps, EdgeContext, FlowEdge, FlowGraph, FlowNode, GoalJudge, GoalSettings, GraphPatch, LeadSettings, NodeKind,
+    ParallelPolicy, ParallelSettings, ParallelWork, ROLE_KEYS,
+};
 
 use crate::error::Result;
 

@@ -643,7 +643,7 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .notice { border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: var(--warn-bg); border-radius: var(--r); padding: 12px 14px; margin-top: 10px; text-align: left; font-size: 13.5px; }
 .found { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .found .mitem { border: 1px solid var(--line); border-radius: var(--r); cursor: default; }
-.agents-grid { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto auto auto; gap: 8px; align-items: center; margin-top: 10px; }
+.agents-grid { display: grid; grid-template-columns: 150px 150px minmax(0, 1fr) auto auto auto auto; gap: 8px; align-items: center; margin-top: 10px; }
 .live-line { transition: opacity .2s; }
 
 /* Skeletons */
@@ -1604,6 +1604,22 @@ async function pickModel({ title, subtitle }) {
   });
 }
 
+// How an external agent is launched: over ACP, or as a headless CLI of a dialect.
+const AGENT_MODES = [
+  { value: "acp", name: "ACP", hint: "Agent Client Protocol: orchopork answers permissions and file access, confined to the worktree" },
+  { value: "cli:claude", name: "CLI · Claude Code", hint: "claude -p, with your settings, MCP servers, plugins and CLAUDE.md" },
+  { value: "cli:codex", name: "CLI · Codex", hint: "codex exec --json, in its workspace sandbox" },
+  { value: "cli:gemini", name: "CLI · Gemini CLI", hint: "gemini, non-interactive, stream-json" },
+  { value: "cli:qwen", name: "CLI · Qwen Code", hint: "qwen, non-interactive, stream-json" },
+  { value: "cli:cursor", name: "CLI · Cursor Agent", hint: "cursor-agent -p, stream-json; put {prompt} in the args" },
+  { value: "cli:copilot", name: "CLI · Copilot", hint: "copilot -p; put {prompt} in the args" },
+  { value: "cli:antigravity", name: "CLI · Antigravity", hint: "agy -p with stream-json in and out, with your Google sign-in" },
+  { value: "cli:aider", name: "CLI · Aider", hint: "aider; put --message-file {prompt_file} in the args" },
+  { value: "cli:generic", name: "CLI · other", hint: "Any command: the task goes to stdin (or {prompt} / {prompt_file} in the args), stdout is the report" },
+];
+const agentMode = (a) => (a.protocol === "cli" ? `cli:${a.dialect || "generic"}` : "acp");
+const setAgentMode = (a, v) => { if (v === "acp") { delete a.protocol; delete a.dialect; } else { a.protocol = "cli"; a.dialect = v.slice(4); } };
+
 // ---------- model tuning ----------
 S.agentOpts = {};
 async function agentOptions(id, refresh) {
@@ -1821,10 +1837,23 @@ function openAddModel() {
       if (!preset) {
         const name = h("input", { placeholder: "Agent Name" });
         const cmd = h("input", { class: "mono", placeholder: "Command starting the agent in ACP mode" });
-        const btn = h("button", { class: "primary", text: "Test & Add", onclick: () => submit(btn, { kind: "acp", name: name.value, command: cmd.value }, "acp", name.value) });
+        const hint = h("div", { class: "small muted" });
+        const mode = h("select", { onchange: () => paintHint() }, AGENT_MODES.map((m) => h("option", { value: m.value, text: m.name })));
+        const paintHint = () => {
+          hint.textContent = AGENT_MODES.find((x) => x.value === mode.value).hint;
+          cmd.placeholder = mode.value === "acp" ? "Command starting the agent in ACP mode" : "Command, e.g. claude --add-dir ../shared";
+        };
+        paintHint();
+        const btn = h("button", { class: "primary", text: "Test & Add", onclick: () => {
+          const v = mode.value, payload = { kind: "acp", name: name.value, command: cmd.value };
+          if (v !== "acp") { payload.protocol = "cli"; payload.dialect = v.slice(4); }
+          submit(btn, payload, "acp", name.value);
+        } });
         body.replaceChildren(h("div", { class: "enter" },
-          h("h2", { text: "Custom ACP Agent" }),
+          h("h2", { text: "Custom Agent" }),
+          h("p", { class: "small muted", text: "Any agent that speaks ACP, or any coding CLI with a non-interactive mode. It runs in the task's worktree with your own login and setup." }),
           h("label", { text: "Name" }), name,
+          h("label", { text: "How to connect" }), mode, hint,
           h("label", { text: "Command" }), cmd,
           h("div", { class: "actions" }, back(), h("span", { class: "grow" }), btn)));
         return setTimeout(() => name.focus());
@@ -1832,11 +1861,16 @@ function openAddModel() {
       const st = h("div"), log = h("pre", { class: "small", style: { display: "none", maxHeight: "140px", overflow: "auto" } });
       const test = async () => {
         st.replaceChildren(h("div", { class: "small muted" }, h("span", { class: "dots" }, h("i"), h("i"), h("i")), " Connecting to agent and verifying credentials…"));
-        try { await api("/api/agents/probe", { body: { id: preset.id } }); S.detect = null; success(preset.name, [preset.id], "acp"); }
+        try {
+          if (preset.catalog) await api("/api/agents/add-preset", { body: { id: preset.id } });
+          else await api("/api/agents/probe", { body: { id: preset.id } });
+          S.detect = null; S.models = null; success(preset.name, [preset.id], "acp");
+        }
         catch (e) { paint(e.message); }
       };
       const paint = async (err) => {
-        const d = (await detectSetup(true)).agents.find((x) => x.id === preset.id) || {};
+        const dd = await detectSetup(true);
+        const d = dd.agents.find((x) => x.id === preset.id) || (dd.presets || []).find((x) => x.id === preset.id) || {};
         const steps = [];
         const step = (done, title, extra) => steps.push(h("div", { class: "mitem", style: { cursor: "default" } },
           h("span", { class: done ? "ok" : "faint", text: done ? "✓" : "○" }),
@@ -1845,19 +1879,19 @@ function openAddModel() {
         if (d.install) step(d.cli_installed, `Install ${preset.name}`, !d.cli_installed && h("div", { class: "row small" }, h("code", { text: d.install }), h("span", { class: "grow" }),
           d.node && h("button", { class: "accent", text: "Install for me", onclick: guard(async (e) => {
             e.target.disabled = true; e.target.textContent = "Installing…";
-            try { const r = await api("/api/agents/install", { body: { id: preset.id } }); log.style.display = ""; log.textContent = r.log; await paint(); if ((await detectSetup()).agents.find((x) => x.id === preset.id)?.ready) test(); }
+            try { const r = await api("/api/agents/install", { body: { id: preset.id } }); log.style.display = ""; log.textContent = r.log; await paint(); const dd = await detectSetup(); const x = dd.agents.find((y) => y.id === preset.id) || (dd.presets || []).find((y) => y.id === preset.id); if (x && (x.ready || x.found)) test(); }
             finally { e.target.disabled = false; e.target.textContent = "Install for me"; }
           }) })));
         if (d.login) step(false, "Authenticate", h("div", { class: "small muted" },
           d.key_env_set ? "API key detected in environment. " : "", "Run ", h("code", { text: d.login }), " in your terminal. ",
           h("button", { class: "ghost small", text: "Copy", onclick: () => { navigator.clipboard.writeText(d.login).then(() => toast("Copied")); } })));
-        st.replaceChildren(h("div", { class: "found" }, steps), err ? h("div", { class: "small bad", style: { marginTop: "8px", whiteSpace: "pre-wrap" }, text: err }) : null);
+        st.replaceChildren(h("div", { class: "found" }, steps), err ? h("div", { class: "small bad", style: { marginTop: "8px", whiteSpace: "pre-wrap" }, text: err }) : "");
       };
       body.replaceChildren(h("div", { class: "enter" },
-        h("h2", { text: preset.name }),
-        h("p", { class: "small muted", text: "ACP agents use their native subscription/login." }),
+        h("h2", { text: preset.name + (preset.kind ? ` · ${preset.kind}` : "") }),
+        h("p", { class: "small muted", text: (preset.blurb ? preset.blurb + ". " : "") + "Uses your own login for that tool; its cost is not counted against the budget." }),
         st, log,
-        h("div", { class: "actions" }, back(), h("span", { class: "grow" }), h("button", { class: "primary", text: "Test Connection", onclick: guard(test) }))));
+        h("div", { class: "actions" }, back(), h("span", { class: "grow" }), h("button", { class: "primary", text: preset.catalog ? "Test & Add" : "Test Connection", onclick: guard(test) }))));
       st.replaceChildren(sk("sk-row"), sk("sk-row"));
       paint();
     }
@@ -1869,13 +1903,15 @@ function openAddModel() {
       const has = (p) => data.models.some((m) => m.provider === p);
       const group = (title, cards) => [h("div", { class: "mgroup", style: { position: "static", background: "none", border: 0, padding: "14px 0 6px" }, text: title }), h("div", { class: "addgrid" }, cards)];
       const found = h("div", {}, h("div", { class: "found" }, sk("sk-row"), sk("sk-row")));
+      const presetBox = h("div", { class: "addgrid" }, sk("sk-row"), sk("sk-row"));
 
       body.replaceChildren(h("div", { class: "enter" },
         h("h2", { text: "Connect Models & Agents" }),
         h("p", { class: "small muted", style: { margin: 0 }, text: "Choose local LLMs, cloud API keys, or external agents." }),
         h("div", { class: "mgroup", style: { position: "static", background: "none", border: 0, padding: "14px 0 6px" }, text: "Detected on this Computer" }), found,
-        group("External Agents (Claude Code, Gemini CLI, Codex…)", (data.agents || []).map((a) => card(a.name, a.available ? "Installed" : "Setup guide", a.available ? "ready" : null,
-          () => agentForm({ id: a.model, name: a.name }))).concat([card("Other ACP Agent", "Custom agent binary", null, () => agentForm(null))])),
+        group("External Agents (Claude Code, Gemini CLI, Codex…)", (data.agents || []).map((a) => card(a.name, (a.available ? "Installed" : "Setup guide") + ` · ${a.kind || "ACP"}`, a.available ? "ready" : null,
+          () => agentForm({ id: a.model, name: a.name, kind: a.kind }))).concat([card("Other Agent", "Any ACP agent, or any CLI with a headless mode", null, () => agentForm(null))])),
+        h("div", { class: "mgroup", style: { position: "static", background: "none", border: 0, padding: "14px 0 6px" }, text: "More Agents · headless CLI or ACP" }), presetBox,
         group("Cloud Providers", [
           card("Claude", "Anthropic Claude API", prov.claude && prov.claude.configured ? "connected" : null, () => keyForm("claude", "Claude")),
           card("Gemini", "Google Gemini API", prov.gemini && prov.gemini.configured ? "connected" : null, () => keyForm("gemini", "Gemini")),
@@ -1888,7 +1924,9 @@ function openAddModel() {
         ])));
 
       const d = await detectSetup(true).catch(() => null);
-      if (!d) { found.replaceChildren(h("div", { class: "small faint", text: "Scan unavailable." })); return; }
+      if (!d) { found.replaceChildren(h("div", { class: "small faint", text: "Scan unavailable." })); presetBox.replaceChildren(); return; }
+      const presets = d.presets || [];
+      presetBox.replaceChildren(...presets.map((p) => card(p.name, p.blurb, p.found ? "installed" : p.kind, () => agentForm({ ...p, catalog: true }))));
       const items = [];
       const item = (title, detail, label, onclick) => items.push(h("div", { class: "mitem" },
         h("div", { class: "grow" }, h("b", { text: title }), h("div", { class: "small muted", text: detail })),
@@ -1896,6 +1934,7 @@ function openAddModel() {
       for (const k of d.keys) item(`${k.provider[0].toUpperCase() + k.provider.slice(1)} API Key`, `from env: $${k.env}`, "Connect", (e) => submit(e.target, null, k.provider, k.provider, "/api/setup/import-key", { provider: k.provider }));
       if (d.ollama.running && !has("ollama")) item("Ollama", `${d.ollama.models.length} models ready at ${d.ollama.url}`, "Connect", (e) => submit(e.target, { kind: "ollama", url: d.ollama.url }, "ollama", "Ollama"));
       for (const sv of d.servers) item(sv.name, sv.base_url, "Connect", (e) => submit(e.target, { kind: "endpoint", name: sv.name, base_url: sv.base_url, local: true, api_key: "" }, "compat", sv.name));
+      for (const p of presets.filter((x) => x.found)) item(p.name, `${p.kind} · ${p.blurb}`, "Add", (e) => submit(e.target, null, "acp", p.name, "/api/agents/add-preset", { id: p.id }));
       found.replaceChildren(items.length ? h("div", { class: "found" }, items) : h("div", { class: "small faint", text: d.ollama.running ? "All detected servers are connected." : "No active servers detected automatically." }));
     }
 
@@ -4404,11 +4443,16 @@ async function viewModels(main) {
   const agentsBox = h("div");
   const paintAgents = () => agentsBox.replaceChildren(h("div", { class: "agents-grid" }, extAgents.map((a, i) => {
     const name = h("input", { value: a.name, oninput: (e) => (a.name = e.target.value) });
-    const cmd = h("input", { class: "mono", value: [a.command, ...a.args].join(" "), title: "Command that starts agent in ACP mode",
+    const mode = h("select", { title: (AGENT_MODES.find((m) => m.value === agentMode(a)) || {}).hint || "",
+      onchange: (e) => { setAgentMode(a, e.target.value); e.target.title = AGENT_MODES.find((m) => m.value === e.target.value).hint; } },
+      AGENT_MODES.map((m) => h("option", { value: m.value, text: m.name, selected: agentMode(a) === m.value })));
+    const inherit = h("label", { class: "row small", title: "Run with this tool's own settings, MCP servers, plugins and memory files (CLI agents; off asks the CLI to ignore them where it can)" },
+      h("input", { type: "checkbox", style: { width: "auto" }, checked: a.inherit_config !== false, onchange: (e) => { if (e.target.checked) delete a.inherit_config; else a.inherit_config = false; } }), "my config");
+    const cmd = h("input", { class: "mono", value: [a.command, ...a.args].join(" "), title: "Command that starts the agent (for CLI agents, {prompt} or {prompt_file} in the args; otherwise the task goes to stdin)",
       oninput: (e) => { const parts = e.target.value.trim().split(/\s+/); a.command = parts[0] || ""; a.args = parts.slice(1); } });
     const out = h("span", { class: "small " + (avail[a.id] ? "ok" : "faint"), text: avail[a.id] ? "✓ ready" : avail[a.id] === false ? "not installed" : "checking…" });
-    return [name, cmd,
-      h("button", { text: "Probe", title: "Test ACP handshake", onclick: guard(async (e) => {
+    return [name, mode, cmd, inherit,
+      h("button", { text: "Probe", title: "Start it: the ACP handshake, or --version for a CLI", onclick: guard(async (e) => {
         e.target.disabled = true; out.textContent = "probing…";
         try { const r = await api("/api/agents/probe", { body: { id: a.id } }); const info = r.info.agentInfo || {}; out.textContent = `✓ ${info.title || info.name || "ok"}`; out.className = "small ok"; }
         catch (x) { out.textContent = x.message; out.className = "small bad"; } finally { e.target.disabled = false; }
@@ -4418,8 +4462,8 @@ async function viewModels(main) {
   })));
   paintAgents();
 
-  const agentsCard = h("details", { class: "card" }, h("summary", { style: { cursor: "pointer", fontWeight: 700 } }, "External ACP Agents (Advanced)"),
-    h("p", { class: "small muted", style: { margin: "8px 0 12px" }, text: "Claude Code, Gemini CLI, Codex and custom ACP agents. They execute using their native CLI logins without counting against Orchopork cloud caps." }),
+  const agentsCard = h("details", { class: "card" }, h("summary", { style: { cursor: "pointer", fontWeight: 700 } }, "External Agents (Advanced)"),
+    h("p", { class: "small muted", style: { margin: "8px 0 12px" }, text: "Claude Code, Codex, Gemini CLI, Antigravity, Cursor, Copilot, Aider and any other ACP agent or headless CLI. They execute using their native logins and setup without counting against Orchopork cloud caps (tokens they report show up in the metrics)." }),
     agentsBox,
     h("div", { class: "row", style: { marginTop: "12px" } }, h("button", { class: "ghost", text: "＋ Add Agent Command", onclick: () => {
       const id = uid(extAgents.map((x) => ({ id: x.id })), "agent"); extAgents.push({ id, name: "New Agent", command: "", args: [] }); paintAgents();
@@ -4444,7 +4488,7 @@ async function viewModels(main) {
     if (cfg.llamacpp_url) row("llama.cpp", cfg.llamacpp_url, count((m) => m.provider === "llamacpp") > 0, null);
     for (const p of ["claude", "gemini", "deepseek"]) if (pv[p] && pv[p].configured) row(p[0].toUpperCase() + p.slice(1), `${count((m) => m.provider === p)} models active`, true, { kind: "cloud", provider: p });
     for (const e of cfg.endpoints || []) row(e.name, `${e.base_url}${e.local ? " · local" : ""} · ${count((m) => m.provider === "compat" && m.model.startsWith(e.id + "/"))} models`, count((m) => m.model.startsWith(e.id + "/")) > 0, { kind: "endpoint", id: e.id });
-    for (const a of data.agents || []) rows.push(h("div", {}, h("b", { text: a.name }), h("div", { class: "small muted", text: a.available ? "ACP Agent" : "Not configured" })),
+    for (const a of data.agents || []) rows.push(h("div", {}, h("b", { text: a.name }), h("div", { class: "small muted", text: a.available ? `${a.kind || "ACP"} Agent` : "Not configured" })),
       h("span", { class: "pill " + (a.available ? "done" : ""), text: a.available ? "ready" : "—" }),
       a.available ? h("span") : h("button", { class: "ghost", text: "Set up", onclick: async () => { await openAddModel(); S.models = null; route(); } }));
     connBox.replaceChildren(...rows);

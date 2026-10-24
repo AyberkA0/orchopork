@@ -688,9 +688,14 @@ details.out pre, pre.block { background: var(--bg2); border: 1px solid var(--lin
 .conn { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px 12px; align-items: center; }
 .conn .small { overflow-wrap: anywhere; }
 .kv2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
-.fp { border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; text-align: left; background: var(--panel); }
+.fp { border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; text-align: left; background: var(--panel); min-width: 0; max-width: 100%; }
 .fp .crumbs { display: flex; flex-wrap: wrap; gap: 2px; padding: 8px 10px; background: var(--bg2); border-bottom: 1px solid var(--line); font: 12px var(--mono); align-items: center; }
-.fp .crumbs span { cursor: pointer; padding: 2px 6px; border-radius: var(--r-sm); }
+.fp .crumbs span { cursor: pointer; padding: 2px 6px; border-radius: var(--r-sm); min-width: 0; overflow-wrap: anywhere; }
+.fp .crumbs .home { display: inline-flex; align-items: center; gap: 4px; }
+.fp .dirs .name { min-width: 0; overflow-wrap: anywhere; }
+.fp .foot > * { min-width: 0; }
+.fp .foot .ghost { flex: none; white-space: nowrap; }
+.fp .foot .open { flex: 0 1 auto; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .fp .crumbs span:hover { background: var(--hover); }
 .fp .dirs { max-height: min(280px, 40vh); overflow: auto; }
 .fp .dirs .mitem svg { color: var(--faint); }
@@ -856,6 +861,8 @@ const ICONS = {
   bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path>',
   "bell-off": '<path d="M13.73 21a2 2 0 0 1-3.46 0"></path><path d="M18.63 13A17.89 17.89 0 0 1 18 8"></path><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"></path><path d="M18 8a6 6 0 0 0-9.33-5"></path><line x1="1" y1="1" x2="23" y2="23"></line>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>',
+  star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>',
+  home: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline>',
   file: '<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline>',
   search: '<circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>',
   edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>',
@@ -909,10 +916,13 @@ function markIcon(size = 20) {
   return svg;
 }
 
+// Sizes at call sites are relative; ICON_SCALE sets how large icons are overall.
+const ICON_SCALE = 1.25;
 function icon(name, size = 14, extraStyle = {}) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("width", String(size));
-  svg.setAttribute("height", String(size));
+  const px = Math.round(size * ICON_SCALE);
+  svg.setAttribute("width", String(px));
+  svg.setAttribute("height", String(px));
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("fill", "none");
   svg.setAttribute("stroke", "currentColor");
@@ -1116,7 +1126,7 @@ function updateTitle() {
   if (!ws) { document.title = "orchopork"; return; }
   const runs = S.runs || [], seen = seenMap();
   const running = runs.filter((r) => r.status === "running").length, unread = runs.filter((r) => isUnread(r, seen)).length;
-  document.title = `${unread ? `(${unread}) ` : ""}${running ? "▶ " : ""}${baseName(ws.root)} · orchopork`;
+  document.title = `${unread ? `(${unread}) ` : ""}${running ? "• " : ""}${baseName(ws.root)} · orchopork`;
 }
 
 const runHash = (r) => `#/${r.spec.mode === "orchestra" ? "o" : "c"}/${r.id}`;
@@ -1184,9 +1194,9 @@ function histEl() {
       h("span", { class: "sdot " + st }),
       h("span", { class: "t", text: r.goal }),
       r.spec.mode === "orchestra" && h("span", { class: "ic", title: "Orchestra" }, icon("fork", 12)),
-      hasDraft(r.id) && h("span", { class: "dr", title: "Unsent draft", text: "✎" }),
+      hasDraft(r.id) && h("span", { class: "dr", title: "Unsent draft" }, icon("edit", 11)),
       unread ? h("span", { class: "ud", title: "Changed since you last looked" }) : h("span", { class: "when", text: ago(r.updated_at) }),
-      h("button", { class: "pin" + (pin ? " on" : ""), title: pin ? "Unpin" : "Pin to top", text: pin ? "★" : "☆", onclick: (e) => { e.stopPropagation(); togglePin(r.id); } }));
+      h("button", { class: "pin" + (pin ? " on" : ""), title: pin ? "Unpin" : "Pin to top", onclick: (e) => { e.stopPropagation(); togglePin(r.id); } }, icon("star", 12, pin ? { fill: "currentColor" } : {})));
   };
   const used = new Set();
   const take = (pred) => runs.filter((r) => !used.has(r.id) && pred(r)).map((r) => (used.add(r.id), r));
@@ -1263,9 +1273,9 @@ function sideEl() {
         h("span", { class: "faint", text: "this month" })),
       h("div", { class: "meter" + (pct >= 100 ? " over" : pct >= 85 ? " hot" : "") }, h("div", { style: { width: pct + "%" } })),
       h("div", { class: "tools" },
-        h("button", { class: "ghost", title: "Compare runs: cost, time, turns, tokens, results", onclick: () => go("#/metrics") }, icon("bolt", 14), "Measurements"),
         h("button", { class: "ghost", onclick: () => go("#/models") }, icon("gear", 14), "Settings"),
         h("span", { class: "grow" }),
+        h("button", { class: "ghost icon-btn", title: "Measurements: compare runs on cost, time, turns, tokens and results", "aria-label": "Measurements", onclick: () => go("#/metrics") }, icon("bolt", 14)),
         h("button", { class: "ghost icon-btn", title: `Theme: ${curTheme} (click to change)`, "aria-label": "Change theme",
           onclick: () => {
             const next = curTheme === "dark" ? "light" : curTheme === "light" ? "system" : "dark";
@@ -1360,7 +1370,7 @@ function folderPicker(start, noticeBox, onOpened) {
         return [h("span", { text: p, onclick: () => load(full) }), i < parts.length - 1 && h("i", { class: "faint", text: sep })];
       }),
       h("span", { class: "grow" }),
-      d.home && h("span", { title: "Home", text: "⌂ Home", onclick: () => load(d.home) }));
+      d.home && h("span", { class: "home", title: "Home", onclick: () => load(d.home) }, icon("home", 12), "Home"));
 
     const rootsBar = (d.roots && d.roots.length > 1) ? h("div", { class: "crumbs", style: { background: "var(--bg3)", borderBottom: "1px solid var(--line)" } },
       h("span", { class: "faint small", text: "Drives:" }),
@@ -1374,19 +1384,19 @@ function folderPicker(start, noticeBox, onOpened) {
     const dirs = h("div", { class: "dirs" },
       d.parent && h("div", { class: "mitem", onclick: () => load(d.parent) }, h("span", { class: "faint mono", text: ".." }), h("span", { class: "muted", text: "Up a directory" })),
       d.dirs.map((x) => h("div", { class: "mitem", title: x.path, onclick: () => load(x.path), ondblclick: () => go_(x.path) },
-        icon("folder", 14, { opacity: .75 }), h("span", { class: "grow", text: x.name }),
+        icon("folder", 14, { opacity: .75 }), h("span", { class: "grow name", text: x.name }),
         x.project ? h("span", { class: "pill done", text: "orchopork" }) : x.repo && h("span", { class: "pill", text: "git" }))),
       !d.dirs.length && h("div", { class: "mitem muted", style: { cursor: "default" }, text: "No sub-folders." }));
 
     const nameIn = h("input", { placeholder: "new-folder-name", style: { display: "none" } });
-    const mk = h("button", { class: "ghost", text: "＋ New folder", onclick: guard(async () => {
+    const mk = h("button", { class: "ghost", onclick: guard(async () => {
       if (nameIn.style.display === "none") { nameIn.style.display = ""; nameIn.focus(); return; }
       if (!nameIn.value.trim()) return;
       const r = await api("/api/fs/mkdir", { body: { parent: d.path, name: nameIn.value } });
       go_(r.path);
-    }) });
+    }) }, icon("plus", 12), "New folder");
     nameIn.addEventListener("keydown", (e) => { if (e.key === "Enter") mk.click(); });
-    const openBtn = h("button", { class: "primary", text: `Open ${baseName(d.path)}`, onclick: () => go_(d.path) });
+    const openBtn = h("button", { class: "primary open", title: d.path, text: `Open ${baseName(d.path)}`, onclick: () => go_(d.path) });
 
     const contents = [rootsBar, crumbs, dirs, h("div", { class: "foot" }, mk, h("div", { class: "grow" }, nameIn), openBtn)].filter(Boolean);
     box.replaceChildren(...contents);
@@ -1520,7 +1530,7 @@ function viewHome(main) {
         return h("div", { class: "rcard enter", title: r.error || r.goal, onclick: () => go(runHash(r)) },
           h("span", { class: "sdot " + st }),
           h("span", { class: "t" }, isUnread(r, seen) ? h("b", { text: r.goal }) : r.goal),
-          hasDraft(r.id) && h("span", { class: "small faint", title: "Unsent draft", text: "✎" }),
+          hasDraft(r.id) && h("span", { class: "small faint", title: "Unsent draft" }, icon("edit", 11)),
           h("span", { class: "small faint", text: `${STATE_LABEL[st]} · ${ago(r.updated_at)}` }));
       })
     ].flat().filter(Boolean));
@@ -2134,7 +2144,7 @@ async function preflightFlow(body) {
       h("h2", { style: { margin: 0 }, text: r.ok && !(r.warnings || []).length ? "✓ The flow looks good" : r.ok ? "Check the warnings" : "The flow cannot run as it is" }),
       ...[rows.length ? h("table", { class: "pf-table" }, rows) : null,
         ...(r.errors || []).map((e) => h("div", { class: "small bad", text: "✗ " + e })),
-        ...(r.warnings || []).map((w) => h("div", { class: "small", style: { color: "var(--warn)" }, text: "⚠ " + w.text })),
+        ...(r.warnings || []).map((w) => h("div", { class: "small row", style: { color: "var(--warn)", gap: "6px" } }, icon("alert", 12), w.text)),
         h("div", { class: "actions" },
           h("button", { class: "ghost", text: "Back to editing", onclick: () => done(false) }),
           h("span", { class: "grow" }),
@@ -2359,10 +2369,10 @@ function withStepTools(el, s, ctx) {
   const later = () => ctx.steps().filter((x) => x.seq > s.seq).length;
   const tools = h("div", { class: "steptools" },
     s.kind === "inject"
-      ? h("button", { title: "Take message back, edit and re-send.", text: "✎ Edit & resend", onclick: async (e) => {
+      ? h("button", { title: "Take message back, edit and re-send.", onclick: async (e) => {
           e.stopPropagation();
           if (await rewindTo(ctx.run(), s.seq - 1, { dropped: later() + 1, title: "Edit this message?", why: "Your message and everything after it will be taken back." })) ctx.edit(s.output);
-        } })
+        } }, icon("edit", 11), "Edit & resend")
       : h("button", { title: "Keep history up to here, rollback subsequent steps.", text: "↺ Rewind here", onclick: async (e) => {
           e.stopPropagation();
           if (await rewindTo(ctx.run(), s.seq, { dropped: later() })) ctx.after && ctx.after();
@@ -3013,7 +3023,7 @@ function flowCanvas(ed) {
     if (sts.length) kids.push(h("span", { class: "st " + (act ? "ok pulse" : done === ms.length ? "ok" : "faint"),
       text: act ? "● " + act.name + " working" : done === ms.length ? "✓ done" : `${done}/${ms.length} done` }));
     const iss = ms.flatMap((m) => (ed.issues && ed.issues[m.id]) || []);
-    if (iss.length) kids.push(h("span", { class: "issue", title: iss.join("\n"), text: "⚠" }));
+    if (iss.length) kids.push(h("span", { class: "issue", title: iss.join("\n") }, icon("alert", 12)));
     return kids;
   }
 
@@ -3046,7 +3056,7 @@ function flowCanvas(ed) {
     if (!ed.readOnly) kids.push(h("div", { class: "brow new", style: { top: FH + 10 + bl.length * PAR_ROW + "px" } },
       h("span", { class: "grow ell faint", text: "＋ branch: drag to an agent or team" }), h("div", { class: "port branch new", title: "Drag to an agent or a team to start a branch" })));
     const iss = ed.issues && ed.issues[n.id];
-    if (iss && iss.length) kids.push(h("span", { class: "issue", title: iss.join("\n"), text: "⚠" }));
+    if (iss && iss.length) kids.push(h("span", { class: "issue", title: iss.join("\n") }, icon("alert", 12)));
     return kids;
   }
 
@@ -3083,7 +3093,7 @@ function flowCanvas(ed) {
       if (n.kind === "lead" && n.lead && n.lead.dynamic_agents) kids.push(h("span", { class: "dyn", title: "May add and remove agents", text: "+/−" }));
     }
     const iss = ed.issues && ed.issues[n.id];
-    if (iss && iss.length) kids.push(h("span", { class: "issue", title: iss.join("\n"), text: "⚠" }));
+    if (iss && iss.length) kids.push(h("span", { class: "issue", title: iss.join("\n") }, icon("alert", 12)));
     if (st) kids.push(h("span", { class: "st " + (st.active ? "ok pulse" : st.done ? "ok" : "faint"),
       text: st.active ? (st.reviewing ? "● reviewing" : n.kind === "goal" ? "● checking" : "● working") : st.done ? (n.kind === "goal" ? "✓ reached" : "✓ done") : st.turns ? "◌ waiting" : "○ queued" }));
     if (st && (st.turns || st.cost)) kids.push(h("div", { class: "small faint", style: { marginTop: "4px" }, text: `${st.turns} turns · ${money(st.cost)}` }));
@@ -3760,7 +3770,7 @@ function editorMenu(ed, canvas, t, e, arrange) {
   if (t.type === "canvas") return popMenu(null, [
     { label: "＋ Add agent here", run: () => canvas.addNode("agent", null, [Math.round(t.at[0] - FW / 2), Math.round(t.at[1] - 30)]) },
     { label: "⑂ Add dispatcher here", run: () => canvas.addNode("parallel", null, [Math.round(t.at[0] - FW / 2), Math.round(t.at[1] - 30)]) },
-    !ed.graph.nodes.some((n) => n.kind === "goal") && { label: "⚑ Add Goal here", run: () => canvas.addNode("goal", null, [Math.round(t.at[0] - FW / 2), Math.round(t.at[1] - 30)]) },
+    !ed.graph.nodes.some((n) => n.kind === "goal") && { label: [icon("flag", 12), " Add Goal here"], run: () => canvas.addNode("goal", null, [Math.round(t.at[0] - FW / 2), Math.round(t.at[1] - 30)]) },
     { label: "Notebooks…", run: () => notebooksWindow(ed) },
     "-",
     { label: "Select all", run: () => canvas.selectAll() },
@@ -3876,8 +3886,8 @@ function orchestraEditor(main, { goal, verify, lead, worker = null, graph, base_
       const p = flowProblems(ed.graph);
       // The first problem inline; all of them one click away.
       problems.replaceChildren(p.length
-        ? h("button", { class: "small", title: p.join("\n"), onclick: (e) => popMenu(e.currentTarget, p.map((t) => ({ info: true, label: "⚠ " + t }))) },
-            h("span", { text: "⚠ " + p[0] }), p.length > 1 && h("b", { text: `+${p.length - 1}` }))
+        ? h("button", { class: "small", title: p.join("\n"), onclick: (e) => popMenu(e.currentTarget, p.map((t) => ({ info: true, label: "Problem: " + t }))) },
+            icon("alert", 12), h("span", { text: p[0] }), p.length > 1 && h("b", { text: `+${p.length - 1}` }))
         : h("span", { class: "ok", text: edit ? "✓ valid" : "✓ ready to deploy" }));
       deployBtn.disabled = p.length > 0;
       const nbs = notebooks(ed.graph).length;

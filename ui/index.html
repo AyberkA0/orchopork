@@ -752,7 +752,10 @@ details.out pre, pre.block, .md code { background: var(--surface); }
 
 /* head: icon tile, name over role */
 .fnode .hd { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.fnode .tile { flex: none; width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; background: var(--kt); color: var(--ki); }
+.fnode .tile { flex: none; width: 32px; height: 32px; padding: 0; line-height: 0; border-radius: 10px; display: grid; place-items: center; background: var(--kt); color: var(--ki); }
+/* (.tile is also the measurements' stat box: drop its padding, and the
+   icon's text-baseline nudge, so the icon sits in the middle) */
+.fnode .tile svg.ico { vertical-align: top; }
 .fnode .hdt { flex: 1; min-width: 0; }
 .fnode:has(> .st) .hdt { padding-right: 64px; }
 .fnode.k-parallel .hdt { padding-right: 34px; }
@@ -793,19 +796,27 @@ details.out pre, pre.block, .md code { background: var(--surface); }
 .fnode .issue { bottom: auto; top: 33px; right: 12px; }
 .fnode .dyn { bottom: auto; top: 53px; right: 12px; padding: 0 6px; border-radius: 999px; background: var(--glow); color: var(--accent); line-height: 18px; }
 
-/* sockets: an input is a hollow ring, an output a solid disc */
-.fnode .port { width: 12px; height: 12px; outline: 3px solid var(--bg); background: var(--muted); transition: background .15s, transform .15s; }
+/* sockets: a small tab on the card's edge, in the card's own tone, holding
+   a dot. A linked socket's dot is filled, a free one is a ring. Inputs are
+   neutral; outputs take the node's kind colour, coral while editing. */
+.fnode .port { --dot: var(--muted); --tab: color-mix(in srgb, var(--text) 8%, var(--node)); width: 16px; height: 28px; border-radius: 8px; background: var(--tab); outline: none; z-index: 4;
+  transform: translateY(-50%); transition: background .15s, outline-color .15s; }
+.fnode .port::after { content: ""; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+  outline: 2px solid var(--dot); outline-offset: -2px; transition: width .15s, height .15s, margin .15s, background .15s; }
+.fnode .port.on::after { background: var(--dot); }
 .fnode .port.in, .fnode .port.out { top: 52px; }
-.fnode .port.in { left: -6px; }
-.fnode .port.out { right: -6px; }
-.fnode .port.in::after, .fnode .port.branch.new::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--bg); }
-.canvas.editing .fnode .port.out { background: var(--accent); }
-.canvas.editing .fnode:hover .port.out { transform: translateY(-50%) scale(1.2); }
-.canvas.editing .fnode .port.out:hover, .canvas.editing .fnode .port.branch:hover { transform: translateY(-50%) scale(1.4); }
-.fnode .port.branch { right: -6px; background: var(--warn); opacity: 1; }
-.fnode .port.branch.new { opacity: 1; }
-.fnode.drop .port.in { background: var(--ok); transform: translateY(-50%) scale(1.4); }
-.fnode.nodrop .port.in { background: var(--bad); }
+.fnode .port.in { left: -8px; }
+.fnode .port.out { right: -8px; --dot: var(--kc); }
+.fnode.k-agent .port.out, .fnode.k-group .port.out { --dot: var(--text); }
+.canvas.editing .fnode .port.out { --dot: var(--accent); }
+.canvas.editing .fnode .port.out:hover, .canvas.editing .fnode .port.branch:hover { outline: 2px solid var(--glow); }
+.canvas.editing .fnode:hover .port.out { --tab: color-mix(in srgb, var(--accent) 16%, var(--node)); }
+.canvas.editing .fnode .port.out:hover::after, .canvas.editing .fnode .port.branch:hover::after { width: 10px; height: 10px; margin: -5px 0 0 -5px; background: var(--dot); }
+.fnode .port.branch { --dot: var(--warn); right: -8px; top: 50%; height: 22px; opacity: 1; }
+.fnode.drop .port.in { --dot: var(--ok); outline: 2px solid var(--ok-bg); }
+.fnode.drop .port.in { --tab: color-mix(in srgb, var(--ok) 22%, var(--node)); }
+.fnode.drop .port.in::after { width: 10px; height: 10px; margin: -5px 0 0 -5px; background: var(--dot); }
+.fnode.nodrop .port.in { --dot: var(--bad); }
 
 /* a Dispatcher: "then" by its socket, branches as rows, each with its socket */
 .fnode .then { position: absolute; right: 16px; top: 23px; font: 500 9.5px/14px var(--mono); color: var(--faint); }
@@ -891,7 +902,7 @@ details.out pre, pre.block, .md code { background: var(--surface); }
 }
 @media (max-width: 860px) { .approval pre { max-height: 28vh; } .bpane { width: 100vw; } }
 @media (max-height: 760px) { .approval { max-height: 38vh; } .approval pre { max-height: 120px; } .tpl .small { display: none; } }
-@media (pointer: coarse) { .fnode .port.out { width: 18px; height: 18px; right: -10px; } }
+@media (pointer: coarse) { .fnode .port.out, .fnode .port.branch { width: 18px; height: 28px; border-radius: 9px; right: -9px; } }
 </style>
 </head>
 <body>
@@ -2783,6 +2794,13 @@ function flowCanvas(ed) {
     return b ? (fnode(g(), b.dispatcher) || {}).name || "Dispatcher" : null;
   }
 
+  // Sockets with a link are filled, free ones hollow. A team's sockets count
+  // only the links that leave or enter the team.
+  const ends = (n) => (n.kind === "group" ? n.group.members : [n.id]);
+  const linkedIn = (n) => { const G = g(), ids = ends(n); return G.edges.some((e) => ids.includes(e.to) && !ids.includes(e.from) && isFlowEdge(G, e)); };
+  const linkedOut = (n) => { const G = g(), ids = ends(n); return G.edges.some((e) => ids.includes(e.from) && !ids.includes(e.to) && !e.branch && isFlowEdge(G, e)); };
+  const sock = (n, dir, attrs = {}) => h("div", { ...attrs, class: `port ${dir}` + ((dir === "in" ? linkedIn(n) : linkedOut(n)) ? " on" : "") });
+
   // A node's head: its icon on a tinted tile, the name over the role.
   const head = (ic, name, role, extra) => h("div", { class: "hd" }, h("span", { class: "tile" }, ic),
     h("div", { class: "hdt" }, h("div", { class: "nm" }, h("span", { class: "grow", text: name }), extra), role != null && h("div", { class: "rl", text: role })));
@@ -2796,7 +2814,7 @@ function flowCanvas(ed) {
     const done = sts.filter((x) => x.done).length, act = ms.find((m) => ed.status && ed.status[m.id] && ed.status[m.id].active);
     const last = ms.find((m) => !flowSuccs(G, m.id).some((x) => gr.members.includes(x)));
     const back = last && branchEnd(last.id);
-    const kids = [h("div", { class: "port in" }), h("div", { class: "port out", title: ed.readOnly ? "" : "Drag to connect" }),
+    const kids = [sock(n, "in"), sock(n, "out", { title: ed.readOnly ? "" : "Drag to connect" }),
       head(icon("users", 15), gr.name, `team · ${ms.length} agent${ms.length === 1 ? "" : "s"}` + (nos.length ? ` · #${Math.min(...nos)}–${Math.max(...nos)}` : "") + (back ? ` · ↩ ${back}` : "")),
       h("div", { class: "members" }, ms.slice(0, 6).map((m) => h("span", { class: "mchip" + (ed.status && ed.status[m.id] && ed.status[m.id].done ? " ok" : ""), title: m.role || m.name },
         roleIcon(m.name, m.role, 11), " ", m.name)), ms.length > 6 ? h("span", { class: "mchip faint", text: `+${ms.length - 6}` }) : null)];
@@ -2818,8 +2836,8 @@ function flowCanvas(ed) {
     const bst = (head) => ed.branchStatus && ed.branchStatus[head];
     const mark = { running: "●", finished: "✓", failed: "✗", cancelled: "⊘" };
     const kids = [
-      h("div", { class: "port in", style: { top: PAR_TOP + "px" } }),
-      h("div", { class: "port out", style: { top: PAR_TOP + "px" }, title: ed.readOnly ? "Then" : "Then: drag to connect what comes after the branches" }),
+      sock(n, "in", { style: { top: PAR_TOP + "px" } }),
+      sock(n, "out", { style: { top: PAR_TOP + "px" }, title: ed.readOnly ? "Then" : "Then: drag to connect what comes after the branches" }),
       h("span", { class: "then", text: "then" }),
       head(icon("fork", 15), n.name || "Dispatcher", (POLICIES.find(([v]) => v === (ps.policy || "wait_all")) || POLICIES[0])[1]),
       h("div", { class: "ln" }, h("span", { class: "kind" }, h("i", { class: "mk" }), "dispatcher"), h("span", { class: "tk", text: (ps.work || "code") === "research" ? "research: reports and notes only" : "code: merges the finished branches" })),
@@ -2829,7 +2847,7 @@ function flowCanvas(ed) {
       kids.push(h("div", { class: "brow" + (st ? " st-" + st : ""), style: { top: PAR_HEAD + i * PAR_ROW + "px" }, title: branchLabel(e.to) },
         h("span", { class: "bn", text: `${i + 1}` }), h("span", { class: "grow ell", text: branchLabel(e.to) }),
         st && h("span", { class: "bst", title: st, text: mark[st] || "" }),
-        h("div", { class: "port branch", "data-edge": e.id, title: ed.readOnly ? "" : "Branch socket: drag to re-connect" })));
+        h("div", { class: "port branch on", "data-edge": e.id, title: ed.readOnly ? "" : "Branch socket: drag to re-connect" })));
     });
     if (!ed.readOnly) kids.push(h("div", { class: "brow new", style: { top: PAR_HEAD + bl.length * PAR_ROW + "px" } },
       h("span", { class: "bn" }, icon("plus", 10)), h("span", { class: "grow ell", text: "branch: drag to an agent or team" }), h("div", { class: "port branch new", title: "Drag to an agent or a team to start a branch" })));
@@ -2845,8 +2863,8 @@ function flowCanvas(ed) {
     const order = ed.orderNo && ed.orderNo[n.id];
     const gs = n.goal || {};
     const kids = [];
-    if (n.kind !== "lead") kids.push(h("div", { class: "port in" }));
-    if (n.kind !== "goal") kids.push(h("div", { class: "port out", title: ed.readOnly ? "" : "Drag to connect" }));
+    if (n.kind !== "lead") kids.push(sock(n, "in"));
+    if (n.kind !== "goal") kids.push(sock(n, "out", { title: ed.readOnly ? "" : "Drag to connect" }));
     // Head: icon tile, name over role; the status pill sits top right.
     if (n.kind === "goal") {
       kids.push(head(icon("flag", 15), n.name || "Goal", { agent: "Judge: the last agent", judge: "Judge: independent model", command: "Judge: command only" }[gs.judge || "agent"]));
